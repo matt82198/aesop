@@ -20,7 +20,7 @@ Traditional distributed systems solve these with **consensus protocols** (Raft, 
 
 But agent fleets have a different constraint set:
 
-- **Cheap, ephemeral workers**: A Haiku call costs about $0.004 (per-call median, bench/results/frontier-slice-2026-07-26.json) and a worker runs for ~30 seconds. The cost of consensus overhead (extra messages, quorum checks) is 10–50% of the worker cost.
+- **Cheap, ephemeral workers**: A Haiku call costs about $0.004 (per-call median, bench/results/frontier-slice-2026-07-26.json). The cost of consensus overhead (extra messages, quorum checks) is a substantial share of the worker cost. <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
 - **Stateless execution**: Workers don't hold mutable state. They read from disk, decide, write results, exit. There is no "graceful shutdown"—the next worker re-reads the checkpoint.
 - **Crash is the normal path**: The system is designed to resume after interruption. Treating crash as an *error* that needs special handling is a category mistake.
 
@@ -82,7 +82,7 @@ No need to "reconnect" or "rejoin the cluster"—just read from disk and proceed
 
 ### 2. Cheap Respawn + Repair Loops
 
-A Haiku call costs about $0.004 (per-call median, bench/results/frontier-slice-2026-07-26.json). Respawning on crash is cheaper than building heartbeat-based health checks:
+A Haiku call costs about $0.004 (per-call median, bench/results/frontier-slice-2026-07-26.json). Respawning on crash is cheaper than building heartbeat-based health checks: <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
 
 - **Consensus coordinator**: Heartbeat every 100ms, membership quorum vote every 5 seconds (5–15 messages per worker per minute). Cost: ~5% of worker cost.
 - **Crash-only respawn**: Kill on timeout, spawn fresh worker from journal (disk read, no API call). Cost: ~0% (pure local I/O).

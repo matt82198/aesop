@@ -18,7 +18,7 @@ Traditional distributed systems assume failures are rare and Byzantine (arbitrar
 
 4. **Worker stalls**: A process hangs (not crashed, just stuck). Watchdog detects idle >200 seconds, kills it. But what about the work it was doing?
 
-Traditional solutions add distributed consensus: coordinators vote on state transitions, memberships managed via heartbeats, transactions atomic across replicas. But a Haiku call costs about $0.004 (per-call median, bench/results/frontier-slice-2026-07-26.json). A heartbeat quorum check adds further overhead with no measured cost here. The coordination overhead approaches the cost of the worker itself.
+Traditional solutions add distributed consensus: coordinators vote on state transitions, memberships managed via heartbeats, transactions atomic across replicas. But a Haiku call costs about $0.004 (per-call median, bench/results/frontier-slice-2026-07-26.json). A heartbeat quorum check adds further overhead with no measured cost here. The coordination overhead approaches the cost of the worker itself. <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
 
 The insight: agent workers are already stateless by design. They read context from disk, decide, write results, exit. When a worker crashes, the next worker can resume from the checkpoint without detecting the failure or revoking a lease. The state is on disk; the next reader will see it.
 
