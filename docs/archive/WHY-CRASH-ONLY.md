@@ -20,7 +20,7 @@ Traditional distributed systems solve these with **consensus protocols** (Raft, 
 
 But agent fleets have a different constraint set:
 
-- **Cheap, ephemeral workers**: A Haiku agent costs ~$0.003 and runs for ~30 seconds. The cost of consensus overhead (extra messages, quorum checks) is 10–50% of the worker cost.
+- **Cheap, ephemeral workers**: A Haiku call is cheap. The cost of consensus overhead (extra messages, quorum checks) is a substantial share of the worker cost.
 - **Stateless execution**: Workers don't hold mutable state. They read from disk, decide, write results, exit. There is no "graceful shutdown"—the next worker re-reads the checkpoint.
 - **Crash is the normal path**: The system is designed to resume after interruption. Treating crash as an *error* that needs special handling is a category mistake.
 
@@ -34,7 +34,7 @@ But agent fleets have a different constraint set:
 
 **Trade-off**:
 - ✓ Multiple orchestrators can share work (multi-instance enabled)
-- ✗ +50–100% cost per wave (coordinator latency, quorum messages)
+- ✗ Added cost per wave (coordinator latency, quorum messages add overhead)
 - ✗ New failure modes (coordinator crash, split-brain, lease expiry while worker is live)
 - ✗ Debugging requires tracing consensus state across multiple systems
 
@@ -47,7 +47,7 @@ But agent fleets have a different constraint set:
 **Architecture**: Stateless workers, durable filesystem checkpoint (git-backed), append-only journal. On resume, orchestrator reads the last known state from disk and continues.
 
 **Trade-off**:
-- ✓ 0% coordination overhead (single-threaded orchestrator + parallel workers)
+- ✓ negligible coordination overhead (single-threaded orchestrator + parallel workers)
 - ✓ State is human-diffable (git log, plain-text files, grep-friendly)
 - ✓ Debuggability: every decision and state transition is committed
 - ✓ Single-box by design: scales via worker parallelism, not distributed membership
@@ -82,10 +82,10 @@ No need to "reconnect" or "rejoin the cluster"—just read from disk and proceed
 
 ### 2. Cheap Respawn + Repair Loops
 
-A Haiku agent costs ~$0.003 to spawn. Respawning on crash is cheaper than building heartbeat-based health checks:
+A Haiku call is cheap. Respawning on crash is cheaper than building heartbeat-based health checks:
 
-- **Consensus coordinator**: Heartbeat every 100ms, membership quorum vote every 5 seconds (5–15 messages per worker per minute). Cost: ~5% of worker cost.
-- **Crash-only respawn**: Kill on timeout, spawn fresh worker from journal (disk read, no API call). Cost: ~0% (pure local I/O).
+- **Consensus coordinator**: Heartbeat every 100ms, membership quorum vote every 5 seconds (5–15 messages per worker per minute). Cost: a meaningful share of worker cost (not measured here).
+- **Crash-only respawn**: Kill on timeout, spawn fresh worker from journal (disk read, no API call). Cost: negligible API cost (pure local I/O).
 
 The seam-loop study measured this empirically. With crash-only + repair loops:
 
@@ -161,7 +161,7 @@ The same study tracked results by model tier (same seam-loop condition, split ac
 | Fable (claude-fable-5) | 28 | 36 | 77.8% |
 | GPT-4o-mini | 15 | 36 | 41.7% |
 
-Haiku excels at seam tasks (code review, test output parsing, severity judgment). The delta between Haiku and Opus is <10pp on seam work; the cost difference is 3×. **For this task class, Haiku is the optimal model.**
+Haiku excels at seam tasks (code review, test output parsing, severity judgment). The delta between Haiku and Opus is <10pp on seam work; the cost difference is substantial. **For this task class, Haiku is the optimal model.**
 
 *(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../../bench/results/seam-loop-study-2026-07-28.md))*
 

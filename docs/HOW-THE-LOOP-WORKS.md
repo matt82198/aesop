@@ -1,6 +1,6 @@
 # How the Wave Loop Works (The Fast, Cheap Way)
 
-**TL;DR**: Aesop's `/buildsystem` runs one cycle per wave: rank backlog → fan out parallel Haiku agents → watchdog catches hangs → verify + merge → close with audits. The result: **lower cost (Haiku is ~1/3 the cost of Sonnet) and faster wall-clock from running agents in parallel** through parallelism and cheap subagents, while the orchestrator stays busy planning next work.
+**TL;DR**: Aesop's `/buildsystem` runs one cycle per wave: rank backlog → fan out parallel Haiku agents → watchdog catches hangs → verify + merge → close with audits. The result: **lower cost (Haiku is the lowest-priced tier) and faster wall-clock from running agents in parallel** through parallelism and cheap subagents, while the orchestrator stays busy planning next work.
 
 ---
 
@@ -22,7 +22,7 @@ A **wave** is one complete delivery loop:
 6. NEXT WAVE: feed the backlog with findings
 ```
 
-**Wallclock time per wave**: 2–3 hours. **Token spend**: ~$0.03. **What ships**: 5–8 small, tested features/fixes.
+**Wallclock time per wave**: 2–3 hours. **Token spend**: lower than an all-Opus wave. **What ships**: 5–8 small, tested features/fixes.
 
 ---
 
@@ -65,7 +65,7 @@ Example spawn:
 → Haiku-5 (docs): "write HOW-THE-LOOP-WORKS.md"
 ```
 
-**Productivity win**: the agents run concurrently instead of one at a time, and each Haiku costs 1/3 of Sonnet (1/5 of Opus) — so the fleet is both faster in wall-clock and far cheaper than one expensive agent working serially.
+**Productivity win**: the agents run concurrently instead of one at a time, and each Haiku costs less than Sonnet or Opus — so the fleet is both faster in wall-clock and far cheaper than one expensive agent working serially.
 
 ---
 
@@ -131,13 +131,13 @@ Before the next wave, close this one:
 |--------|-----------|-------------------|
 | **Agents** | 5 Haiku + 1 Opus orchestrator | 6 Opus |
 | **Time** | ~2–3 hours (parallel) | ~12+ hours (serial) |
-| **Cost** | ~$0.03 | ~$0.18 |
+| **Cost** | Lower | Higher |
 | **Test coverage** | Required per agent | Often skipped in time-crunch |
 | **Outputs** | All PRs merged, all tests green | Might be 1–2 half-finished features |
 
 **Key levers**:
-1. **Parallelism**: agents work concurrently instead of one-at-a-time (measured example: wave-10's 5-agent fleet finished in ~293s of wall-clock vs ~897s if run serially — about 3x)
-2. **Cheap subagents**: Haiku is 1/3 the cost of Sonnet and 1/5 the cost of Opus (exact on both input and output); running many in parallel keeps spend low
+1. **Parallelism**: agents work concurrently instead of one-at-a-time (measured example: wave-10's 5-agent fleet finished in ~293s of wall-clock vs ~897s if run serially)
+2. **Cheap subagents**: Haiku is cheaper than Sonnet and Opus on both input and output; running many in parallel keeps spend low
 3. **Orchestrator stays lean**: reads only STATE.md + BUILDLOG.md + git one-liners (no re-reading entire codebase)
 4. **No idle time**: while agents work, orchestrator plans next phase (never blocking on agents)
 

@@ -32,8 +32,8 @@ description: Why Haiku subagents are the single most important cost optimization
 type: reference
 ---
 
-Subagents are ALWAYS Haiku (1/3 Sonnet cost). This is the cost lever.
-Six to eight Haiku agents in parallel cost ~25% of all-Opus fleet...
+Subagents are ALWAYS Haiku (the lowest-priced tier). This is the cost lever.
+Six to eight Haiku agents in parallel cost less than an all-Opus fleet...
 [Full context here]
 ```
 
@@ -54,7 +54,7 @@ Constraints: [...]
 ### Index entry (in MEMORY.md)
 
 ```
-- [Dispatch principles](memory/dispatch-principles.md) — Haiku is 1/3 cost, default subagent tier
+- [Dispatch principles](memory/dispatch-principles.md) — Haiku is the lowest-priced tier, default subagent tier
 - [Team goals](memory/team-goals.md) — Q2 2026 roadmap and constraints
 ```
 

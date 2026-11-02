@@ -4,7 +4,7 @@
 
 ## The Bet
 
-In 2025, we made a prediction that seemed reckless: **a system built on Haiku (Claude's smallest, cheapest tier at ~1/3 the per-token cost of Opus) would outperform traditional multi-tier dispatch architectures in both cost and time-to-delivery.**
+In 2025, we made a prediction that seemed reckless: **a system built on Haiku (Claude's smallest, cheapest tier, at a fraction of Opus's per-token cost) would outperform traditional multi-tier dispatch architectures in both cost and time-to-delivery.**
 
 Three years later, after shipping that system (Aesop: an autonomous orchestration harness for source-available software development) to production use and open measurement, the bet holds.
 
@@ -23,11 +23,11 @@ In early 2024, we ran an A/B test comparing two dispatch architectures:
 1. **Hierarchical dispatch**: Fable orchestrator → Sonnet supervisors (splitting work by domain) → Haiku workers. Three tiers, specialized roles.
 2. **Flat fan-out**: Single Opus/Fable orchestrator on the main thread → 5–8 parallel Haiku workers → integration verify + review.
 
-**Result**: Hierarchical dispatch cost **4.3× more per wave at identical quality** ([arch evidence: dispatch-topology A/B, committed in wave-9 decision record](../docs/DISPATCH-MODEL.md#cost-architecture-haiku-first-flat-fan-out-the-cancelled-hierarchical-design)).
+**Result**: Hierarchical dispatch cost **4.3× more per wave at identical quality** ([arch evidence: dispatch-topology A/B, committed in wave-9 decision record](../docs/DISPATCH-MODEL.md#cost-architecture-haiku-first-flat-fan-out-the-cancelled-hierarchical-design)); figure at `docs/ab-cost-dataset.md:14`. <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->
 
 No code was smarter. Both variants produced the same merged PRs. The difference was token burn: the three-tier system added an extra reasoning layer (Sonnet supervisors doing "plan which domain should handle this") before any Haiku worker started. The orchestrator, reviewing the Sonnet outputs, then dispatched to Haiku. Token flow: 3× the overhead for the same decision.
 
-**Decision**: Flatten the dispatch. One orchestrator → many workers. Cost per wave dropped to $0.01–0.02 USD. Scaling to 10 waves per day costs less than one Opus API call.
+**Decision**: Flatten the dispatch. One orchestrator → many workers. Cost per wave dropped substantially, and the cheapest tier keeps high volume affordable.
 
 This decision cascades through everything that follows.
 
@@ -94,7 +94,7 @@ The main benchmark—Aesop's measurement anchor—is described in full in [bench
 | Contracts/config (ft116–120) | 66.7% (10/15) | 15 |
 | Ops/CI (ft121–130) | 66.7% (20/30) | 30 |
 
-**Total cost**: $34.24 of the $40 cap. (Haiku contribution: ~$1.16 of that.)
+**Total cost**: $34.24 of the $40 cap (`bench/results/frontier-v4-2026-07-27.json:652`). Haiku contribution: $1.16 (`bench/results/frontier-v4-2026-07-27.json:275`). <!-- metrics-verified: bench/results/frontier-v4-2026-07-27.json:652, bench/results/frontier-v4-2026-07-27.json:275 -->
 
 ### The Seam-Level Benchmark: Orchestration Judgment
 
@@ -115,7 +115,7 @@ The seam-level study ([bench/results/seam-loop-study-2026-07-28.md](../bench/res
 | Seated single-pass (no repro) | — | — | — | — |
 | One-shot unseated (no repro) | — | — | — | — |
 
-**Key finding**: On seam-level repair tasks, Haiku excels. 94.4% success rate—better than Opus (86.1%) and Fable (77.8%). The cost: $0.001 per task at Haiku vs. $0.01 at Opus. **10× cheaper, higher accuracy.**
+**Key finding**: On seam-level repair tasks, Haiku excels. 94.4% success rate—better than Opus (86.1%) and Fable (77.8%). The cost per task is far lower at Haiku than at Opus, and accuracy is higher. <!-- metrics-verified: bench/results/seam-loop-study-2026-07-28.md -->
 
 (Full breakdown: Haiku on short tasks 88.3%, medium tasks 85.0%, long tasks 58.3%. On hard tasks, the gap to Opus widens, but even there Haiku's cheaper marginal cost makes it the better first try.)
 
@@ -246,7 +246,7 @@ You're building an automated code reviewer. Haiku-first looks like this:
 
 *Measurement point*: Track false-positive rate (Haiku flags issues Opus says are fine). If it's <5%, Haiku is working. If it's >20%, add more verification or use Opus for the full pass.
 
-(This is what Aesop does. Haiku generates, Opus verifies. Cost: ~1/3 of Opus-only, accuracy: parity with human spot-checks.)
+(This is what Aesop does. Haiku generates, Opus verifies. Cost: well below Opus-only, accuracy: parity with human spot-checks.)
 
 ## Part 7: Honest Limits
 
@@ -261,7 +261,7 @@ You're building an automated code reviewer. Haiku-first looks like this:
 
 1. **Long-horizon planning**: Tasks requiring 20+ steps of chaining. Measured gap: Opus outperforms on frontier-reasoning slices, but we haven't shipped a production Haiku-vs-Opus A/B on this yet.
 2. **Refusal handling**: Fable-5 and Opus-5 hit API safety-classifier refusals on 35 benchmark tasks. Haiku had zero refusals. Interpretation: unclear if Haiku's smaller parameter budget makes it less likely to refuse, or if the refusal surface is model-specific. Not yet resolved.
-3. **Token efficiency**: Haiku uses ~1/3 the tokens of Opus *per output*. But if Haiku requires 3 retry loops to match Opus's one-shot accuracy, cost advantage evaporates. Measured on seam tasks: low retry rate (19.4% need repair). Unresolved on frontier synthesis.
+3. **Token efficiency**: Haiku uses fewer tokens than Opus *per output*. But if Haiku requires 3 retry loops to match Opus's one-shot accuracy, cost advantage evaporates. Measured on seam tasks: low retry rate (19.4% need repair). <!-- metrics-verified: bench/results/seam-loop-study-2026-07-28.md --> Unresolved on frontier synthesis.
 
 ## Part 8: The Bet Stands, But So Do Its Limits
 
@@ -275,7 +275,7 @@ But "good enough" is specific:
 
 The decision rule: **Measurement is the proof.** Not "Haiku is cheap, use it." But: "Here's what Haiku scores on a bounded task in your domain. Here's the false-positive rate. Here's the retry distribution. Here's the cost. Does it fit your constraints?"
 
-If it does, you get 3× cost reduction and move faster. If it doesn't, you budget for an expensive tier and get different failure modes (slower, more expensive, but higher ceiling on open-ended work).
+If it does, you get a substantial cost reduction and move faster. If it doesn't, you budget for an expensive tier and get different failure modes (slower, more expensive, but higher ceiling on open-ended work).
 
 Both are valid. Both are honest.
 

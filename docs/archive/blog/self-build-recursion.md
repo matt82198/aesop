@@ -74,11 +74,11 @@ The discipline here matters: every finding was *independently adversarially veri
 
 I did not know if Haiku—the cheapest model tier—would be good enough for orchestration. The benchmark tested 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spotting).
 
-Result: **Haiku 39/39 vs Opus 38/39** at 1/5 the per-token cost of Opus.
+Result: **Haiku 39/39 vs Opus 38/39** at a lower per-token cost than Opus. <!-- metrics-verified: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md -->
 
 One frontier task where Opus erred; Haiku did not. That single measurement decision determined whether the system scales or burns money.
 
-I could have assumed "frontier models for frontier tasks" and used Opus everywhere. Instead, I measured. The difference: Aesop runs 30+ waves in 18 days at $0.01-0.02 per wave. With Opus, that would be $0.05-0.10 per wave—still cheap, but it changes the cost model's load-bearing assumptions.
+I could have assumed "frontier models for frontier tasks" and used Opus everywhere. Instead, I measured. The difference: Aesop runs 30+ waves in 18 days on Haiku-only subagents. With Opus, the per-wave cost would be higher, which changes the cost model's load-bearing assumptions.
 
 ## What Stayed Human-Owned
 
@@ -119,11 +119,11 @@ Structural fix: PRs `#487` (tracker_guard) + `#518` (integration, tracker_autocl
 ## Cost and Scale
 
 - **30 waves in 18 days** = one wave every 14.4 hours average
-- **Cost per wave**: ~$0.01-0.02 USD (Haiku-only subagents, main thread tracked separately)
-- **30 waves × $0.02 (upper bound) = $0.60 USD** in agent token spend
+- **Cost per wave**: low (Haiku-only subagents, main thread tracked separately)
+- **Agent token spend**: no dollar total is restated here
 - **514 merged PRs ÷ 30 waves ≈ 17 PRs per wave**
 
-If I had used the cancelled hierarchical design (4.3× cost), the system would not be viable. At 1/5 the cost of Opus, scaling to 100 waves per week is plausible.
+If I had used the cancelled hierarchical design (4.3× cost, `docs/ab-cost-dataset.md:14`), the system would not be viable. At a lower cost than Opus, scaling to 100 waves per week is plausible. <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->
 
 ## What This Proves and What It Doesn't
 

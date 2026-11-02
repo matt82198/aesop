@@ -18,7 +18,7 @@ Traditional distributed systems assume failures are rare and Byzantine (arbitrar
 
 4. **Worker stalls**: A process hangs (not crashed, just stuck). Watchdog detects idle >200 seconds, kills it. But what about the work it was doing?
 
-Traditional solutions add distributed consensus: coordinators vote on state transitions, memberships managed via heartbeats, transactions atomic across replicas. But a Haiku agent costs ~$0.003. A heartbeat quorum check costs ~$0.0015. The coordination overhead approaches the cost of the worker itself.
+Traditional solutions add distributed consensus: coordinators vote on state transitions, memberships managed via heartbeats, transactions atomic across replicas. But a Haiku call is cheap per call. A heartbeat quorum check adds further overhead with no measured cost here. The coordination overhead approaches the cost of the worker itself.
 
 The insight: agent workers are already stateless by design. They read context from disk, decide, write results, exit. When a worker crashes, the next worker can resume from the checkpoint without detecting the failure or revoking a lease. The state is on disk; the next reader will see it.
 
@@ -36,7 +36,7 @@ Each agent receives a task, reads filesystem context, decides, writes results, e
 
 ### 3. Cost Architecture: Haiku-First, Flat Fan-Out
 
-Subagents are always Haiku (1/5 the per-token cost of Opus), spawned in parallel (5-8 per wave). A three-tier proposal—Fable orchestrator + Sonnet supervisors + Haiku workers—was A/B tested and showed **4.3× cost increase for identical quality**. It was cancelled. Today: flat dispatch, $0.01-0.02 per wave.
+Subagents are always Haiku (a lower per-token cost than Opus), spawned in parallel (5-8 per wave). A three-tier proposal—Fable orchestrator + Sonnet supervisors + Haiku workers—was A/B tested and showed **4.3× cost increase for identical quality** (`docs/ab-cost-dataset.md:14`). It was cancelled. Today: flat dispatch. <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->
 
 ### 4. Guardrails Enforced in Code
 
@@ -63,7 +63,7 @@ On hard tasks alone (60 longest):
 
 The repair distribution is clean: 145/180 passed on first try (80.6%), 14 used 1 retry (7.8%), 21 used 2 retries (11.7%). No task exceeded the retry cap. The largest repair count observed was 2.
 
-For model choice: Haiku scored 39/39 on 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence). Opus scored 38/39. At 1/5 the per-token cost.
+For model choice: Haiku scored 39/39 on 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence). Opus scored 38/39. At a lower per-token cost.
 
 **Five fault classes tested in chaos injection:**
 
@@ -119,7 +119,7 @@ Crash-only wins because:
 - **+20 percentage points** on hard tasks with repair loops
 - **0.0s-0.5s** MTTR across five fault classes
 - **16 stall incidents** resolved via watchdog + crash recovery
-- **Haiku 39/39** on seam tasks at 1/5 Opus cost
+- **Haiku 39/39** on seam tasks at a lower cost than Opus
 - **No distributed consensus overhead** (no heartbeat quorum, no lease voting)
 
 The entire system and every decision lives in git-committed, human-diffable files. When it breaks, you read the history and see why.

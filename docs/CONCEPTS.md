@@ -9,7 +9,7 @@
 A **wave** is one complete delivery loop: rank backlog → dispatch parallel agents → verify & merge → audit & close. Each wave ships 3–8 tested features/fixes and feeds findings into the next wave's backlog.
 
 **Wallclock**: 2–3 hours  
-**Cost**: ~$0.03–$0.05 per wave  
+**Cost**: lower per wave than an all-Opus fleet  
 **Outputs**: All PRs merged, all tests green
 
 See [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) for a concrete walkthrough.
@@ -22,19 +22,19 @@ Aesop's superpower is **Haiku-first dispatch**: spawn 5–8 cheap Haiku subagent
 
 ### The rule: Subagents are ALWAYS cheap tier
 
-**Rule**: Every subagent defaults to Haiku (1/3 Sonnet cost, 1/5 Opus cost). The orchestrator runs on the main thread only, stays lean, and never spawns as a subagent.
+**Rule**: Every subagent defaults to Haiku (the lowest-priced tier). The orchestrator runs on the main thread only, stays lean, and never spawns as a subagent.
 
-**Why**: Haiku at scale (6–8 in parallel) costs ~25% of an all-Opus fleet while maintaining quality on scoped tasks. Running many in parallel is both faster (3x wall-clock) and cheaper (1/5 the cost per token).
+**Why**: Haiku at scale (6–8 in parallel) costs less than an all-Opus fleet while maintaining quality on scoped tasks. Running many in parallel is both faster (wall-clock) and cheaper per token.
 
 **Exception**: Only upgrade to Sonnet/Opus if the task genuinely exceeds Haiku capability (rare for scoped domains) AND you've decomposed as far as possible AND you have explicit approval.
 
 ### Cost model: Math
 
 ```
-All-Opus fleet:         5 agents × Opus cost = $0.15–0.20/wave
-Aesop (1 Opus + 5 Haiku): 1 Opus + 5 Haiku = $0.03–0.05/wave
+All-Opus fleet:         5 agents × Opus cost (no dollar figure stated)
+Aesop (1 Opus + 5 Haiku): 1 Opus + 5 Haiku, cheaper per wave than the all-Opus fleet
 
-= 4–5x cheaper + 3x faster (parallelism)
+= lower cost per wave, plus faster wall-clock from parallelism
 ```
 
 See [DISPATCH-MODEL.md](DISPATCH-MODEL.md) for patterns (fan-out, sequential, hierarchical) and detailed cost analysis.

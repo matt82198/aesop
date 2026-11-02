@@ -125,7 +125,7 @@ gpt-4o-mini seat returned a schema-valid `final_catch` verdict (`merge`,
 with evidence + confidence) on the first attempt. Result shape was
 invariant modulo exactly the two documented opt-in keys
 (`orchestrator_review`, `final_catch`). Total spend: 3 gpt-4o-mini calls
-(~1.1k worker tokens + one decision call), well under the run's US$2 cap.
+(~1.1k worker tokens + one decision call), well under the run's spend cap.
 `git=None` — the live proof never shipped anything.
 
 That is the whole evidentiary basis for "the seam is real and the boundary

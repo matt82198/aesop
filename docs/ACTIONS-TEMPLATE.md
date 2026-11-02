@@ -24,7 +24,7 @@ Edit `.github/workflows/aesop-dispatch.yml` and update the `env` section:
 
 ```yaml
 env:
-  AESOP_COST_CEILING: '50'          # Token cost limit ($ USD)
+  AESOP_COST_CEILING: '50'          # Token cost limit ($ USD); configured default from templates/aesop-dispatch-template.yml:50, not a measurement
   AESOP_CONCURRENCY: '4'             # Max parallel agents
   # AESOP_ORCHESTRATOR_MODEL: 'haiku' # Uncomment to override
 ```
@@ -108,7 +108,7 @@ permissions:
 
 ### Environment Variables
 
-- **`AESOP_COST_CEILING`** (recommended: `'50'`) — Token cost limit in USD. Orchestration halts if exceeded.
+- **`AESOP_COST_CEILING`** (recommended: `'50'`, the configured default in `templates/aesop-dispatch-template.yml:50`, not a measured figure) — Token cost limit in USD. Orchestration halts if exceeded.
 - **`AESOP_CONCURRENCY`** (recommended: `'4'`) — Maximum number of parallel agents.
 - **`AESOP_ORCHESTRATOR_MODEL`** (optional: `'haiku'`, `'sonnet'`, or `'opus'`) — Override the orchestrator seat model.
 
