@@ -138,12 +138,15 @@ def _append_lock(store_root):
     while True:
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except (FileExistsError, PermissionError) as exc:
+            # On Windows a lock whose delete is pending (another process still has it
+            # open) fails the create with PermissionError rather than FileExistsError:
+            # both mean busy. A persistent failure ends in the timeout, with the OSError.
             if _break_if_stale(lock):
                 continue
             if time.monotonic() >= deadline:
-                raise StoreError("timed out after %.1fs waiting for append lock %s"
-                                 % (LOCK_TIMEOUT_SECONDS, lock))
+                raise StoreError("timed out after %.1fs waiting for append lock %s (%s)"
+                                 % (LOCK_TIMEOUT_SECONDS, lock, exc))
             time.sleep(LOCK_POLL_SECONDS)  # sleep-ok: lock poll, bounded by the deadline
             continue
         try:
