@@ -13,11 +13,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from event_store import claims  # noqa: E402
 from event_store import project as proj_mod  # noqa: E402
 from event_store import registry as reg_mod  # noqa: E402
 from event_store.store import Store, StoreError  # noqa: E402
 
 REPO_ENCODED_KEY = re.compile(r"^[A-Za-z0-9]+_(pr|issue|pull)_\d+$")
+
+# Allowlist of event kinds. v1 writer set: conductor3 tools/event_append.py:28-31; plan
+# docs/plans/PER-PROJECT-EVENT-STORES.md:154-155 adds playtest_*; migrate.py:189,192 writes
+# migrated_*; "merge" is written only by record-merge (gh facts), never by hand.
+KINDS = frozenset({
+    "verdict", "ruling", "dispatch", "handback", "pr_state", "checkpoint", "release",
+    "finding", "note", "playtest_start", "playtest_end", "migrated_genesis",
+    "migrated_close", claims.MERGE_KIND,
+})
+RECORDER_ONLY_KINDS = frozenset({claims.MERGE_KIND})
 
 
 def refuse(msg):
@@ -61,7 +72,57 @@ def git_commit(store_path, event):
     return True
 
 
+def open_store(args):
+    """Resolve --path or --project to a Store, or raise refuse-able errors."""
+    if getattr(args, "path", None):
+        return Store(Path(args.path))
+    if not args.project:
+        raise reg_mod.RegistryError("needs --project (or --path)")
+    reg = reg_mod.load_registry()
+    store = Store(reg_mod.store_path(reg, args.project))
+    if store.project != args.project:
+        raise reg_mod.RegistryError("store belongs to %r, not %r"
+                                    % (store.project, args.project))
+    return store
+
+
+def cmd_record_merge(args):
+    try:
+        store = open_store(args)
+    except (reg_mod.RegistryError, StoreError) as exc:
+        return refuse(str(exc))
+    runner = args.gh_runner or claims.default_gh_runner
+    try:
+        status, msg = claims.record_merge(store, args.repo, args.pr, runner)
+    except claims.RecordMergeError as exc:
+        sys.stdout.write("RECORD-MERGE FAILED: %s\n" % exc)
+        return 1
+    except StoreError as exc:
+        sys.stdout.write("RECORD-MERGE FAILED: %s\n" % exc)
+        return 1
+    if status == "recorded" and not git_commit(store.path, store.load()[-1]):
+        return 1
+    sys.stdout.write("%s: %s\n" % (status, msg))
+    return 0
+
+
+def cmd_verify_claim(args):
+    """Exit 0 verified, 1 refuted, 2 unknown or error."""
+    try:
+        store = open_store(args)
+    except (reg_mod.RegistryError, StoreError) as exc:
+        return refuse(str(exc))
+    res = claims.verify_claim(store, args.repo, args.pr, args.sha)
+    sys.stdout.write("%s seq=%s %s\n" % (res["status"].upper(), res["seq"], res["reason"]))
+    return {"verified": 0, "refuted": 1}.get(res["status"], 2)
+
+
 def cmd_append(args):
+    if args.kind not in KINDS:
+        return refuse("unknown kind %r; kinds: %s" % (args.kind, " ".join(sorted(KINDS))))
+    if args.kind in RECORDER_ONLY_KINDS:
+        return refuse("kind %r is written only by its recorder (record-merge), not by hand"
+                      % args.kind)
     try:
         refs = parse_refs(args.ref)
         reg = reg_mod.load_registry()
@@ -161,6 +222,19 @@ def build_parser():
     v.add_argument("--project")
     v.add_argument("--path")
     v.set_defaults(fn=cmd_verify)
+    rm = sub.add_parser("record-merge")
+    rm.add_argument("repo")
+    rm.add_argument("pr")
+    rm.add_argument("--project")
+    rm.add_argument("--path")
+    rm.set_defaults(fn=cmd_record_merge)
+    vc = sub.add_parser("verify-claim")
+    vc.add_argument("repo")
+    vc.add_argument("pr")
+    vc.add_argument("sha")
+    vc.add_argument("--project")
+    vc.add_argument("--path")
+    vc.set_defaults(fn=cmd_verify_claim)
     p = sub.add_parser("project")
     p.add_argument("view", choices=("pending", "rulings", "checkpoints"))
     p.add_argument("--project")
@@ -173,8 +247,9 @@ def build_parser():
     return ap
 
 
-def main(argv=None):
+def main(argv=None, gh_runner=None):
     args = build_parser().parse_args(argv)
+    args.gh_runner = gh_runner
     return args.fn(args)
 
 
