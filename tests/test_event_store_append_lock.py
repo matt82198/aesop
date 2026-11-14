@@ -3,7 +3,6 @@
 The race test runs N separate OS processes that append to one store at the same time.
 Without the lock two processes read the same tail and write the same seq and prev.
 """
-import hashlib
 import json
 import os
 import socket
