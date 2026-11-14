@@ -384,52 +384,120 @@ gate_no_python_block() {
   printf 'FATAL: no python interpreter found; %s cannot run. Push blocked.\n' "$label" >&2
 }
 
+# ----- Audit lock (one critical section: read tail, compute, append) -----
+# Owner identity is BASHPID, not $$: background subshells inherit $$ from the
+# parent, so two concurrent writers in one process would otherwise look like the
+# same owner. A lock is removed ONLY by its owner's release. There is no
+# reclaim of any kind: a reclaim (mv the lock aside, then check its owner) can
+# move a live lock that was released and re-taken in the gap, and the restore
+# leaves a window where a third writer enters beside the real holder (observed
+# 2026-11-14: 11 dead-owner verdicts and 2 wrong-owner reclaims in 10 rounds of 8
+# writers, each fork breaking the chain). A writer that cannot acquire before the
+# deadline fails loudly and never writes the chain without the lock. A lock left
+# by a crashed writer is reported with its owner pid and removed by hand.
+# Deadline sized for queued writers: one locked write takes ~0.9s on Git Bash
+# (measured 2026-11-14), so 8 concurrent writers need ~7s serially; 10s failed
+# with live owners. 60s is still a hard bound that fails loudly.
+readonly AUDIT_LOCK_DEADLINE_SECS=60
+readonly AUDIT_LOCK_POLL_SECS=0.05
+
+audit_lock_owner() {
+  # Prints the owner pid recorded in <lock_dir>/pid; empty when none is readable.
+  local lock_dir="$1" owner=""
+  if [ -r "$lock_dir/pid" ]; then
+    owner=$(head -n 1 "$lock_dir/pid" 2>/dev/null || true)
+  fi
+  printf '%s' "$owner"
+}
+
+audit_trace() {
+  # Diagnostic only: when AUDIT_TRACE_FILE is set, append "<time> bashpid=<p> <event>".
+  # Never affects control flow or the chain.
+  [ -n "${AUDIT_TRACE_FILE:-}" ] || return 0
+  printf '%s bashpid=%s %s\n' "${EPOCHREALTIME:-0}" "$BASHPID" "$*" >> "$AUDIT_TRACE_FILE" 2>/dev/null || true
+}
+
+# Set once this process has waited out the full deadline; later acquires fail at once
+# instead of each waiting another 60s. A fresh process starts at 0 and tries normally.
+AUDIT_LOCK_UNAVAILABLE=0
+
+audit_report_lock_wedge() {
+  # Loud, text-only report for a lock that was not acquired. It never removes or
+  # reclaims the lock: a live release races any automatic removal (2026-11-14).
+  local lock_dir="$1" owner state_note age_note mtime now
+  owner=$(audit_lock_owner "$lock_dir")
+  if [ -z "$owner" ]; then
+    state_note="owner pid absent (a writer was likely killed before recording it)"
+  elif kill -0 "$owner" 2>/dev/null; then
+    state_note="owner pid $owner is running"
+  else
+    state_note="owner pid $owner is not running"
+  fi
+  mtime=$(stat -c %Y -- "$lock_dir" 2>/dev/null || stat -f %m -- "$lock_dir" 2>/dev/null || true)
+  now=$(date +%s)
+  if [ -n "$mtime" ] && [ "$mtime" -eq "$mtime" ] 2>/dev/null; then
+    age_note=$(( now - mtime ))
+    [ "$age_note" -ge 0 ] || age_note=0
+  else
+    age_note=0
+  fi
+  printf 'ERROR: audit lock %s not acquired within %ss (owner pid: %s; %s; lock dir age: %ss)\n' \
+    "$lock_dir" "$AUDIT_LOCK_DEADLINE_SECS" "${owner:-none}" "$state_note" "$age_note" >&2
+  printf 'ERROR: if no push is running, remove the lock directory by hand: rm -rf -- %s (it is never removed automatically)\n' \
+    "$lock_dir" >&2
+}
+
 acquire_audit_lock() {
-  # Finding 1: Mkdir-based atomic lock for audit log write safety
-  local lock_dir="$1"
-  local timeout=300
-  local start_time
-  start_time=$(date +%s)
+  # Returns 0 with the lock held, or 1 once the deadline has passed (never unlocked).
+  local lock_dir="$1" deadline me
+  deadline=$(( $(date +%s) + AUDIT_LOCK_DEADLINE_SECS ))
 
-  while true; do
-    if mkdir "$lock_dir" 2>/dev/null; then
-      # Acquired lock successfully
-      echo "$$" > "$lock_dir/pid"
-      return 0
-    fi
-
-    # Check if lock is stale (>timeout seconds old)
-    if [ -f "$lock_dir/pid" ]; then
-      local lock_time
-      lock_time=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null || echo 0)
-      local current_time
-      current_time=$(date +%s)
-      if [ $((current_time - lock_time)) -gt $timeout ]; then
-        # Stale lock; force reclaim atomically
-        rm -rf "$lock_dir" 2>/dev/null
-        mkdir "$lock_dir" 2>/dev/null && echo "$$" > "$lock_dir/pid" && return 0
+  while :; do
+    audit_trace "mkdir-try $lock_dir"
+    if mkdir -- "$lock_dir" 2>/dev/null; then
+      audit_trace "mkdir-ok"
+      # mkdir alone is not proof of ownership: CI run 43636610785 showed two writers
+      # both get mkdir success for one directory in the same microsecond. Ownership is
+      # decided by an O_EXCL create of the pid file (noclobber), which exactly one
+      # writer can win; the loser keeps waiting and never touches the directory.
+      me="$BASHPID"
+      if (set -C; printf '%s\n' "$me" > "$lock_dir/pid") 2>/dev/null; then
+        audit_trace "pid-written"
+        return 0
+      fi
+      if [ -e "$lock_dir/pid" ]; then
+        audit_trace "claim-lost"
+      else
+        # Ownership could not be recorded and nobody else holds it: give back the empty dir.
+        rmdir -- "$lock_dir" 2>/dev/null
+        return 1
       fi
     fi
 
-    # Check timeout
-    if [ $(($(date +%s) - start_time)) -gt 10 ]; then
-      # Lock holder is stuck; give up after 10s
+    if [ "$AUDIT_LOCK_UNAVAILABLE" -eq 1 ]; then
+      # A previous acquire in this process waited out the deadline. One try per call
+      # (so a lock released meanwhile is still taken), but never another 60s wait.
+      printf 'ERROR: audit lock %s still not acquirable (an earlier acquire in this process timed out); not waiting again\n' "$lock_dir" >&2
       return 1
     fi
 
-    sleep 0.1
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      AUDIT_LOCK_UNAVAILABLE=1
+      audit_report_lock_wedge "$lock_dir"
+      return 1
+    fi
+    sleep "$AUDIT_LOCK_POLL_SECS"
   done
 }
 
 release_audit_lock() {
-  # P0 fix: Release the lock directory only if we own it (pid matches)
-  local lock_dir="$1"
-  if [ -f "$lock_dir/pid" ]; then
-    local lock_pid
-    lock_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
-    if [ "$lock_pid" = "$$" ]; then
-      rm -rf "$lock_dir" 2>/dev/null
-    fi
+  # Removes the lock only when this writer (BASHPID) is the recorded owner.
+  local lock_dir="$1" recorded_owner
+  recorded_owner=$(audit_lock_owner "$lock_dir")
+  audit_trace "release recorded_owner=${recorded_owner:-none}"
+  if [ "$recorded_owner" = "$BASHPID" ]; then
+    rm -rf -- "$lock_dir" 2>/dev/null
+    audit_trace "release-removed"
   fi
 }
 
@@ -1828,7 +1896,9 @@ audit_append_fragment() {
   local prev_hash seq
   prev_hash=$(get_previous_hash "$audit_log")
   seq=$(get_next_seq "$audit_log")
+  audit_trace "append seq=$seq prev=${prev_hash:0:8} log_bytes=$({ wc -c < "$audit_log"; } 2>/dev/null)"
   printf '{"seq":%d,"prev_hash":"%s",%s}\n' "$seq" "$prev_hash" "$fragment" >> "$audit_log" 2>/dev/null || return 1
+  audit_trace "append-done"
   if [ -s "$audit_log" ]; then
     tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
   fi
@@ -1898,8 +1968,11 @@ audit_write_locked() {
   local audit_log="$state_dir/SECURITY-AUDIT.log"
   local had_spills=0
   if ! acquire_audit_lock "$lock_dir"; then
-    audit_spill_record "$state_dir" "$fragment"
-    return $?
+    # Deadline passed: the record is NOT chained, and this write fails loudly.
+    # It is kept in a spill file so the next lock holder chains it; nothing is written unlocked.
+    audit_spill_record "$state_dir" "$fragment" || true
+    printf 'ERROR: audit write failed: lock deadline passed; record spilled, not chained (exit 1)\n' >&2
+    return 1
   fi
   if compgen -G "$state_dir/audit-spill-*" >/dev/null; then
     had_spills=1
