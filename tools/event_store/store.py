@@ -138,6 +138,7 @@ class Store:
         for f in self.day_files():
             if not v2:
                 prev_line = None  # v1: chain restarts each day file
+                file_seq = 0  # v1: seq restarts at 1 in each day file
             for n, raw in enumerate(self._lines(f), 1):
                 where = "%s:%d" % (f.name, n)
                 try:
@@ -156,10 +157,16 @@ class Store:
                         problems.append("%s: v is not 2" % where)
                     if seq != last_seq + 1:
                         problems.append("%s: seq %r, expected %d" % (where, seq, last_seq + 1))
-                elif not isinstance(seq, int) or seq <= last_seq:
-                    problems.append("%s: seq %r not increasing" % (where, seq))
+                elif not isinstance(seq, int) or seq != file_seq + 1 and not (
+                        n == 1 and seq == last_seq + 1):
+                    # v1 seq is the 1-based line number within its day file: no gap, no
+                    # duplicate, no reorder. A file's first line may also continue a
+                    # store-wide count (older v1 fixtures), so only the within-file run is
+                    # held to 1..n.
+                    problems.append("%s: seq %r, expected %d" % (where, seq, file_seq + 1))
                 if isinstance(seq, int):
                     last_seq = seq
+                    file_seq = seq
                 prev_line = raw
         head = self._meta.get("head") if v2 else None
         if head is not None:
