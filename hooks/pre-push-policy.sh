@@ -410,14 +410,24 @@ audit_lock_owner() {
   printf '%s' "$owner"
 }
 
+audit_trace() {
+  # Diagnostic only: when AUDIT_TRACE_FILE is set, append "<time> bashpid=<p> <event>".
+  # Never affects control flow or the chain.
+  [ -n "${AUDIT_TRACE_FILE:-}" ] || return 0
+  printf '%s bashpid=%s %s\n' "${EPOCHREALTIME:-0}" "$BASHPID" "$*" >> "$AUDIT_TRACE_FILE" 2>/dev/null || true
+}
+
 acquire_audit_lock() {
   # Returns 0 with the lock held, or 1 once the deadline has passed (never unlocked).
   local lock_dir="$1" owner deadline
   deadline=$(( $(date +%s) + AUDIT_LOCK_DEADLINE_SECS ))
 
   while :; do
+    audit_trace "mkdir-try $lock_dir"
     if mkdir -- "$lock_dir" 2>/dev/null; then
+      audit_trace "mkdir-ok"
       if printf '%s\n' "$BASHPID" > "$lock_dir/pid" 2>/dev/null; then
+        audit_trace "pid-written"
         return 0
       fi
       # Ownership could not be recorded, so the lock is not provably ours: give it back.
@@ -437,9 +447,12 @@ acquire_audit_lock() {
 
 release_audit_lock() {
   # Removes the lock only when this writer (BASHPID) is the recorded owner.
-  local lock_dir="$1"
-  if [ "$(audit_lock_owner "$lock_dir")" = "$BASHPID" ]; then
+  local lock_dir="$1" recorded_owner
+  recorded_owner=$(audit_lock_owner "$lock_dir")
+  audit_trace "release recorded_owner=${recorded_owner:-none}"
+  if [ "$recorded_owner" = "$BASHPID" ]; then
     rm -rf -- "$lock_dir" 2>/dev/null
+    audit_trace "release-removed"
   fi
 }
 
@@ -1838,7 +1851,9 @@ audit_append_fragment() {
   local prev_hash seq
   prev_hash=$(get_previous_hash "$audit_log")
   seq=$(get_next_seq "$audit_log")
+  audit_trace "append seq=$seq prev=${prev_hash:0:8} log_bytes=$({ wc -c < "$audit_log"; } 2>/dev/null)"
   printf '{"seq":%d,"prev_hash":"%s",%s}\n' "$seq" "$prev_hash" "$fragment" >> "$audit_log" 2>/dev/null || return 1
+  audit_trace "append-done"
   if [ -s "$audit_log" ]; then
     tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
   fi

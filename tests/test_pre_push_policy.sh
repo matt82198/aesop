@@ -95,6 +95,8 @@ audit_failure_diag() {
   tail -n 12 "$diag_log" 2>&1 | sed 's/^/  | /'
   printf -- '--- diag: state dir listing ---\n'
   ls -la "$diag_root/state" 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: lock trace (AUDIT_TRACE_FILE, first 120 lines) ---\n'
+  head -n 120 "$diag_root/audit-trace.txt" 2>&1 | sed 's/^/  | /'
   printf -- '--- diag: python: %s / sha256sum: %s ---\n' "$(command -v python3 || command -v python)" "$(command -v sha256sum)"
 }
 
@@ -112,6 +114,7 @@ printf '\n=== Finding 1b: 8 concurrent writers x 5 rounds (chain verifies, no lo
         # Run outside any git checkout so resolve_aesop_root honors AESOP_ROOT.
         cd "$stress_base" || exit 1
         export AESOP_ROOT="$root"
+        export AUDIT_TRACE_FILE="$root/audit-trace.txt"
         log_block "stress_r${round}_w${w}" || exit 1
       ) >/dev/null 2>&1 &
       pids+=("$!")
@@ -154,6 +157,7 @@ printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_race"
   mkdir -p "$AESOP_ROOT/state"
+  export AUDIT_TRACE_FILE="$AESOP_ROOT/audit-trace.txt"
 
   # Simulate two concurrent log_block calls (both read tail, both append)
   # Expected: write lock ensures consistent prev_hash chain
