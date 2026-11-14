@@ -94,27 +94,34 @@ def cmd_record_merge(args):
     runner = args.gh_runner or claims.default_gh_runner
     try:
         status, msg = claims.record_merge(store, args.repo, args.pr, runner)
-    except claims.RecordMergeError as exc:
+        if status == "recorded" and not git_commit(store.path, store.load()[-1]):
+            return 1
+    except Exception as exc:  # any crash is failed/1 with a line, never a bare traceback
         sys.stdout.write("RECORD-MERGE FAILED: %s\n" % exc)
-        return 1
-    except StoreError as exc:
-        sys.stdout.write("RECORD-MERGE FAILED: %s\n" % exc)
-        return 1
-    if status == "recorded" and not git_commit(store.path, store.load()[-1]):
         return 1
     sys.stdout.write("%s: %s\n" % (status, msg))
     return 0
 
 
 def cmd_verify_claim(args):
-    """Exit 0 verified, 1 refuted, 2 unknown or error."""
+    """Exit 0 verified, 1 refuted, 2 unknown or error (including any internal crash)."""
     try:
         store = open_store(args)
     except (reg_mod.RegistryError, StoreError) as exc:
         return refuse(str(exc))
-    res = claims.verify_claim(store, args.repo, args.pr, args.sha)
-    sys.stdout.write("%s seq=%s %s\n" % (res["status"].upper(), res["seq"], res["reason"]))
-    return {"verified": 0, "refuted": 1}.get(res["status"], 2)
+    except Exception as exc:
+        sys.stdout.write("UNKNOWN seq=None store unreadable: %s: %s\n"
+                         % (type(exc).__name__, exc))
+        return 2
+    try:
+        res = claims.verify_claim(store, args.repo, args.pr, args.sha)
+        line = "%s seq=%s %s\n" % (res["status"].upper(), res["seq"], res["reason"])
+        code = {"verified": 0, "refuted": 1}.get(res["status"], 2)
+    except Exception as exc:
+        line = "UNKNOWN seq=None internal error: %s: %s\n" % (type(exc).__name__, exc)
+        code = 2
+    sys.stdout.write(line)
+    return code
 
 
 def cmd_append(args):

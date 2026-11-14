@@ -42,10 +42,12 @@ def count_events(store_path):
 
 
 def gh_json(state="MERGED", merge=MERGE, head=HEAD, merged_at="2026-11-14T10:00:00Z",
-            base="main"):
+            base="main", pr=7, repo=RP, number=None, url=None):
     return json.dumps({"state": state,
                        "mergeCommit": {"oid": merge} if merge else None,
-                       "headRefOid": head, "mergedAt": merged_at, "baseRefName": base})
+                       "headRefOid": head, "mergedAt": merged_at, "baseRefName": base,
+                       "number": pr if number is None else number,
+                       "url": url or "https://github.com/%s/pull/%s" % (repo, pr)})
 
 
 class FakeGh:
@@ -85,8 +87,25 @@ class Base(unittest.TestCase):
                               capture_output=True, encoding="utf-8", errors="replace")
 
     def add_merge(self, pr=7, merge=MERGE, head=HEAD, repo=RP):
-        gh = FakeGh(gh_json(merge=merge, head=head))
+        gh = FakeGh(gh_json(merge=merge, head=head, pr=pr, repo=repo))
         return claims.record_merge(self.store, repo, pr, gh)
+
+    def forge(self, pr=7, merge=OTHER, actor="record-merge", source="gh"):
+        """Append a merge-kind event directly, bypassing record-merge."""
+        refs = {"repo": RP, "pr": str(pr), "merge_sha": merge, "head_sha": HEAD,
+                "merged_at": "", "base": "main"}
+        if source is not None:
+            refs["source"] = source
+        return self.store.append("merge", actor, "forged", refs=refs)
+
+    def event_file(self):
+        return next(iter(self.store.day_files()))
+
+    def drop_head(self):
+        p = self.root / "store.json"
+        meta = json.loads(p.read_text(encoding="utf-8"))
+        meta.pop("head", None)
+        p.write_text(json.dumps(meta), encoding="utf-8")
 
 
 class KindsTests(Base):
@@ -125,7 +144,8 @@ class RecordMergeTests(Base):
         self.assertEqual(status, "recorded")
         argv, timeout = gh.calls[0]
         self.assertEqual(argv, ["gh", "pr", "view", "7", "--repo", RP, "--json",
-                                "state,mergeCommit,headRefOid,mergedAt,baseRefName"])
+                                "state,mergeCommit,headRefOid,mergedAt,baseRefName,"
+                                "number,url"])
         self.assertIsInstance(timeout, (int, float))
         self.assertGreater(timeout, 0)
         ev = self.store.load()[0]
@@ -188,6 +208,73 @@ class RecordMergeTests(Base):
                 claims.record_merge(self.store, repo, pr, gh)
         self.assertEqual(gh.calls, [])
 
+    def test_f6_number_mismatch_writes_nothing(self):
+        self.assert_failed(FakeGh(gh_json(number=8)))
+
+    def test_f6_url_other_repo_writes_nothing(self):
+        self.assert_failed(FakeGh(gh_json(repo="evil/other")))
+
+    def test_f6_url_other_pr_writes_nothing(self):
+        self.assert_failed(FakeGh(gh_json(url="https://github.com/%s/pull/8" % RP)))
+
+    def test_f6_missing_number_writes_nothing(self):
+        data = json.loads(gh_json())
+        del data["number"]
+        self.assert_failed(FakeGh(json.dumps(data)))
+
+    def test_f1_runner_runtime_error_is_clean_failure(self):
+        rc, out, _ = self.run_main(["record-merge", RP, "7", "--project", "aesop"],
+                                   gh=FakeGh(exc=RuntimeError("boom")))
+        self.assertEqual(rc, 1)
+        self.assertTrue(out.startswith("RECORD-MERGE FAILED:"), out)
+        self.assertEqual(count_events(self.root), 0)
+
+    def test_f1_corrupt_store_line_is_clean_failure_and_lock_released(self):
+        self.add_merge(5)
+        with open(self.event_file(), "ab") as fh:
+            fh.write(b"[]\n")
+        before = count_events(self.root)
+        rc, out, _ = self.run_main(["record-merge", RP, "7", "--project", "aesop"],
+                                   gh=FakeGh(gh_json()))
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(out.startswith("RECORD-MERGE FAILED:"), out)
+        self.assertEqual(count_events(self.root), before)
+        self.assertFalse((self.root / ".record-merge.lock").exists())
+
+    def test_f5a_lock_path_is_directory_is_clean_failure(self):
+        (self.root / ".record-merge.lock").mkdir()
+        with self.assertRaises(claims.RecordMergeError) as cm:
+            claims.record_merge(self.store, RP, 7, FakeGh(gh_json()))
+        self.assertIn("lock unusable", str(cm.exception))
+        self.assertEqual(count_events(self.root), 0)
+
+    def test_f5a_posix_shape_directory_lock_exists_error_is_clean_failure(self):
+        # POSIX raises FileExistsError (not PermissionError) for O_EXCL on a directory.
+        (self.root / ".record-merge.lock").mkdir()
+        with mock.patch.object(claims.os, "open", side_effect=FileExistsError()):
+            with self.assertRaises(claims.RecordMergeError) as cm:
+                claims.record_merge(self.store, RP, 7, FakeGh(gh_json()))
+        self.assertIn("lock unusable", str(cm.exception))
+        self.assertEqual(count_events(self.root), 0)
+
+    def test_f5b_break_stale_only_when_lock_is_the_observed_one(self):
+        lock = self.root / ".record-merge.lock"
+        lock.write_text("x")
+        seen = lock.stat().st_mtime_ns
+        # a fresh lock replaced the stale one the contender observed: must not break it
+        self.assertFalse(claims._break_stale(lock, seen + 1))
+        self.assertTrue(lock.exists())
+        self.assertTrue(claims._break_stale(lock, seen))
+        self.assertFalse(lock.exists())
+        self.assertFalse(claims._break_stale(lock, seen))
+        self.assertEqual([p.name for p in self.root.iterdir() if "stale" in p.name], [])
+
+    def test_f2b_unrecognised_merge_event_blocks_record_merge(self):
+        self.forge(pr=7, actor="someone")
+        with self.assertRaises(claims.RecordMergeError):
+            claims.record_merge(self.store, RP, 7, FakeGh(gh_json()))
+        self.assertEqual(count_events(self.root), 1)
+
     def test_cli_failure_line_and_exit(self):
         rc, out, _ = self.run_main(["record-merge", RP, "7", "--project", "aesop"],
                                    gh=FakeGh(gh_json(state="OPEN", merge=None)))
@@ -218,8 +305,120 @@ class VerifyClaimTests(Base):
         self.assertEqual(r["status"], "verified")
         self.assertEqual(r["seq"], 1)
 
-    def test_verified_by_head_sha(self):
-        self.assertEqual(self.v(HEAD)["status"], "verified")
+    def test_f4_head_sha_claim_is_refuted_not_verified(self):
+        r = self.v(HEAD)
+        self.assertEqual(r["status"], "refuted")
+        self.assertEqual(self.v(HEAD[:7])["status"], "refuted")
+
+    def test_f8_twelve_hex_claim_differing_after_seven_is_refuted(self):
+        self.assertEqual(self.v(MERGE[:7] + "bbbbb")["status"], "refuted")
+
+    def conflicting_second_merge(self):
+        second = "a" * 39 + "b"
+        refs = {"repo": RP, "pr": "7", "merge_sha": second, "head_sha": HEAD,
+                "merged_at": "", "base": "main", "source": "gh"}
+        self.store.append("merge", "record-merge", "dup", refs=refs)
+        return second
+
+    def test_f8_two_merge_events_for_one_pr_is_ambiguous_unknown(self):
+        second = self.conflicting_second_merge()
+        for claim in (MERGE[:7], MERGE, second):
+            r = self.v(claim)
+            self.assertEqual(r["status"], "unknown", claim)
+            self.assertIn("ambiguous", r["reason"])
+
+    def test_f1_non_object_lines_are_unknown_not_refuted(self):
+        for junk in (b"[]", b"5", b"null", b'"s"'):
+            with self.subTest(junk=junk):
+                p = self.event_file()
+                raw = p.read_bytes()
+                p.write_bytes(raw + junk + b"\n")
+                try:
+                    r = self.v(MERGE)
+                    self.assertEqual(r["status"], "unknown")
+                    self.assertTrue(r["reason"])
+                    rc, out, _ = self.run_main(["verify-claim", RP, "7", MERGE,
+                                                "--project", "aesop"])
+                    self.assertEqual(rc, 2, out)
+                    self.assertIn("UNKNOWN", out)
+                finally:
+                    p.write_bytes(raw)
+
+    def test_f1_cli_unexpected_exception_is_unknown_exit_2(self):
+        with mock.patch.object(claims, "verify_claim", side_effect=RuntimeError("boom")):
+            rc, out, _ = self.run_main(["verify-claim", RP, "7", MERGE, "--project", "aesop"])
+        self.assertEqual(rc, 2)
+        self.assertIn("UNKNOWN", out)
+        self.assertIn("boom", out)
+
+    def test_f1_cli_record_merge_unexpected_exception_is_failed_exit_1(self):
+        with mock.patch.object(claims, "record_merge", side_effect=RuntimeError("boom")):
+            rc, out, _ = self.run_main(["record-merge", RP, "7", "--project", "aesop"])
+        self.assertEqual(rc, 1)
+        self.assertTrue(out.startswith("RECORD-MERGE FAILED:"), out)
+
+    def test_f2_head_removed_edited_last_event_is_unknown(self):
+        p = self.event_file()
+        raw = p.read_bytes()
+        p.write_bytes(raw.replace(b" merged at ", b" MERGED at ", 1))
+        self.assertNotEqual(p.read_bytes(), raw)
+        self.drop_head()
+        r = claims.verify_claim(Store(self.root), RP, 7, MERGE)
+        self.assertEqual(r["status"], "unknown")
+        self.assertIn("head", r["reason"])
+
+    def test_f2_head_removed_truncated_tail_is_unknown(self):
+        self.add_merge(9, merge="d" * 40, head="e" * 40)
+        p = self.event_file()
+        lines = [x for x in p.read_bytes().split(b"\n") if x]
+        p.write_bytes(lines[0] + b"\n")
+        self.drop_head()
+        r = claims.verify_claim(Store(self.root), RP, 7, MERGE)
+        self.assertEqual(r["status"], "unknown")
+        self.assertIn("head", r["reason"])
+
+    def test_f2_head_removed_intact_chain_is_unknown(self):
+        self.drop_head()
+        r = claims.verify_claim(Store(self.root), RP, 7, MERGE)
+        self.assertEqual(r["status"], "unknown")
+
+    def test_f2_malformed_head_is_unknown(self):
+        p = self.root / "store.json"
+        meta = json.loads(p.read_text(encoding="utf-8"))
+        meta["head"] = "zz"
+        p.write_text(json.dumps(meta), encoding="utf-8")
+        r = claims.verify_claim(Store(self.root), RP, 7, MERGE)
+        self.assertEqual(r["status"], "unknown")
+
+    def test_f2_fresh_store_without_events_has_no_head_and_is_unknown(self):
+        other = make_store(Path(self.tmp) / "empty")
+        self.assertNotIn("head", json.loads((other / "store.json").read_text("utf-8")))
+        r = claims.verify_claim(Store(other), RP, 7, MERGE)
+        self.assertEqual(r["status"], "unknown")
+
+    def test_f3_direct_store_append_forgery_is_not_verified(self):
+        self.forge(pr=9, merge=OTHER, actor="someone", source=None)
+        r = self.v(OTHER, pr=9)
+        self.assertEqual(r["status"], "unknown")
+        self.assertIn("unrecognised merge event", r["reason"])
+        self.assertIn("seq", r["reason"])
+
+    def test_f3_merge_kind_with_other_actor_is_not_verified(self):
+        self.forge(pr=9, merge=OTHER, actor="migrate", source="gh")
+        self.assertEqual(self.v(OTHER, pr=9)["status"], "unknown")
+
+    def test_f3_merge_kind_with_other_source_is_not_verified(self):
+        self.forge(pr=9, merge=OTHER, actor="record-merge", source="v1")
+        self.assertEqual(self.v(OTHER, pr=9)["status"], "unknown")
+
+    def test_f3_unrecognised_event_poisons_a_recorded_pr(self):
+        self.forge(pr=7, merge=OTHER, actor="someone", source=None)
+        for claim in (MERGE, OTHER):
+            self.assertEqual(self.v(claim)["status"], "unknown", claim)
+
+    def test_f3_unrelated_pr_unaffected_by_forgery_elsewhere(self):
+        self.forge(pr=9, merge=OTHER, actor="someone", source=None)
+        self.assertEqual(self.v(MERGE)["status"], "verified")
 
     def test_verified_by_prefix_of_seven(self):
         self.assertEqual(self.v(MERGE[:7])["status"], "verified")
