@@ -48,7 +48,7 @@ Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z",
 - `seq`: Monotonically increasing (starts 1); detects truncation.
 - `prev_hash`: SHA-256 of prior line (no newline); first entry = `"GENESIS"`. Detects tampering.
 - All string values must be JSON-escaped (backslash → `\\`, quote → `\"`, control chars → `\uXXXX`).
-- Concurrent writes protected by atomic directory lock (`.audit-log-lock/`, 300s stale recovery); tail-hash sidecar (`state/.audit-tail-hash`) anchors against truncation. A busy lock NEVER drops a record: the record spills to `state/audit-spill-<pid>-<ts>.jsonl`, and the next lock holder merges spills in ts-then-pid order before verifying the sidecar.
+- Concurrent writes protected by one critical section (read tail, compute, append) under an atomic directory lock (`.audit-log-lock/`, owner pid recorded as `BASHPID`). The lock is removed only by its owner's release; there is no age-based or pid-based reclaim (an mv-based reclaim raced a live release and forked the chain, 2026-11-14). A writer waits up to `AUDIT_LOCK_DEADLINE_SECS` (60s, polling every 0.05s), then FAILS with exit 1 and never writes unlocked; a lock left by a crashed writer is reported with its owner pid and must be removed by hand. Tail-hash sidecar (`state/.audit-tail-hash`) anchors against truncation. A record that hits the deadline is NOT chained: it spills to `state/audit-spill-<pid>-<ts>.jsonl` (never dropped), the write returns 1, and the next lock holder merges spills in ts-then-pid order before verifying the sidecar.
 
 **Installation**:
 - Symlink (Unix/macOS/Git Bash): `ln -s ../../hooks/pre-push-policy.sh .git/hooks/pre-push && chmod +x .git/hooks/pre-push`

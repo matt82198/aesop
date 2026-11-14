@@ -84,6 +84,57 @@ make_clone_with_base() {
 
 # ===== NEW TESTS FOR 6 FINDINGS =====
 
+printf '\n=== Finding 1b: 8 concurrent writers x 5 rounds (chain verifies, no lost entries) ===\n'
+(
+  stress_base="$TEST_ROOT/aesop_race_stress"
+  stress_writers=8
+  stress_rounds=5
+  for ((round = 1; round <= stress_rounds; round++)); do
+    root="$stress_base/round_$round"
+    mkdir -p "$root/state"
+    pids=()
+    for ((w = 1; w <= stress_writers; w++)); do
+      (
+        # Run outside any git checkout so resolve_aesop_root honors AESOP_ROOT.
+        cd "$stress_base" || exit 1
+        export AESOP_ROOT="$root"
+        log_block "stress_r${round}_w${w}" || exit 1
+      ) >/dev/null 2>&1 &
+      pids+=("$!")
+    done
+    stress_ok=1
+    for p in "${pids[@]}"; do
+      wait "$p" || stress_ok=0
+    done
+    if [ "$stress_ok" -ne 1 ]; then
+      printf 'FAIL: round %s: a concurrent log_block call returned non-zero\n' "$round"
+      exit 1
+    fi
+
+    log_file="$root/state/SECURITY-AUDIT.log"
+    if [ ! -f "$log_file" ]; then
+      printf 'FAIL: round %s: audit log missing\n' "$round"
+      exit 1
+    fi
+    entries=$(wc -l < "$log_file" | tr -d ' ')
+    if [ "$entries" -ne "$stress_writers" ]; then
+      printf 'FAIL: round %s: %s entries written, expected %s (lost or duplicated entries)\n' \
+        "$round" "$entries" "$stress_writers"
+      exit 1
+    fi
+    if ! (cd "$stress_base" && export AESOP_ROOT="$root" && verify_audit_log "$log_file") >/dev/null 2>&1; then
+      printf 'FAIL: round %s: hash chain broken after %s concurrent writes\n' "$round" "$stress_writers"
+      exit 1
+    fi
+  done
+  printf 'PASS: 8 concurrent writers x %s rounds keep the hash chain and lose no entries\n' "$stress_rounds"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_race"
