@@ -84,6 +84,20 @@ make_clone_with_base() {
 
 # ===== NEW TESTS FOR 6 FINDINGS =====
 
+# audit_failure_diag <root> <log_file>: on an audit-chain FAIL, print WHY (verify's own
+# output, line count, log tail, state dir listing) so CI shows the mechanism.
+audit_failure_diag() {
+  local diag_root="$1" diag_log="$2"
+  printf -- '--- diag: verify_audit_log output (rerun) ---\n'
+  (cd "$TEST_ROOT" && export AESOP_ROOT="$diag_root" && verify_audit_log "$diag_log") 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: line count: %s ---\n' "$(wc -l < "$diag_log" 2>/dev/null | tr -d ' ')"
+  printf -- '--- diag: last 12 log lines ---\n'
+  tail -n 12 "$diag_log" 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: state dir listing ---\n'
+  ls -la "$diag_root/state" 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: python: %s / sha256sum: %s ---\n' "$(command -v python3 || command -v python)" "$(command -v sha256sum)"
+}
+
 printf '\n=== Finding 1b: 8 concurrent writers x 5 rounds (chain verifies, no lost entries) ===\n'
 (
   stress_base="$TEST_ROOT/aesop_race_stress"
@@ -124,6 +138,7 @@ printf '\n=== Finding 1b: 8 concurrent writers x 5 rounds (chain verifies, no lo
     fi
     if ! (cd "$stress_base" && export AESOP_ROOT="$root" && verify_audit_log "$log_file") >/dev/null 2>&1; then
       printf 'FAIL: round %s: hash chain broken after %s concurrent writes\n' "$round" "$stress_writers"
+      audit_failure_diag "$root" "$log_file"
       exit 1
     fi
   done
@@ -153,6 +168,7 @@ printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
     printf 'PASS: Concurrent log_block calls do not break hash chain\n'
   else
     printf 'FAIL: Hash chain broken after concurrent writes\n'
+    audit_failure_diag "$AESOP_ROOT" "$AESOP_ROOT/state/SECURITY-AUDIT.log"
     exit 1
   fi
 )
