@@ -85,6 +85,7 @@ def _write_store_files(worktree: Path, project: str) -> None:
         json.dumps({"project": project, "schema": 2}) + "\n", encoding="utf-8", newline="\n"
     )
     (worktree / ".gitattributes").write_text("*.jsonl -text\n", encoding="utf-8", newline="\n")
+    (worktree / ".gitignore").write_text(".append.lock\n", encoding="utf-8", newline="\n")
     for directory in ("events", "runs"):
         (worktree / directory).mkdir(exist_ok=True)
         (worktree / directory / ".gitkeep").write_bytes(b"")
