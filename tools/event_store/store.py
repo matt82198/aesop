@@ -135,10 +135,13 @@ class Store:
         v2 = self.schema == 2
         prev_line = None
         last_seq = 0
+        prev_file_ts = None  # v1: last ts of the previous day file
         for f in self.day_files():
             if not v2:
                 prev_line = None  # v1: chain restarts each day file
                 file_seq = 0  # v1: seq restarts at 1 in each day file
+                file_ts = None  # v1: last ts seen in this day file
+                first_ts = None  # v1: first ts in this day file
             for n, raw in enumerate(self._lines(f), 1):
                 where = "%s:%d" % (f.name, n)
                 try:
@@ -167,7 +170,27 @@ class Store:
                 if isinstance(seq, int):
                     last_seq = seq
                     file_seq = seq
+                if not v2:
+                    # v1 prev and seq restart per file, so these checks bind the file to
+                    # its own date and to its neighbours. A whole missing day file is still
+                    # not detectable from v1 data (see the known-limit test).
+                    ts = ev.get("ts")
+                    if not isinstance(ts, str) or ts[:10] != f.stem:
+                        problems.append("%s: ts %r is not on the file's date %s"
+                                        % (where, ts, f.stem))
+                    else:
+                        if file_ts is not None and ts < file_ts:
+                            problems.append("%s: ts %r earlier than the line before it"
+                                            % (where, ts))
+                        if first_ts is None:
+                            first_ts = ts
+                            if prev_file_ts is not None and ts < prev_file_ts:
+                                problems.append("%s: ts %r earlier than the previous day "
+                                                "file's last ts" % (where, ts))
+                        file_ts = ts
                 prev_line = raw
+            if not v2 and file_ts is not None:
+                prev_file_ts = file_ts
         head = self._meta.get("head") if v2 else None
         if head is not None:
             # The chain proves each line against its predecessor, not the final line's own
