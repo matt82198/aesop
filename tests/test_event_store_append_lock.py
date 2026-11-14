@@ -137,15 +137,16 @@ class LockBehaviourTest(unittest.TestCase):
         self.assertEqual(Store(self.root).verify(), [])
 
     def test_crash_between_line_append_and_head_is_reported_then_repaired(self):
+        Store(self.root).append("k", "a", "first")
         with mock.patch.object(Store, "_write_head", side_effect=RuntimeError("crash")):
             with self.assertRaises(RuntimeError):
-                Store(self.root).append("k", "a", "first")
-        self.assertEqual(len(event_lines(self.root)), 1)
+                Store(self.root).append("k", "a", "second")
+        self.assertEqual(len(event_lines(self.root)), 2)
         problems = Store(self.root).verify()
         self.assertTrue(any("head does not match" in p for p in problems), problems)
-        Store(self.root).append("k", "a", "second")
+        Store(self.root).append("k", "a", "third")
         self.assertEqual(Store(self.root).verify(), [])
-        self.assertEqual(len(event_lines(self.root)), 2)
+        self.assertEqual(len(event_lines(self.root)), 3)
 
 
 if __name__ == "__main__":
