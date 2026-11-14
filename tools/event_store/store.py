@@ -12,23 +12,21 @@ import hashlib
 import json
 import os
 import re
-import socket
 import time
-import uuid
 from pathlib import Path
 
 DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
 V2_KEYS = ("v", "ts", "seq", "kind", "actor", "session", "text", "refs", "prev")
 
-# Append lock: a lock file in the store root, created with O_EXCL. An append holds it for
-# tens of milliseconds on Windows. A lock whose owner is provably gone (same host, pid not
-# alive) is broken at once; any lock older than STALE_LOCK_SECONDS is broken whatever its
-# owner, because no append legitimately holds it that long. The wait limit is 60s: eight
+# Append lock: an OS advisory lock on an open handle of a sidecar file in the store root
+# (msvcrt.locking on Windows, fcntl.flock elsewhere). The file is never deleted or replaced
+# and its content is never read: the operating system drops the lock when the holder
+# exits or crashes, and a live holder is never judged stale. Local disks only; network
+# filesystems do not give these locks reliable semantics. The wait limit is 60s: eight
 # processes appending 50 events each serialize to about 14s on Windows (15 ms timer
 # granularity bounds each handoff), so a shorter limit times out healthy waiters.
 LOCK_NAME = ".append.lock"
 LOCK_TIMEOUT_SECONDS = 60.0
-STALE_LOCK_SECONDS = 60.0
 LOCK_POLL_SECONDS = 0.01
 
 
@@ -45,144 +43,59 @@ def encode_event(event):
                       separators=(",", ":")).encode("utf-8")
 
 
-def _pid_alive(pid):
-    """True unless the pid is provably gone. Unknown answers count as alive (fail closed)."""
+def _try_lock(fd):
+    """Take the OS lock on the open handle without blocking. True when held."""
     if os.name == "nt":
-        import ctypes
-        query_limited = 0x1000
-        still_active = 259
-        error_invalid_parameter = 87
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(query_limited, False, pid)
-        if not handle:
-            return ctypes.GetLastError() != error_invalid_parameter
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
         try:
-            code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return True
-            return code.value == still_active
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
         return True
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
     return True
 
 
-def _break_if_stale(lock):
-    """Break the lock only if its owner is provably gone or it is older than the limit.
-
-    Returns True when the caller should retry acquiring at once (lock already gone or
-    broken), False when the lock is live and must be waited on.
-    """
-    try:
-        raw = lock.read_bytes()
-        age = time.time() - lock.stat().st_mtime
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    try:
-        record = json.loads(raw.decode("utf-8"))
-    except ValueError:
-        record = None
-    if record is None:
-        stale = age > STALE_LOCK_SECONDS
+def _unlock(fd):
+    """Drop the OS lock; closing the handle drops it anyway."""
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
     else:
-        owner_gone = (record.get("host") == socket.gethostname()
-                      and not _pid_alive(int(record.get("pid", 0))))
-        stale = owner_gone or age > STALE_LOCK_SECONDS
-    if not stale:
-        return False
-    # Move the lock aside first, then check what was moved. If it is not the stale record
-    # we decided on (a fresh owner replaced it in the gap), put it back and do not break.
-    parked = lock.with_name("%s.broken-%s" % (lock.name, uuid.uuid4().hex))
-    try:
-        os.replace(lock, parked)
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    try:
-        moved = parked.read_bytes()
-    except OSError:
-        moved = None
-    if moved == raw:
-        try:
-            parked.unlink()
-        except OSError:
-            pass
-        return True
-    try:
-        os.link(parked, lock)
-        parked.unlink()
-    except OSError:
-        pass
-    return False
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
 def _append_lock(store_root):
     """Exclusive lock over the store's read-tail / append / head-update section.
 
-    Waits up to LOCK_TIMEOUT_SECONDS, then raises StoreError: an append never proceeds
-    unlocked and never silently skips. The lock is released on any exit, including an
-    exception, and only if this call still owns it (matched by a per-acquire token).
+    Retries until LOCK_TIMEOUT_SECONDS, then raises StoreError having written nothing: an
+    append never proceeds unlocked. Released on any exit, including an exception or
+    KeyboardInterrupt; a crashed holder releases at process exit.
     """
     lock = Path(store_root) / LOCK_NAME
-    token = "%d:%s" % (os.getpid(), uuid.uuid4().hex)
     deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
-    while True:
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except (FileExistsError, PermissionError) as exc:
-            # On Windows a lock whose delete is pending (another process still has it
-            # open) fails the create with PermissionError rather than FileExistsError:
-            # both mean busy. A persistent failure ends in the timeout, with the OSError.
-            if _break_if_stale(lock):
-                continue
-            if time.monotonic() >= deadline:
-                raise StoreError("timed out after %.1fs waiting for append lock %s (%s)"
-                                 % (LOCK_TIMEOUT_SECONDS, lock, exc))
-            time.sleep(LOCK_POLL_SECONDS)  # sleep-ok: lock poll, bounded by the deadline
-            continue
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps({"pid": os.getpid(), "host": socket.gethostname(),
-                                     "ts": time.time(), "token": token}))
-        except BaseException:
-            with contextlib.suppress(OSError):
-                lock.unlink()
-            raise
-        break
+    fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
     try:
-        yield
-    finally:
-        _release_lock(lock, token)
-
-
-def _release_lock(lock, token):
-    """Remove the lock if this acquire still owns it.
-
-    On Windows a delete fails while another process has the file open (a waiter reading
-    the record), so the delete is retried briefly instead of being dropped: a dropped
-    release would leave a live-looking lock that blocks every other append.
-    """
-    for _ in range(200):
+        while not _try_lock(fd):
+            if time.monotonic() >= deadline:
+                raise StoreError("timed out after %.1fs waiting for append lock %s"
+                                 % (LOCK_TIMEOUT_SECONDS, lock))
+            time.sleep(LOCK_POLL_SECONDS)  # sleep-ok: lock poll, bounded by the deadline
         try:
-            if json.loads(lock.read_text(encoding="utf-8")).get("token") != token:
-                return
-            lock.unlink()
-            return
-        except FileNotFoundError:
-            return
-        except (OSError, ValueError):
-            time.sleep(0.01)  # sleep-ok: retry a sharing violation on release, bounded
-    # Still held after ~2s: leave it. Its pid is ours and alive, so waiters will time out
-    # with a clear error rather than steal it; the next run breaks it as stale.
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 class Store:

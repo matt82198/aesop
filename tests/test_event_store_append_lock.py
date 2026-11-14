@@ -2,10 +2,10 @@
 
 The race test runs N separate OS processes that append to one store at the same time.
 Without the lock two processes read the same tail and write the same seq and prev.
+The lock is an OS advisory lock on a sidecar file: a crashed holder frees it at exit and
+nothing ever judges a live holder stale.
 """
 import json
-import os
-import socket
 import subprocess
 import sys
 import tempfile
@@ -43,10 +43,27 @@ def event_lines(root):
     return out
 
 
-def dead_pid():
-    proc = subprocess.Popen([sys.executable, "-c", "pass"], cwd=str(REPO))
-    proc.wait(timeout=60)
-    return proc.pid
+def snapshot(root):
+    """Bytes of every event file plus store.json."""
+    snap = {"store.json": (Path(root) / "store.json").read_bytes()}
+    for f in sorted((Path(root) / "events").glob("*.jsonl")):
+        snap[f.name] = f.read_bytes()
+    return snap
+
+
+def start_holder(root, seconds, flag_path=""):
+    """Start a process that holds the append lock; returns it once it reports READY."""
+    cmd = [sys.executable, str(WORKER), "hold", str(root), repr(seconds)]
+    if flag_path:
+        cmd.append(str(flag_path))
+    proc = subprocess.Popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    line = proc.stdout.readline().decode("utf-8", "replace").strip()
+    if line != "READY":
+        proc.kill()
+        proc.communicate()
+        raise AssertionError("holder did not take the lock: %r" % line)
+    return proc
 
 
 class RaceTest(unittest.TestCase):
@@ -86,54 +103,84 @@ class LockBehaviourTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def write_lock(self, pid, age_seconds=0.0):
-        lock = self.root / LOCK
-        record = {"pid": pid, "host": socket.gethostname(), "ts": time.time() - age_seconds,
-                  "token": "x"}
-        lock.write_text(json.dumps(record), encoding="utf-8")
-        if age_seconds:
-            old = time.time() - age_seconds
-            os.utime(lock, (old, old))
-        return lock
-
-    def test_timeout_raises_and_leaves_live_lock_alone(self):
-        lock = self.write_lock(os.getpid())
-        before = lock.read_bytes()
-        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 0.3, create=True):
-            with self.assertRaises(StoreError) as cm:
-                Store(self.root).append("k", "a", "t")
-        self.assertIn("timed out", str(cm.exception))
-        self.assertTrue(lock.exists())
-        self.assertEqual(lock.read_bytes(), before)
-        self.assertEqual(event_lines(self.root), [])
-
-    def test_stale_lock_from_dead_pid_is_recovered(self):
-        pid = dead_pid()
-        lock = self.write_lock(pid)
-        Store(self.root).append("k", "a", "t")
-        self.assertFalse(lock.exists())
+    def test_slow_live_holder_is_never_robbed(self):
+        # A holder stays in the section past any age a waiter could use to judge it stale
+        # (the age limit is shrunk to 0.5 s here; the waiter must still wait it out).
+        Store(self.root).append("k", "a", "first")
+        flag = Path(self.tmp.name) / "left.flag"
+        holder = start_holder(self.root, 3.0, flag)
+        try:
+            with mock.patch.object(store_mod, "STALE_LOCK_SECONDS", 0.5, create=True), \
+                    mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 30.0):
+                Store(self.root).append("k", "a", "second")
+            self.assertTrue(flag.exists(), "waiter appended while the holder was inside")
+        finally:
+            holder.communicate(timeout=60)
+        self.assertEqual(holder.returncode, 0)
+        seqs = [json.loads(x.decode("utf-8"))["seq"] for x in event_lines(self.root)]
+        self.assertEqual(seqs, [1, 2])
         self.assertEqual(Store(self.root).verify(), [])
 
-    def test_live_fresh_lock_is_not_stolen(self):
-        lock = self.write_lock(os.getpid())
-        before = lock.read_bytes()
-        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 0.3, create=True):
-            with self.assertRaises(StoreError):
-                Store(self.root).append("k", "a", "t")
-        self.assertEqual(lock.read_bytes(), before)
+    def test_dead_holder_frees_lock_promptly(self):
+        Store(self.root).append("k", "a", "first")
+        holder = start_holder(self.root, 600.0)
+        holder.kill()
+        holder.communicate(timeout=60)
+        started = time.monotonic()
+        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 30.0):
+            Store(self.root).append("k", "a", "second")
+        self.assertLess(time.monotonic() - started, 10.0)
+        self.assertEqual(len(event_lines(self.root)), 2)
+        self.assertEqual(Store(self.root).verify(), [])
 
-    def test_lock_older_than_limit_is_recovered_even_if_pid_alive(self):
-        self.write_lock(os.getpid(), age_seconds=600.0)
-        Store(self.root).append("k", "a", "t")
-        self.assertFalse((self.root / LOCK).exists())
+    def test_garbage_in_lock_file_does_not_block_or_crash(self):
+        garbage = [b"", b'{"pid": 12', b"5", b"\xff\xfe\x00\x01\x80binary", b"[]", b"null"]
+        for i, content in enumerate(garbage):
+            with self.subTest(content=content):
+                (self.root / LOCK).write_bytes(content)
+                with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 3.0):
+                    Store(self.root).append("k", "a", "g%d" % i)
+        self.assertEqual(len(event_lines(self.root)), len(garbage))
+        self.assertEqual(Store(self.root).verify(), [])
+
+    def test_timeout_raises_and_writes_nothing(self):
+        Store(self.root).append("k", "a", "first")
+        before = snapshot(self.root)
+        holder = start_holder(self.root, 5.0)
+        try:
+            started = time.monotonic()
+            with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 0.5):
+                with self.assertRaises(StoreError) as cm:
+                    Store(self.root).append("k", "a", "blocked")
+            self.assertLess(time.monotonic() - started, 4.0)
+            self.assertIn("timed out", str(cm.exception))
+            self.assertEqual(snapshot(self.root), before)
+        finally:
+            holder.kill()
+            holder.communicate(timeout=60)
 
     def test_lock_released_when_append_raises(self):
         with mock.patch.object(Store, "_write_head", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 Store(self.root).append("k", "a", "t")
-        self.assertFalse((self.root / LOCK).exists())
-        Store(self.root).append("k", "a", "t")
-        self.assertEqual(Store(self.root).verify(), [])
+        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 3.0):
+            Store(self.root).append("k", "a", "t")
+        self.assertEqual(len(event_lines(self.root)), 2)
+
+    def test_lock_released_on_keyboard_interrupt(self):
+        with mock.patch.object(Store, "_write_head", side_effect=KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                Store(self.root).append("k", "a", "t")
+        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 3.0):
+            Store(self.root).append("k", "a", "t")
+        self.assertEqual(len(event_lines(self.root)), 2)
+
+    def test_lock_released_after_plain_section_exit(self):
+        with store_mod._append_lock(self.root):
+            pass
+        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 3.0):
+            with store_mod._append_lock(self.root):
+                pass
 
     def test_crash_between_line_append_and_head_is_reported_then_repaired(self):
         Store(self.root).append("k", "a", "first")
