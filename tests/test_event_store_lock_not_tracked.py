@@ -82,6 +82,26 @@ class LockNotTracked(unittest.TestCase):
         self.assertEqual(len(Store(self.root).load()), 2)
         self.assertEqual(Store(self.root).verify(), [])
 
+    def test_r6_ignore_layer_alone_keeps_lock_untracked(self):
+        # Layer (b) on its own: a store made by init's file writer, committed with a
+        # plain `git add -A` (no pathspec), must not track the lock.
+        from event_store import init as init_mod  # noqa: PLC0415
+        root = Path(self.tmp.name) / "initstore"
+        root.mkdir()
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "lock@example.invalid"],
+                       check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "lock"], check=True)
+        init_mod._write_store_files(root, "lockcheck")
+        Store(root).append("note", "tester", "r6", ts=TS_BASE % 1)
+        self.assertTrue((root / LOCK_NAME).exists())
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "r6"], check=True)
+        tracked = set(subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True,
+                                     encoding="utf-8", check=True).stdout.splitlines())
+        self.assertNotIn(LOCK_NAME, tracked)
+        self.assertIn("store.json", tracked)
+
     def test_r5_nothing_to_commit_keeps_existing_return_value(self):
         # Pins the pre-existing empty-commit behaviour: with nothing new on disk,
         # git_commit makes no commit and returns False (git commit rc=1). The fix must
