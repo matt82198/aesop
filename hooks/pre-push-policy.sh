@@ -417,9 +417,39 @@ audit_trace() {
   printf '%s bashpid=%s %s\n' "${EPOCHREALTIME:-0}" "$BASHPID" "$*" >> "$AUDIT_TRACE_FILE" 2>/dev/null || true
 }
 
+# Set once this process has waited out the full deadline; later acquires fail at once
+# instead of each waiting another 60s. A fresh process starts at 0 and tries normally.
+AUDIT_LOCK_UNAVAILABLE=0
+
+audit_report_lock_wedge() {
+  # Loud, text-only report for a lock that was not acquired. It never removes or
+  # reclaims the lock: a live release races any automatic removal (2026-11-14).
+  local lock_dir="$1" owner state_note age_note mtime now
+  owner=$(audit_lock_owner "$lock_dir")
+  if [ -z "$owner" ]; then
+    state_note="owner pid absent (a writer was likely killed before recording it)"
+  elif kill -0 "$owner" 2>/dev/null; then
+    state_note="owner pid $owner is running"
+  else
+    state_note="owner pid $owner is not running"
+  fi
+  mtime=$(stat -c %Y -- "$lock_dir" 2>/dev/null || stat -f %m -- "$lock_dir" 2>/dev/null || true)
+  now=$(date +%s)
+  if [ -n "$mtime" ] && [ "$mtime" -eq "$mtime" ] 2>/dev/null; then
+    age_note=$(( now - mtime ))
+    [ "$age_note" -ge 0 ] || age_note=0
+  else
+    age_note=0
+  fi
+  printf 'ERROR: audit lock %s not acquired within %ss (owner pid: %s; %s; lock dir age: %ss)\n' \
+    "$lock_dir" "$AUDIT_LOCK_DEADLINE_SECS" "${owner:-none}" "$state_note" "$age_note" >&2
+  printf 'ERROR: if no push is running, remove the lock directory by hand: rm -rf -- %s (it is never removed automatically)\n' \
+    "$lock_dir" >&2
+}
+
 acquire_audit_lock() {
   # Returns 0 with the lock held, or 1 once the deadline has passed (never unlocked).
-  local lock_dir="$1" owner deadline me
+  local lock_dir="$1" deadline me
   deadline=$(( $(date +%s) + AUDIT_LOCK_DEADLINE_SECS ))
 
   while :; do
@@ -444,10 +474,16 @@ acquire_audit_lock() {
       fi
     fi
 
+    if [ "$AUDIT_LOCK_UNAVAILABLE" -eq 1 ]; then
+      # A previous acquire in this process waited out the deadline. One try per call
+      # (so a lock released meanwhile is still taken), but never another 60s wait.
+      printf 'ERROR: audit lock %s still not acquirable (an earlier acquire in this process timed out); not waiting again\n' "$lock_dir" >&2
+      return 1
+    fi
+
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      owner=$(audit_lock_owner "$lock_dir")
-      printf 'ERROR: audit lock %s not acquired within %ss (owner pid: %s)\n' \
-        "$lock_dir" "$AUDIT_LOCK_DEADLINE_SECS" "${owner:-none}" >&2
+      AUDIT_LOCK_UNAVAILABLE=1
+      audit_report_lock_wedge "$lock_dir"
       return 1
     fi
     sleep "$AUDIT_LOCK_POLL_SECS"

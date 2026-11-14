@@ -191,6 +191,69 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Finding 1d: wedged lock fails fast after the first deadline, spills, and says how to recover ===\n'
+(
+  # A writer killed between mkdir and the pid create leaves an empty lock dir that
+  # nothing reclaims (no-reclaim design). Time is faked (date +%s reads T, sleep
+  # advances T by 30 and counts) so the 60s deadline passes in milliseconds without
+  # any production knob. The second write in the same process must not wait again.
+  wd_root="$TEST_ROOT/aesop_wedge"
+  wd_state="$wd_root/state"
+  wd_lock="$wd_state/.audit-log-lock"
+  command mkdir -p "$wd_lock"
+  AUDIT_LOCK_UNAVAILABLE=0
+  AUDIT_SPILL_FILE=""
+  FAKE_T=$(command date +%s)
+  FAKE_SLEEPS=0
+  date() {
+    if [ "${1:-}" = "+%s" ]; then printf '%s\n' "$FAKE_T"; return 0; fi
+    command date "$@"
+  }
+  sleep() { FAKE_SLEEPS=$((FAKE_SLEEPS + 1)); FAKE_T=$((FAKE_T + 30)); }
+  export AESOP_ROOT="$wd_root"
+  audit_write_locked "$wd_state" '"event":"first"' "$wd_lock" 2> "$wd_root/first.err"
+  first_rc=$?
+  sleeps_after_first=$FAKE_SLEEPS
+  audit_write_locked "$wd_state" '"event":"second"' "$wd_lock" 2> "$wd_root/second.err"
+  second_rc=$?
+  ok=1
+  if [ "$first_rc" -ne 1 ] || [ "$second_rc" -ne 1 ]; then
+    printf 'FAIL: expected rc 1 and 1, got %s and %s\n' "$first_rc" "$second_rc"
+    ok=0
+  fi
+  if [ "$FAKE_SLEEPS" -ne "$sleeps_after_first" ]; then
+    printf 'FAIL: the second acquire in the same process waited again (%s extra sleeps)\n' "$((FAKE_SLEEPS - sleeps_after_first))"
+    ok=0
+  fi
+  if [ "$(cat "$AUDIT_SPILL_FILE" 2>/dev/null | wc -l | tr -d ' ')" != "2" ]; then
+    printf 'FAIL: expected both records in the spill file, got: %s\n' "$(cat "$AUDIT_SPILL_FILE" 2>/dev/null)"
+    ok=0
+  fi
+  if ! grep -Eq 'lock dir age: [0-9]+s' "$wd_root/first.err"; then
+    printf 'FAIL: acquire error lacks the lock dir age: %s\n' "$(cat "$wd_root/first.err")"
+    ok=0
+  fi
+  if ! grep -q 'owner pid absent' "$wd_root/first.err"; then
+    printf 'FAIL: acquire error does not say the owner pid is absent: %s\n' "$(cat "$wd_root/first.err")"
+    ok=0
+  fi
+  if ! grep -q 'remove the lock directory' "$wd_root/first.err"; then
+    printf 'FAIL: acquire error lacks the manual recovery step: %s\n' "$(cat "$wd_root/first.err")"
+    ok=0
+  fi
+  if [ ! -d "$wd_lock" ]; then
+    printf 'FAIL: the wedged lock dir was removed automatically\n'
+    ok=0
+  fi
+  [ "$ok" -eq 1 ] || exit 1
+  printf 'PASS: wedged lock fails fast on the second write, spills both, names age and manual step\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_race"
