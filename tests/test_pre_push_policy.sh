@@ -153,6 +153,44 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Finding 1c: lock stays exclusive when mkdir is NOT exclusive (CI run 43636610785) ===\n'
+(
+  # On the Linux CI runner two writers both got mkdir success for one lock directory.
+  # Model it: another writer already holds the lock (pid file present) and mkdir
+  # reports success anyway. Acquire must NOT take the lock over: it keeps waiting and
+  # leaves the other writer's pid untouched. The old code overwrote the pid file and
+  # returned 0 at once.
+  nx_root="$TEST_ROOT/aesop_race_nonexcl"
+  nx_lock="$nx_root/state/.audit-log-lock"
+  command mkdir -p "$nx_lock"
+  printf '99999999\n' > "$nx_lock/pid"
+  mkdir() {
+    case "${*: -1}" in
+      *.audit-log-lock) command mkdir -p -- "${*: -1}"; return 0 ;;
+    esac
+    command mkdir "$@"
+  }
+  ( export AESOP_ROOT="$nx_root"; acquire_audit_lock "$nx_lock"; printf '%s\n' "$?" > "$nx_root/acquire-rc" ) >/dev/null 2>&1 &
+  nx_pid=$!
+  sleep 2
+  kill "$nx_pid" 2>/dev/null
+  wait "$nx_pid" 2>/dev/null
+  if [ -e "$nx_root/acquire-rc" ]; then
+    printf 'FAIL: acquire returned rc=%s while another writer held the pid claim\n' "$(cat "$nx_root/acquire-rc")"
+    exit 1
+  fi
+  if [ "$(head -n 1 "$nx_lock/pid")" != "99999999" ]; then
+    printf 'FAIL: the other writer pid claim was overwritten\n'
+    exit 1
+  fi
+  printf 'PASS: a writer that wins mkdir but loses the pid claim keeps waiting\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_race"

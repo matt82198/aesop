@@ -419,20 +419,29 @@ audit_trace() {
 
 acquire_audit_lock() {
   # Returns 0 with the lock held, or 1 once the deadline has passed (never unlocked).
-  local lock_dir="$1" owner deadline
+  local lock_dir="$1" owner deadline me
   deadline=$(( $(date +%s) + AUDIT_LOCK_DEADLINE_SECS ))
 
   while :; do
     audit_trace "mkdir-try $lock_dir"
     if mkdir -- "$lock_dir" 2>/dev/null; then
       audit_trace "mkdir-ok"
-      if printf '%s\n' "$BASHPID" > "$lock_dir/pid" 2>/dev/null; then
+      # mkdir alone is not proof of ownership: CI run 43636610785 showed two writers
+      # both get mkdir success for one directory in the same microsecond. Ownership is
+      # decided by an O_EXCL create of the pid file (noclobber), which exactly one
+      # writer can win; the loser keeps waiting and never touches the directory.
+      me="$BASHPID"
+      if (set -C; printf '%s\n' "$me" > "$lock_dir/pid") 2>/dev/null; then
         audit_trace "pid-written"
         return 0
       fi
-      # Ownership could not be recorded, so the lock is not provably ours: give it back.
-      rm -rf -- "$lock_dir" 2>/dev/null
-      return 1
+      if [ -e "$lock_dir/pid" ]; then
+        audit_trace "claim-lost"
+      else
+        # Ownership could not be recorded and nobody else holds it: give back the empty dir.
+        rmdir -- "$lock_dir" 2>/dev/null
+        return 1
+      fi
     fi
 
     if [ "$(date +%s)" -ge "$deadline" ]; then
