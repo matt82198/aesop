@@ -7,6 +7,7 @@ and seq counts store-wide. The first event has prev "".
 Schema 1 (frozen stores written by conductor3): every day file restarts the chain at
 prev "". Verified under those rules only.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -16,6 +17,17 @@ from pathlib import Path
 
 DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
 V2_KEYS = ("v", "ts", "seq", "kind", "actor", "session", "text", "refs", "prev")
+
+# Append lock: an OS advisory lock on an open handle of a sidecar file in the store root
+# (msvcrt.locking on Windows, fcntl.flock elsewhere). The file is never deleted or replaced
+# and its content is never read: the operating system drops the lock when the holder
+# exits or crashes, and a live holder is never judged stale. Local disks only; network
+# filesystems do not give these locks reliable semantics. The wait limit is 60s: eight
+# processes appending 50 events each serialize to about 14s on Windows (15 ms timer
+# granularity bounds each handoff), so a shorter limit times out healthy waiters.
+LOCK_NAME = ".append.lock"
+LOCK_TIMEOUT_SECONDS = 60.0
+LOCK_POLL_SECONDS = 0.01
 
 
 class StoreError(Exception):
@@ -29,6 +41,61 @@ def line_sha(line_bytes):
 def encode_event(event):
     return json.dumps(event, sort_keys=True, ensure_ascii=False,
                       separators=(",", ":")).encode("utf-8")
+
+
+def _try_lock(fd):
+    """Take the OS lock on the open handle without blocking. True when held."""
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fd):
+    """Drop the OS lock; closing the handle drops it anyway."""
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _append_lock(store_root):
+    """Exclusive lock over the store's read-tail / append / head-update section.
+
+    Retries until LOCK_TIMEOUT_SECONDS, then raises StoreError having written nothing: an
+    append never proceeds unlocked. Released on any exit, including an exception or
+    KeyboardInterrupt; a crashed holder releases at process exit.
+    """
+    lock = Path(store_root) / LOCK_NAME
+    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+    fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
+    try:
+        while not _try_lock(fd):
+            if time.monotonic() >= deadline:
+                raise StoreError("timed out after %.1fs waiting for append lock %s"
+                                 % (LOCK_TIMEOUT_SECONDS, lock))
+            time.sleep(LOCK_POLL_SECONDS)  # sleep-ok: lock poll, bounded by the deadline
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 class Store:
@@ -100,19 +167,25 @@ class Store:
                              % (self.project, self.schema))
         ts = ts or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         day = ts[:10]
-        files = self.day_files()
-        if files and day < files[-1].stem:
-            raise StoreError("ts %s is older than latest day file %s" % (ts, files[-1].name))
-        last, seq = self._tail()
-        event = {"v": 2, "ts": ts, "seq": seq + 1, "kind": kind, "actor": actor,
-                 "session": session or "", "text": text, "refs": dict(refs or {}),
-                 "prev": line_sha(last) if last is not None else ""}
         self.events_dir.mkdir(parents=True, exist_ok=True)
-        target = self.events_dir / (day + ".jsonl")
-        encoded = encode_event(event)
-        with open(target, "ab") as fh:
-            fh.write(encoded + b"\n")
-        self._write_head(line_sha(encoded))
+        # The lock covers read-tail, line append and head update together, so two
+        # processes can never read the same tail and write the same seq and prev.
+        with _append_lock(self.path):
+            files = self.day_files()
+            if files and day < files[-1].stem:
+                raise StoreError("ts %s is older than latest day file %s"
+                                 % (ts, files[-1].name))
+            last, seq = self._tail()
+            event = {"v": 2, "ts": ts, "seq": seq + 1, "kind": kind, "actor": actor,
+                     "session": session or "", "text": text, "refs": dict(refs or {}),
+                     "prev": line_sha(last) if last is not None else ""}
+            target = self.events_dir / (day + ".jsonl")
+            encoded = encode_event(event)
+            # A crash after this line and before _write_head leaves store.json head stale:
+            # verify reports it, and the next locked append rewrites head, so it self-repairs.
+            with open(target, "ab") as fh:
+                fh.write(encoded + b"\n")
+            self._write_head(line_sha(encoded))
         return event
 
     def _write_head(self, head):
@@ -135,9 +208,13 @@ class Store:
         v2 = self.schema == 2
         prev_line = None
         last_seq = 0
+        prev_file_ts = None  # v1: last ts of the previous day file
         for f in self.day_files():
             if not v2:
                 prev_line = None  # v1: chain restarts each day file
+                file_seq = 0  # v1: seq restarts at 1 in each day file
+                file_ts = None  # v1: last ts seen in this day file
+                first_ts = None  # v1: first ts in this day file
             for n, raw in enumerate(self._lines(f), 1):
                 where = "%s:%d" % (f.name, n)
                 try:
@@ -156,11 +233,37 @@ class Store:
                         problems.append("%s: v is not 2" % where)
                     if seq != last_seq + 1:
                         problems.append("%s: seq %r, expected %d" % (where, seq, last_seq + 1))
-                elif not isinstance(seq, int) or seq <= last_seq:
-                    problems.append("%s: seq %r not increasing" % (where, seq))
+                elif not isinstance(seq, int) or seq != file_seq + 1 and not (
+                        n == 1 and seq == last_seq + 1):
+                    # v1 seq is the 1-based line number within its day file: no gap, no
+                    # duplicate, no reorder. A file's first line may also continue a
+                    # store-wide count (older v1 fixtures), so only the within-file run is
+                    # held to 1..n.
+                    problems.append("%s: seq %r, expected %d" % (where, seq, file_seq + 1))
                 if isinstance(seq, int):
                     last_seq = seq
+                    file_seq = seq
+                if not v2:
+                    # v1 prev and seq restart per file, so these checks bind the file to
+                    # its own date and to its neighbours. A whole missing day file is still
+                    # not detectable from v1 data (see the known-limit test).
+                    ts = ev.get("ts")
+                    if not isinstance(ts, str) or ts[:10] != f.stem:
+                        problems.append("%s: ts %r is not on the file's date %s"
+                                        % (where, ts, f.stem))
+                    else:
+                        if file_ts is not None and ts < file_ts:
+                            problems.append("%s: ts %r earlier than the line before it"
+                                            % (where, ts))
+                        if first_ts is None:
+                            first_ts = ts
+                            if prev_file_ts is not None and ts < prev_file_ts:
+                                problems.append("%s: ts %r earlier than the previous day "
+                                                "file's last ts" % (where, ts))
+                        file_ts = ts
                 prev_line = raw
+            if not v2 and file_ts is not None:
+                prev_file_ts = file_ts
         head = self._meta.get("head") if v2 else None
         if head is not None:
             # The chain proves each line against its predecessor, not the final line's own

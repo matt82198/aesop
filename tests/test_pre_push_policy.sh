@@ -84,10 +84,181 @@ make_clone_with_base() {
 
 # ===== NEW TESTS FOR 6 FINDINGS =====
 
+# audit_failure_diag <root> <log_file>: on an audit-chain FAIL, print WHY (verify's own
+# output, line count, log tail, state dir listing) so CI shows the mechanism.
+audit_failure_diag() {
+  local diag_root="$1" diag_log="$2"
+  printf -- '--- diag: verify_audit_log output (rerun) ---\n'
+  (cd "$TEST_ROOT" && export AESOP_ROOT="$diag_root" && verify_audit_log "$diag_log") 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: line count: %s ---\n' "$(wc -l < "$diag_log" 2>/dev/null | tr -d ' ')"
+  printf -- '--- diag: last 12 log lines ---\n'
+  tail -n 12 "$diag_log" 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: state dir listing ---\n'
+  ls -la "$diag_root/state" 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: lock trace (AUDIT_TRACE_FILE, first 120 lines) ---\n'
+  head -n 120 "$diag_root/audit-trace.txt" 2>&1 | sed 's/^/  | /'
+  printf -- '--- diag: python: %s / sha256sum: %s ---\n' "$(command -v python3 || command -v python)" "$(command -v sha256sum)"
+}
+
+printf '\n=== Finding 1b: 8 concurrent writers x 5 rounds (chain verifies, no lost entries) ===\n'
+(
+  stress_base="$TEST_ROOT/aesop_race_stress"
+  stress_writers=8
+  stress_rounds=5
+  for ((round = 1; round <= stress_rounds; round++)); do
+    root="$stress_base/round_$round"
+    mkdir -p "$root/state"
+    pids=()
+    for ((w = 1; w <= stress_writers; w++)); do
+      (
+        # Run outside any git checkout so resolve_aesop_root honors AESOP_ROOT.
+        cd "$stress_base" || exit 1
+        export AESOP_ROOT="$root"
+        export AUDIT_TRACE_FILE="$root/audit-trace.txt"
+        log_block "stress_r${round}_w${w}" || exit 1
+      ) >/dev/null 2>&1 &
+      pids+=("$!")
+    done
+    stress_ok=1
+    for p in "${pids[@]}"; do
+      wait "$p" || stress_ok=0
+    done
+    if [ "$stress_ok" -ne 1 ]; then
+      printf 'FAIL: round %s: a concurrent log_block call returned non-zero\n' "$round"
+      exit 1
+    fi
+
+    log_file="$root/state/SECURITY-AUDIT.log"
+    if [ ! -f "$log_file" ]; then
+      printf 'FAIL: round %s: audit log missing\n' "$round"
+      exit 1
+    fi
+    entries=$(wc -l < "$log_file" | tr -d ' ')
+    if [ "$entries" -ne "$stress_writers" ]; then
+      printf 'FAIL: round %s: %s entries written, expected %s (lost or duplicated entries)\n' \
+        "$round" "$entries" "$stress_writers"
+      exit 1
+    fi
+    if ! (cd "$stress_base" && export AESOP_ROOT="$root" && verify_audit_log "$log_file") >/dev/null 2>&1; then
+      printf 'FAIL: round %s: hash chain broken after %s concurrent writes\n' "$round" "$stress_writers"
+      audit_failure_diag "$root" "$log_file"
+      exit 1
+    fi
+  done
+  printf 'PASS: 8 concurrent writers x %s rounds keep the hash chain and lose no entries\n' "$stress_rounds"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Finding 1c: lock stays exclusive when mkdir is NOT exclusive (CI run 43636610785) ===\n'
+(
+  # On the Linux CI runner two writers both got mkdir success for one lock directory.
+  # Model it: another writer already holds the lock (pid file present) and mkdir
+  # reports success anyway. Acquire must NOT take the lock over: it keeps waiting and
+  # leaves the other writer's pid untouched. The old code overwrote the pid file and
+  # returned 0 at once.
+  nx_root="$TEST_ROOT/aesop_race_nonexcl"
+  nx_lock="$nx_root/state/.audit-log-lock"
+  command mkdir -p "$nx_lock"
+  printf '99999999\n' > "$nx_lock/pid"
+  mkdir() {
+    case "${*: -1}" in
+      *.audit-log-lock) command mkdir -p -- "${*: -1}"; return 0 ;;
+    esac
+    command mkdir "$@"
+  }
+  ( export AESOP_ROOT="$nx_root"; acquire_audit_lock "$nx_lock"; printf '%s\n' "$?" > "$nx_root/acquire-rc" ) >/dev/null 2>&1 &
+  nx_pid=$!
+  sleep 2
+  kill "$nx_pid" 2>/dev/null
+  wait "$nx_pid" 2>/dev/null
+  if [ -e "$nx_root/acquire-rc" ]; then
+    printf 'FAIL: acquire returned rc=%s while another writer held the pid claim\n' "$(cat "$nx_root/acquire-rc")"
+    exit 1
+  fi
+  if [ "$(head -n 1 "$nx_lock/pid")" != "99999999" ]; then
+    printf 'FAIL: the other writer pid claim was overwritten\n'
+    exit 1
+  fi
+  printf 'PASS: a writer that wins mkdir but loses the pid claim keeps waiting\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Finding 1d: wedged lock fails fast after the first deadline, spills, and says how to recover ===\n'
+(
+  # A writer killed between mkdir and the pid create leaves an empty lock dir that
+  # nothing reclaims (no-reclaim design). Time is faked (date +%s reads T, sleep
+  # advances T by 30 and counts) so the 60s deadline passes in milliseconds without
+  # any production knob. The second write in the same process must not wait again.
+  wd_root="$TEST_ROOT/aesop_wedge"
+  wd_state="$wd_root/state"
+  wd_lock="$wd_state/.audit-log-lock"
+  command mkdir -p "$wd_lock"
+  AUDIT_LOCK_UNAVAILABLE=0
+  AUDIT_SPILL_FILE=""
+  FAKE_T=$(command date +%s)
+  FAKE_SLEEPS=0
+  date() {
+    if [ "${1:-}" = "+%s" ]; then printf '%s\n' "$FAKE_T"; return 0; fi
+    command date "$@"
+  }
+  sleep() { FAKE_SLEEPS=$((FAKE_SLEEPS + 1)); FAKE_T=$((FAKE_T + 30)); }
+  export AESOP_ROOT="$wd_root"
+  audit_write_locked "$wd_state" '"event":"first"' "$wd_lock" 2> "$wd_root/first.err"
+  first_rc=$?
+  sleeps_after_first=$FAKE_SLEEPS
+  audit_write_locked "$wd_state" '"event":"second"' "$wd_lock" 2> "$wd_root/second.err"
+  second_rc=$?
+  ok=1
+  if [ "$first_rc" -ne 1 ] || [ "$second_rc" -ne 1 ]; then
+    printf 'FAIL: expected rc 1 and 1, got %s and %s\n' "$first_rc" "$second_rc"
+    ok=0
+  fi
+  if [ "$FAKE_SLEEPS" -ne "$sleeps_after_first" ]; then
+    printf 'FAIL: the second acquire in the same process waited again (%s extra sleeps)\n' "$((FAKE_SLEEPS - sleeps_after_first))"
+    ok=0
+  fi
+  if [ "$(cat "$AUDIT_SPILL_FILE" 2>/dev/null | wc -l | tr -d ' ')" != "2" ]; then
+    printf 'FAIL: expected both records in the spill file, got: %s\n' "$(cat "$AUDIT_SPILL_FILE" 2>/dev/null)"
+    ok=0
+  fi
+  if ! grep -Eq 'lock dir age: [0-9]+s' "$wd_root/first.err"; then
+    printf 'FAIL: acquire error lacks the lock dir age: %s\n' "$(cat "$wd_root/first.err")"
+    ok=0
+  fi
+  if ! grep -q 'owner pid absent' "$wd_root/first.err"; then
+    printf 'FAIL: acquire error does not say the owner pid is absent: %s\n' "$(cat "$wd_root/first.err")"
+    ok=0
+  fi
+  if ! grep -q 'remove the lock directory' "$wd_root/first.err"; then
+    printf 'FAIL: acquire error lacks the manual recovery step: %s\n' "$(cat "$wd_root/first.err")"
+    ok=0
+  fi
+  if [ ! -d "$wd_lock" ]; then
+    printf 'FAIL: the wedged lock dir was removed automatically\n'
+    ok=0
+  fi
+  [ "$ok" -eq 1 ] || exit 1
+  printf 'PASS: wedged lock fails fast on the second write, spills both, names age and manual step\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_race"
   mkdir -p "$AESOP_ROOT/state"
+  export AUDIT_TRACE_FILE="$AESOP_ROOT/audit-trace.txt"
 
   # Simulate two concurrent log_block calls (both read tail, both append)
   # Expected: write lock ensures consistent prev_hash chain
@@ -102,6 +273,7 @@ printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
     printf 'PASS: Concurrent log_block calls do not break hash chain\n'
   else
     printf 'FAIL: Hash chain broken after concurrent writes\n'
+    audit_failure_diag "$AESOP_ROOT" "$AESOP_ROOT/state/SECURITY-AUDIT.log"
     exit 1
   fi
 )

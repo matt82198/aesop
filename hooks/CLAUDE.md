@@ -48,7 +48,8 @@ Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z",
 - `seq`: Monotonically increasing (starts 1); detects truncation.
 - `prev_hash`: SHA-256 of prior line (no newline); first entry = `"GENESIS"`. Detects tampering.
 - All string values must be JSON-escaped (backslash → `\\`, quote → `\"`, control chars → `\uXXXX`).
-- Concurrent writes protected by atomic directory lock (`.audit-log-lock/`, 300s stale recovery); tail-hash sidecar (`state/.audit-tail-hash`) anchors against truncation. A busy lock NEVER drops a record: the record spills to `state/audit-spill-<pid>-<ts>.jsonl`, and the next lock holder merges spills in ts-then-pid order before verifying the sidecar.
+- Concurrent writes run one critical section (read tail, compute, append) under an atomic directory lock (`.audit-log-lock/`, owner pid recorded as `BASHPID`). `mkdir` alone does not grant ownership (CI run 43636610785: two writers both got mkdir success for one dir): the winner creates `<lock>/pid` with an O_EXCL noclobber write; a loser keeps waiting and never touches the dir. Opt-in `AUDIT_TRACE_FILE` logs lock events (diagnostic, reduce once CI is clean). Only the owner's release removes the lock; there is no age-based or pid-based reclaim (an mv-based reclaim raced a live release and forked the chain, 2026-11-14). A writer waits up to `AUDIT_LOCK_DEADLINE_SECS` (60s, poll 0.05s), then FAILS with exit 1 and never writes unlocked; later acquires in that process make one try and return 1 at once if it fails (`AUDIT_LOCK_UNAVAILABLE`; a lock freed meanwhile is still taken), and a fresh process tries normally.
+- Accepted consequence of no-reclaim: a writer killed between `mkdir` and the pid create leaves a lock dir nothing removes, and every later push fails its audit write until it is cleared. The acquire error gives the owner pid (absent or not running), the lock dir age in seconds, and the manual step: once no push is running, remove the lock directory (`rm -rf -- <state>/.audit-log-lock`); never automatic. Tail-hash sidecar (`state/.audit-tail-hash`) anchors against truncation. A record that hits the deadline (or a fast-failed acquire) is NOT chained: it spills to `state/audit-spill-<pid>-<ts>.jsonl` (never dropped), the write returns 1, and the next lock holder merges spills in ts-then-pid order before verifying the sidecar.
 
 **Installation**:
 - Symlink (Unix/macOS/Git Bash): `ln -s ../../hooks/pre-push-policy.sh .git/hooks/pre-push && chmod +x .git/hooks/pre-push`
@@ -68,7 +69,6 @@ Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z",
 - `check_encoding_lint` and `check_test_coverage` now resolve their root via `resolve_aesop_root()`. They still used the hardcoded `${AESOP_ROOT:-$HOME/aesop}` fallback, which ran the primary tree's script when pushing from a worktree and skipped the gate outright on any machine without `~/aesop`.
 
 **Verify Audit Log**: `bash hooks/pre-push-policy.sh --verify-audit-log` — detects hash-chain breaks and tail truncation via sidecar anchor.
-
 ## pre-commit-waveguard.sh
 
 Prevents accidental commits to PRIMARY tree during orchestrated wave cycles. Runs on `git commit` via `.git/hooks/pre-commit`.
