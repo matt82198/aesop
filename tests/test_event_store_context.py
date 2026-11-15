@@ -4,6 +4,7 @@ Every test drives build_context through its public function against a temp store
 built with Store.append. No source text is inspected.
 """
 import hashlib
+import json
 import re
 import sys
 import tempfile
@@ -199,6 +200,51 @@ class ContextBuilderTests(unittest.TestCase):
         out = build_context(root, max_bytes=300)
         self.assertLessEqual(len(out.encode("utf-8")), 300)
         self.assertEqual(out.split("\n")[-1], TRUNCATION_MARKER)
+
+
+    def test_f1_max_bytes_equal_to_marker_length_returns_marker_alone(self):
+        root = self.store_with_events(3, name="eqmarker")
+        minimum = len(TRUNCATION_MARKER.encode("utf-8"))
+        self.assertEqual(build_context(root, max_bytes=minimum), TRUNCATION_MARKER)
+
+    def test_f2_every_splitlines_separator_is_escaped_in_the_rendered_fact(self):
+        separators = [
+            ("\n", "\\n"),
+            ("\r", "\\r"),
+            ("\x0b", "\\u000b"),
+            ("\x0c", "\\u000c"),
+            ("\x1c", "\\u001c"),
+            ("\x1d", "\\u001d"),
+            ("\x1e", "\\u001e"),
+            ("\x85", "\\u0085"),
+            (" ", "\\u2028"),
+            (" ", "\\u2029"),
+        ]
+        for sep, escaped in separators:
+            with self.subTest(separator=repr(sep)):
+                root = make_store(Path(self.tmp) / ("sep-%04x" % ord(sep)))
+                Store(root).append("note", "writer", "a" + sep + "b",
+                                   ts="2026-11-14T10:00:00Z")
+                out = build_context(root)
+                self.assertEqual(len(out.splitlines()), 2)
+                self.assertEqual(len(fact_lines(out)), 1)
+                self.assertIn(escaped, out)
+
+    def test_nb3_non_dict_refs_with_task_filter_is_skipped_not_raised(self):
+        for i, refs in enumerate((["T-1"], "T-1")):
+            with self.subTest(refs=refs):
+                root = make_store(Path(self.tmp) / ("refs-%d" % i))
+                line = json.dumps({"v": 2, "ts": "2026-11-14T10:00:00Z", "seq": 1,
+                                   "kind": "note", "actor": "w", "session": "",
+                                   "text": "odd", "refs": refs, "prev": ""}).encode("utf-8")
+                (root / "events" / "2026-11-14.jsonl").write_bytes(line + b"\n")
+                (root / "store.json").write_text(
+                    json.dumps({"project": "ctx", "schema": 2, "head": line_sha(line)}),
+                    encoding="utf-8")
+                self.assertEqual(Store(root).verify(), [])
+                out = build_context(root, task="T-1")
+                self.assertEqual(fact_lines(out), [])
+                self.assertIn(EMPTY_LINE, out.split("\n"))
 
 
 if __name__ == "__main__":
