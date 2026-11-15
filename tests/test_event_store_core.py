@@ -258,6 +258,114 @@ class V1NoStoreJsonTests(unittest.TestCase):
                         "verify reported 0 problems after the last line was edited")
 
 
+def _v1_day(root, day, seqs, prev_start=""):
+    """Write one v1 day file. Each event gets the given seq; prev is rebuilt over the
+    written line order so only the seq check can reject a bad order or number."""
+    prev, lines = prev_start, []
+    for i, s in enumerate(seqs):
+        ev = {"ts": day + "T%02d:00:00Z" % i, "seq": s, "kind": "note",
+              "actor": "a", "session": "s", "text": "t%d" % s, "refs": {}, "prev": prev}
+        line = json.dumps(ev, sort_keys=True).encode("utf-8")
+        prev = sha(line)
+        lines.append(line)
+    (root / "events" / (day + ".jsonl")).write_bytes(b"\n".join(lines) + b"\n")
+
+
+class V1PerFileSeqTests(unittest.TestCase):
+    """Real v1 logs restart seq at 1 in every day file (README: seq is the 1-based line
+    number in the day file). verify must accept that and still reject real damage."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.tmp = self._td.name
+
+    def _root(self):
+        root = Path(self.tmp) / "events-log"
+        (root / "events").mkdir(parents=True)
+        return root
+
+    def test_s_v1_seq_restarting_per_file_verifies(self):
+        # RED on origin/main: verify carries last_seq across day files, so the first
+        # line of 2026-09-02 (seq 1) reads as "not increasing" after seq 3.
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 2, 3])
+        _v1_day(root, "2026-09-02", [1, 2])
+        self.assertEqual(Store(root).verify(), [])
+
+    def test_t_v1_broken_prev_link_across_files_fails(self):
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 2])
+        _v1_day(root, "2026-09-02", [1, 2], prev_start="0" * 64)
+        self.assertTrue(Store(root).verify())
+
+    def test_u_v1_seq_gap_within_file_fails(self):
+        # Not caught on origin/main: 1 then 3 is still increasing.
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 3])
+        self.assertTrue(Store(root).verify())
+
+    def test_v_v1_duplicate_seq_within_file_fails(self):
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 1])
+        self.assertTrue(Store(root).verify())
+
+    def test_w_v1_reordered_lines_within_file_fail(self):
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 3, 2])
+        self.assertTrue(Store(root).verify())
+
+    def test_x_v1_swapped_day_files_fail(self):
+        # RED on bf78d3dc: prev and seq restart per file, so swapping two valid day files
+        # still verifies. The ts date of each event must match its file name.
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 2])
+        _v1_day(root, "2026-09-02", [1, 2])
+        a = root / "events" / "2026-09-01.jsonl"
+        b = root / "events" / "2026-09-02.jsonl"
+        a_bytes, b_bytes = a.read_bytes(), b.read_bytes()
+        a.write_bytes(b_bytes)
+        b.write_bytes(a_bytes)
+        self.assertTrue(Store(root).verify())
+
+    def test_y_v1_event_with_other_day_ts_fails(self):
+        # RED on bf78d3dc: an event dated 2026-09-02 inside the 2026-09-01 file verifies.
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 2])
+        _v1_day(root, "2026-09-02", [1, 2])
+        day1 = root / "events" / "2026-09-01.jsonl"
+        lines = [x for x in day1.read_bytes().split(b"\n") if x]
+        lines[1] = lines[1].replace(b"2026-09-01T01", b"2026-09-02T01")
+        day1.write_bytes(b"\n".join(lines) + b"\n")
+        self.assertTrue(Store(root).verify())
+
+    def test_z_v1_ts_decreasing_within_file_fails(self):
+        # RED on bf78d3dc: timestamps running backwards inside one file verify.
+        root = self._root()
+        stamps = ["2026-09-01T05:00:00Z", "2026-09-01T02:00:00Z"]
+        prev, lines = "", []
+        for i, ts in enumerate(stamps, 1):
+            ev = {"ts": ts, "seq": i, "kind": "note", "actor": "a", "session": "s",
+                  "text": "t%d" % i, "refs": {}, "prev": prev}
+            line = json.dumps(ev, sort_keys=True).encode("utf-8")
+            prev = sha(line)
+            lines.append(line)
+        (root / "events" / "2026-09-01.jsonl").write_bytes(b"\n".join(lines) + b"\n")
+        self.assertTrue(Store(root).verify())
+
+    def test_known_limit_v1_deleted_middle_day_is_not_detected(self):
+        # KNOWN LIMIT (v1): a missing whole day file is not detectable from v1 data alone.
+        # prev and seq restart per file and the remaining files stay internally valid.
+        # Closing this needs a seal manifest or the v2 cross-file chain. When that lands,
+        # this test must be updated to assert detection.
+        root = self._root()
+        _v1_day(root, "2026-09-01", [1, 2])
+        _v1_day(root, "2026-09-02", [1, 2])
+        _v1_day(root, "2026-09-03", [1, 2])
+        (root / "events" / "2026-09-02.jsonl").unlink()
+        self.assertEqual(Store(root).verify(), [])
+
+
 def encode_line(ev):
     return json.dumps(ev, sort_keys=True).encode("utf-8") + b"\n"
 
