@@ -44,6 +44,13 @@ class LockNotTracked(unittest.TestCase):
                               capture_output=True, encoding="utf-8", errors="replace",
                               check=True).stdout
 
+    def _init_repo(self, root):
+        # Identity and init are scoped to this temp fixture repo only.
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "lock@example.invalid"],
+                       check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "lock"], check=True)
+
     def _tracked(self):
         return set(self._git("ls-files").splitlines())
 
@@ -88,15 +95,13 @@ class LockNotTracked(unittest.TestCase):
         from event_store import init as init_mod  # noqa: PLC0415
         root = Path(self.tmp.name) / "initstore"
         root.mkdir()
-        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
-        subprocess.run(["git", "-C", str(root), "config", "user.email", "lock@example.invalid"],
-                       check=True)
-        subprocess.run(["git", "-C", str(root), "config", "user.name", "lock"], check=True)
+        self._init_repo(root)
         init_mod._write_store_files(root, "lockcheck")
         Store(root).append("note", "tester", "r6", ts=TS_BASE % 1)
         self.assertTrue((root / LOCK_NAME).exists())
-        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "r6"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], cwd=str(root), check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "r6"], cwd=str(root),
+                       check=True)
         tracked = set(subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True,
                                      encoding="utf-8", check=True).stdout.splitlines())
         self.assertNotIn(LOCK_NAME, tracked)
