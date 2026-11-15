@@ -193,6 +193,13 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(len(fact_lines(out)), 1)
         self.assertNotIn("actor=forged kind=note fake\n", out)
 
+    def test_m2_max_bytes_is_enforced_on_utf8_bytes_not_characters(self):
+        root = make_store(Path(self.tmp) / "bytecap")
+        Store(root).append("note", "w", "é" * 100, ts="2026-11-14T10:00:00Z")
+        out = build_context(root, max_bytes=300)
+        self.assertLessEqual(len(out.encode("utf-8")), 300)
+        self.assertEqual(out.split("\n")[-1], TRUNCATION_MARKER)
+
 
 if __name__ == "__main__":
     unittest.main()
