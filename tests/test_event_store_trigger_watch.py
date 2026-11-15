@@ -354,10 +354,13 @@ class WatchTest(unittest.TestCase):
 
         emitted = []
         with mock.patch.object(watch.os, "replace", side_effect=flaky), \
-                mock.patch.object(time, "sleep"):
+                mock.patch.object(time, "sleep") as sleep:
             code = watch.run(Store(self.store_root), self.cursor, emit=emitted.append)
         self.assertEqual(code, 0, emitted)
         self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_count, 2)
+        for call in sleep.call_args_list:
+            self.assertEqual(call.args, (0.1,))
         self.assertEqual(json.loads(self.cursor_bytes())["seq"], 1)
 
     def test_r16_persistent_replace_failure_fails_closed_and_cleans_tmp(self):
@@ -374,11 +377,14 @@ class WatchTest(unittest.TestCase):
 
         emitted = []
         with mock.patch.object(watch.os, "replace", side_effect=always_locked), \
-                mock.patch.object(time, "sleep"):
+                mock.patch.object(time, "sleep") as sleep:
             code = watch.run(Store(self.store_root), self.cursor, emit=emitted.append)
         self.assertEqual(code, 1, emitted)
         self.assertIn("FAILED", emitted[-1])
-        self.assertEqual(len(attempts), watch.REPLACE_RETRIES + 1)
+        self.assertEqual(len(attempts), 6)
+        self.assertEqual(sleep.call_count, 5)
+        for call in sleep.call_args_list:
+            self.assertEqual(call.args, (0.1,))
         self.assertEqual(self.cursor_bytes(), before)
         self.assertFalse(self.cursor.with_name(self.cursor.name + ".tmp").exists())
 
