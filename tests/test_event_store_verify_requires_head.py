@@ -286,6 +286,24 @@ class VerifyRequiresHeadTests(unittest.TestCase):
         self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
                         "v=2 line in store.json-less v1 layout not flagged: %r" % (problems,))
 
+    def test_r4_int2_v_line_carries_schema_downgrade_wording(self):
+        # Int 2 under schema 1 is the downgrade signal: the wording must say so.
+        problems = self._v1_store_with_v_line("dgwording", 3, 2, 2)
+        flagged = [p for p in problems if p.startswith("2026-11-14.jsonl:2:")]
+        self.assertTrue(flagged, "int 2 v line not flagged: %r" % (problems,))
+        self.assertIn("schema downgrade", flagged[0],
+                      "int 2 v line lacks downgrade wording: %r" % (flagged,))
+
+    def test_r4_non2_v_line_carries_generic_wording_not_downgrade(self):
+        # Any non-int-2 v value gets the generic message and must not claim a downgrade.
+        problems = self._v1_store_with_v_line("genwording", 3, 2, 1)
+        flagged = [p for p in problems if p.startswith("2026-11-14.jsonl:2:")]
+        self.assertTrue(flagged, "v=1 line not flagged: %r" % (problems,))
+        self.assertIn("line has a v key but store.json schema is 1", flagged[0],
+                      "v=1 line lacks generic wording: %r" % (flagged,))
+        self.assertNotIn("schema downgrade", flagged[0],
+                         "v=1 line wrongly carries downgrade wording: %r" % (flagged,))
+
     def test_p1_zero_event_store_without_head_is_clean(self):
         self.assertEqual(Store(self.root).verify(), [])
 
