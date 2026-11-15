@@ -241,6 +241,51 @@ class VerifyRequiresHeadTests(unittest.TestCase):
     def test_r2_control_genuine_schema1_store_without_v_keys_is_clean(self):
         self.assertEqual(self._v1_store_with_v_line("novkeys", 3, None, None), [])
 
+    def test_r3_v_int_zero_on_schema1_line_is_flagged(self):
+        # Falsy v values must still count as a "v" key: a truthiness check would skip them.
+        problems = self._v1_store_with_v_line("zerov", 3, 2, 0)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as int 0 not flagged: %r" % (problems,))
+
+    def test_r3_v_false_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("falsev", 3, 2, False)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as bool false not flagged: %r" % (problems,))
+
+    def test_r3_v_null_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("nullv", 3, 2, None)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as null not flagged: %r" % (problems,))
+
+    def test_r3_v_empty_string_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("emptyv", 3, 2, "")
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as empty string not flagged: %r" % (problems,))
+
+    def test_r3_v_int_one_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("onev", 3, 2, 1)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as int 1 not flagged: %r" % (problems,))
+
+    def test_r3_v2_line_in_store_json_less_v1_layout_is_flagged(self):
+        # No store.json: the layout is implied v1 (first line has no v key). A v=2 line on
+        # line 2 must still be reported; gating the v check on store.json presence would skip it.
+        root = Path(self.tmp.name) / "nojson_v1"
+        (root / "events").mkdir(parents=True)
+        day = root / "events" / "2026-11-14.jsonl"
+        first = {"kind": "note", "actor": "t", "seq": 1, "text": "one",
+                 "ts": "2026-11-14T00:00:01Z", "prev": "", "session": "", "refs": {}}
+        first_bytes = encode_event(first)
+        second = {"v": 2, "kind": "note", "actor": "t", "seq": 2, "text": "two",
+                  "ts": "2026-11-14T00:00:02Z", "prev": line_sha(first_bytes),
+                  "session": "", "refs": {}}
+        day.write_bytes(first_bytes + b"\n" + encode_event(second) + b"\n")
+        store = Store(root)
+        self.assertEqual(store.schema, 1)
+        problems = store.verify()
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v=2 line in store.json-less v1 layout not flagged: %r" % (problems,))
+
     def test_p1_zero_event_store_without_head_is_clean(self):
         self.assertEqual(Store(self.root).verify(), [])
 
