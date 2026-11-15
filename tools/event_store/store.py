@@ -29,6 +29,24 @@ LOCK_NAME = ".append.lock"
 LOCK_TIMEOUT_SECONDS = 60.0
 LOCK_POLL_SECONDS = 0.01
 
+# store.json head replace: on Windows os.replace raises PermissionError while another process
+# holds store.json open (a reader). The line is already appended when this happens, so the head
+# write is retried a few times under the held lock before the error reaches the caller.
+REPLACE_RETRIES = 5
+REPLACE_RETRY_SECONDS = 0.1
+
+
+def _replace_with_retry(src, dst):
+    """os.replace that retries PermissionError (REPLACE_RETRIES attempts, short sleep between)."""
+    for attempt in range(1, REPLACE_RETRIES + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES:
+                raise
+            time.sleep(REPLACE_RETRY_SECONDS)
+
 
 class StoreError(Exception):
     """Raised for an unusable store or a refused append."""
@@ -191,15 +209,21 @@ class Store:
     def _write_head(self, head):
         """Record the sha of the store's last line as store.json "head" (atomic replace).
 
-        Head is an optional key: a store.json without it verifies exactly as before, so
-        existing stores do not go red. Only the one key changes; other keys are kept.
+        Head is required once a schema-2 store holds events: verify reports a non-empty
+        schema-2 store whose head is missing or malformed. A zero-event store has no head
+        to check. Only the one key changes; other keys are kept.
         """
         meta_path = self.path / "store.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["head"] = head
         tmp = self.path / "store.json.tmp"
         tmp.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, meta_path)
+        try:
+            _replace_with_retry(tmp, meta_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
         self._meta = meta
 
     def verify(self):
@@ -223,6 +247,18 @@ class Store:
                     problems.append("%s: unparseable line" % where)
                     prev_line = raw
                     continue
+                if not v2 and "v" in ev:
+                    # A genuine v1 line has no "v" key at all, so any "v" under store.json
+                    # schema 1 is a downgrade (finding 1): the v1 checks alone would pass a
+                    # deleted tail. Int 2 keeps the downgrade wording; other values get a
+                    # generic message.
+                    value = ev["v"]
+                    if isinstance(value, int) and not isinstance(value, bool) and value == 2:
+                        problems.append("%s: v is 2 but store.json schema is 1 "
+                                        "(schema downgrade)" % where)
+                    else:
+                        problems.append("%s: line has a v key but store.json schema is 1"
+                                        % where)
                 want = line_sha(prev_line) if prev_line is not None else ""
                 if ev.get("prev") != want:
                     problems.append("%s: prev mismatch (chain broken or earlier line removed)"
@@ -265,11 +301,20 @@ class Store:
             if not v2 and file_ts is not None:
                 prev_file_ts = file_ts
         head = self._meta.get("head") if v2 else None
-        if head is not None:
+        want_head = line_sha(prev_line) if prev_line is not None else ""
+        if v2 and prev_line is not None and not _is_sha256(head):
+            # A non-empty v2 store must carry a head. Without it, deleting the last line
+            # would verify clean (finding A1), so a missing or malformed head is a problem.
+            problems.append("store.json: head missing or malformed on a non-empty store "
+                            "(the head anchor is required once the store holds events)")
+        elif head is not None and head != want_head:
             # The chain proves each line against its predecessor, not the final line's own
             # bytes. The recorded head covers the tail, so an edit to the last line is caught.
-            want_head = line_sha(prev_line) if prev_line is not None else ""
-            if head != want_head:
-                problems.append("store.json: head does not match the last line (last line "
-                                "edited, or lines removed or appended outside the store)")
+            problems.append("store.json: head does not match the last line (last line "
+                            "edited, or lines removed or appended outside the store)")
         return problems
+
+
+def _is_sha256(value):
+    """True when value is a lowercase 64-hex sha256 string."""
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
