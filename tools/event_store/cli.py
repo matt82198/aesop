@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from event_store import claims  # noqa: E402
 from event_store import project as proj_mod  # noqa: E402
 from event_store import registry as reg_mod  # noqa: E402
-from event_store.store import Store, StoreError  # noqa: E402
+from event_store.store import LOCK_NAME, Store, StoreError  # noqa: E402
 
 REPO_ENCODED_KEY = re.compile(r"^[A-Za-z0-9]+_(pr|issue|pull)_\d+$")
 
@@ -61,7 +61,10 @@ def git_commit(store_path, event):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(msg)
-        for cmd in (["add", "-A", "--", "."], ["commit", "-q", "-F", name]):
+        # The append-lock sidecar is never part of the store history (defence in depth:
+        # this pathspec excludes it, and init.py writes a .gitignore rule for it too).
+        add_cmd = ["add", "-A", "--", ".", ":(exclude)" + LOCK_NAME]
+        for cmd in (add_cmd, ["commit", "-q", "-F", name]):
             r = subprocess.run(["git", "-C", str(store_path), *cmd],
                                capture_output=True, encoding="utf-8", errors="replace")
             if r.returncode != 0:
