@@ -14,11 +14,14 @@ Usage:
   python tools/ci_shard_runner.py 0 4
   python tools/ci_shard_runner.py 0 4 --timing-file .github/shard-timing.json
   python tools/ci_shard_runner.py 0 4 --emit-timing
+  python tools/ci_shard_runner.py 0 4 --hang-dump-seconds 540  (0 disables; default 540; diagnostic only)
 
 Exit codes:
   0: All tests passed
   1: Test failures, import failures, distribution errors, or no tests collected
 """
+import argparse
+import faulthandler
 import json
 import os
 import subprocess
@@ -121,24 +124,54 @@ def build_pytest_args(shard_files, timeout=None):
     return cmd
 
 
+DEFAULT_HANG_DUMP_SECONDS = 540
+
+
+def _hang_dump_seconds_type(text):
+    """argparse type for --hang-dump-seconds: a non-negative integer (0 disables)."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer value: {text!r}")
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or greater, got {value}")
+    return value
+
+
+def _parse_hang_dump_seconds(text):
+    """Validate one --hang-dump-seconds value through argparse (exit 2 on error)."""
+    parser = argparse.ArgumentParser(prog="ci_shard_runner.py", add_help=False)
+    parser.add_argument("--hang-dump-seconds", type=_hang_dump_seconds_type,
+                        default=DEFAULT_HANG_DUMP_SECONDS)
+    return parser.parse_args(["--hang-dump-seconds", text]).hang_dump_seconds
+
+
 def _parse_args(argv):
-    """Parse CLI arguments into (shard_id, total_shards, timing_file, emit_timing)."""
+    """Parse CLI arguments into (shard_id, total_shards, timing_file, emit_timing, hang_dump_seconds)."""
     positional = []
     timing_file = None
     emit_timing = False
+    hang_dump_seconds = DEFAULT_HANG_DUMP_SECONDS
 
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg in ("-h", "--help"):
             print("Usage: python tools/ci_shard_runner.py [shard_id total_shards] "
-                  "[--timing-file PATH] [--emit-timing]")
+                  "[--timing-file PATH] [--emit-timing] [--hang-dump-seconds N]")
             sys.exit(0)
         elif arg == "--timing-file":
             if i + 1 >= len(argv):
                 print("ERROR: --timing-file requires a path argument", file=sys.stderr)
                 sys.exit(2)
             timing_file = argv[i + 1]
+            i += 2
+            continue
+        elif arg == "--hang-dump-seconds":
+            if i + 1 >= len(argv):
+                print("ERROR: --hang-dump-seconds requires a value", file=sys.stderr)
+                sys.exit(2)
+            hang_dump_seconds = _parse_hang_dump_seconds(argv[i + 1])
             i += 2
             continue
         elif arg == "--emit-timing":
@@ -172,7 +205,7 @@ def _parse_args(argv):
         print(f"ERROR: expected 0 or 2 positional args, got {len(positional)}", file=sys.stderr)
         sys.exit(2)
 
-    return shard_id, total_shards, timing_file, emit_timing
+    return shard_id, total_shards, timing_file, emit_timing, hang_dump_seconds
 
 
 _ISOLATION_ARMED_ENV = "AESOP_CI_SHARD_TRIPWIRE_ARMED"
@@ -214,8 +247,22 @@ def main():
     from test_network_isolation import apply_test_isolation_env
     apply_test_isolation_env()
 
-    shard_id, total_shards, timing_file, emit_timing = _parse_args(sys.argv[1:])
+    shard_id, total_shards, timing_file, emit_timing, hang_dump_seconds = _parse_args(sys.argv[1:])
 
+    # Diagnostic only: after hang_dump_seconds, faulthandler writes every thread's
+    # stack to stderr once and the run continues (exit=False). Armed in THIS process,
+    # the one that runs the tests (see _run_shard), so the dump covers the in-process
+    # unittest run. Cancelled in finally so a failing run also disarms it.
+    if hang_dump_seconds:
+        faulthandler.dump_traceback_later(hang_dump_seconds, exit=False, file=sys.stderr)
+    try:
+        _run_shard(shard_id, total_shards, timing_file, emit_timing)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
+def _run_shard(shard_id, total_shards, timing_file, emit_timing):
+    """Collect, distribute and run this shard's tests. Exits via sys.exit."""
     try:
         result = subprocess.run(
             ["git", "ls-files", "tests/test_*.py"],
