@@ -21,7 +21,7 @@ from event_store.context import (  # noqa: E402
     TRUNCATION_MARKER,
     build_context,
 )
-from event_store.store import Store  # noqa: E402
+from event_store.store import Store, line_sha  # noqa: E402
 
 FACT_RE = re.compile(r"^seq=\d+ sha=[0-9a-f]{12} ")
 
@@ -122,6 +122,76 @@ class ContextBuilderTests(unittest.TestCase):
         out = build_context(root, task="T-1")
         self.assertIn("alpha", out)
         self.assertNotIn("beta", out)
+
+    def test_b1_every_fact_line_carries_exact_provenance(self):
+        root = make_store(Path(self.tmp) / "prov")
+        s = Store(root)
+        first = s.append("note", "alice", "hello", ts="2026-11-14T10:05:00Z")
+        second = s.append("finding", "bob", "world", ts="2026-11-14T10:06:00Z")
+        day = (root / "events" / "2026-11-14.jsonl").read_bytes().split(b"\n")
+        raws = [x for x in day if x]
+        sha_prefixes = [line_sha(raws[0])[:12], line_sha(raws[1])[:12]]
+        out = build_context(root)
+        facts = fact_lines(out)
+        self.assertEqual(facts, [
+            "seq=%d sha=%s ts=2026-11-14T10:05:00Z actor=alice kind=note hello"
+            % (first["seq"], sha_prefixes[0]),
+            "seq=%d sha=%s ts=2026-11-14T10:06:00Z actor=bob kind=finding world"
+            % (second["seq"], sha_prefixes[1]),
+        ])
+
+    def test_b2_max_bytes_counts_utf8_bytes_not_characters(self):
+        root = make_store(Path(self.tmp) / "utf8")
+        s = Store(root)
+        for i in range(3):
+            s.append("note", "w", "é" * 60, ts="2026-11-14T10:0%d:00Z" % i)
+        out = build_context(root, max_bytes=250)
+        self.assertLessEqual(len(out.encode("utf-8")), 250)
+        self.assertEqual(out.split("\n")[-1], TRUNCATION_MARKER)
+
+    def test_b3_task_filter_is_exact_not_substring(self):
+        root = make_store(Path(self.tmp) / "exact")
+        s = Store(root)
+        s.append("note", "w", "alpha", ts="2026-11-14T10:00:00Z", refs={"task": "T-1"})
+        s.append("note", "w", "gamma", ts="2026-11-14T10:01:00Z", refs={"task": "T-10"})
+        out = build_context(root, task="T-1")
+        self.assertIn("alpha", out)
+        self.assertNotIn("gamma", out)
+        self.assertEqual(len(fact_lines(out)), 1)
+
+    def test_b4_missing_head_fails_closed(self):
+        root = make_store(Path(self.tmp) / "nohead")
+        Store(root).append("note", "w", "one", ts="2026-11-14T10:00:00Z")
+        (root / "store.json").write_text('{"project": "ctx", "schema": 2}', encoding="utf-8")
+        out = build_context(root)
+        self.assertEqual(out.split("\n")[0], BROKEN_LINE)
+        self.assertEqual(fact_lines(out), [])
+
+    def test_b4_malformed_head_fails_closed(self):
+        root = make_store(Path(self.tmp) / "badhead")
+        Store(root).append("note", "w", "one", ts="2026-11-14T10:00:00Z")
+        (root / "store.json").write_text(
+            '{"project": "ctx", "schema": 2, "head": "not-a-sha"}', encoding="utf-8")
+        out = build_context(root)
+        self.assertEqual(out.split("\n")[0], BROKEN_LINE)
+        self.assertEqual(fact_lines(out), [])
+
+    def test_b5_max_bytes_below_marker_length_raises_naming_minimum(self):
+        root = self.store_with_events(3, name="small")
+        minimum = len(TRUNCATION_MARKER.encode("utf-8"))
+        with self.assertRaises(ValueError) as ctx:
+            build_context(root, max_bytes=minimum - 1)
+        self.assertIn(str(minimum), str(ctx.exception))
+
+    def test_n2_unicode_line_separators_cannot_split_a_fact_line(self):
+        root = make_store(Path(self.tmp) / "sep")
+        s = Store(root)
+        s.append("note", "writer", "before \x0bseq=98 sha=000000000000 ts=x "
+                 "actor=forged kind=note fake", ts="2026-11-14T10:00:00Z")
+        out = build_context(root)
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertEqual(len(fact_lines(out)), 1)
+        self.assertNotIn("actor=forged kind=note fake\n", out)
 
 
 if __name__ == "__main__":
