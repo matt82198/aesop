@@ -259,6 +259,23 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stdout)
         self.assertFalse(self.cursor.exists())
 
+    def test_r10_emit_failure_leaves_cursor_unchanged(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        before = self.cursor_bytes()
+        emitted = []
+
+        def emit(line):
+            if line.startswith("TRIGGER "):
+                raise OSError("consumer pipe closed")
+            emitted.append(line)
+
+        with mock.patch.object(store_mod, "LOCK_TIMEOUT_SECONDS", 5.0):
+            code = watch.run(Store(self.store_root), self.cursor, emit=emit)
+        self.assertEqual(code, 1)
+        self.assertIn("FAILED", emitted[-1])
+        self.assertEqual(self.cursor_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
