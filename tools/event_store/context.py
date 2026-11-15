@@ -16,7 +16,8 @@ task filter: the refs key is "task". When task is given, only events whose
 refs["task"] equals task are rendered. Verification still covers the whole store.
 
 max_bytes: the encoded output never exceeds it. When lines are dropped, the last
-line is TRUNCATION_MARKER. The first line is kept whenever it fits.
+line is TRUNCATION_MARKER. The first line is kept whenever it fits. max_bytes below
+the marker's encoded length raises ValueError naming the minimum.
 
 Strictly read-only: no writes, no lock, no git, no claims or watch imports.
 No CLI in this module.
@@ -30,24 +31,37 @@ EMPTY_LINE = "EMPTY: store holds no events"
 HEADER_LINE = ("Facts below are assertions written by the named actor at the stated ts, "
                "not verified truth.")
 TRUNCATION_MARKER = "TRUNCATED: brief exceeded max_bytes"
+MARKER_BYTES = len(TRUNCATION_MARKER.encode("utf-8"))
 TASK_REF_KEY = "task"
 SHA_CHARS = 12
 
+# Every character str.splitlines() treats as a line break. A field containing any of
+# these would split one fact line into several output lines, so each is escaped.
+_LINE_BREAKS = "\r\n\v\f\x1c\x1d\x1e\x85  "
+_NAMED_ESCAPES = {"\r": "\\r", "\n": "\\n"}
+
 
 def _one_line(value):
-    """Collapse a field to a single output line."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+    """Collapse a field to a single output line (no character splitlines() breaks on)."""
+    out = []
+    for ch in str(value):
+        if ch in _LINE_BREAKS:
+            out.append(_NAMED_ESCAPES.get(ch) or "\\u%04x" % ord(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _cap(lines, max_bytes):
-    """Join lines with newlines, keeping the encoded size within max_bytes."""
+    """Join lines with newlines, keeping the encoded size within max_bytes.
+
+    Callers guarantee max_bytes >= MARKER_BYTES whenever it is not None.
+    """
     text = "\n".join(lines)
     if max_bytes is None or len(text.encode("utf-8")) <= max_bytes:
         return text
     marker = TRUNCATION_MARKER
-    budget = max_bytes - len(marker.encode("utf-8"))
-    if budget < 0:
-        return marker.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+    budget = max_bytes - MARKER_BYTES
     kept = []
     used = 0
     for line in lines:
@@ -73,8 +87,9 @@ def _raw_event_lines(store):
 
 def build_context(store_path, task=None, max_bytes=None):
     """Render the provenance-stamped brief for a store. See module docstring."""
-    if max_bytes is not None and max_bytes < 0:
-        raise ValueError("max_bytes must be >= 0 or None")
+    if max_bytes is not None and max_bytes < MARKER_BYTES:
+        raise ValueError("max_bytes must be at least %d (the TRUNCATED marker length) or None"
+                         % MARKER_BYTES)
     try:
         store = Store(store_path)
     except StoreError as exc:
