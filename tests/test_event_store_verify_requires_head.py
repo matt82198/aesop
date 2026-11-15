@@ -122,6 +122,72 @@ class VerifyRequiresHeadTests(unittest.TestCase):
                         "non-empty v2 store with a malformed head shape verified clean: %r"
                         % (problems,))
 
+    def test_s1_head_63_hex_chars_is_malformed(self):
+        fill(self.root, 3)
+        meta = read_meta(self.root)
+        meta["head"] = "a" * 63
+        write_meta(self.root, meta)
+        problems = Store(self.root).verify()
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "63-char head verified as well-formed: %r" % (problems,))
+
+    def test_s2_uppercase_64_hex_head_is_malformed(self):
+        fill(self.root, 3)
+        meta = read_meta(self.root)
+        meta["head"] = "A" * 64
+        write_meta(self.root, meta)
+        problems = Store(self.root).verify()
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "uppercase 64-hex head verified as well-formed: %r" % (problems,))
+
+    def test_s3_64_char_non_hex_head_is_malformed(self):
+        fill(self.root, 3)
+        meta = read_meta(self.root)
+        meta["head"] = "z" * 64
+        write_meta(self.root, meta)
+        problems = Store(self.root).verify()
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "64-char non-hex head verified as well-formed: %r" % (problems,))
+
+    def test_d1_downgraded_schema_with_head_kept_and_tail_deleted_is_reported(self):
+        # store.json says schema 1 but the lines are v2: a downgrade must not verify clean.
+        fill(self.root, 3)
+        meta = read_meta(self.root)
+        meta["schema"] = 1
+        write_meta(self.root, meta)
+        drop_last_line(self.root)
+        problems = Store(self.root).verify()
+        self.assertTrue(problems,
+                        "schema-1 store.json over v2 lines with a deleted tail verified clean")
+
+    def test_d2_downgraded_schema_with_head_removed_and_tail_deleted_is_reported(self):
+        fill(self.root, 3)
+        meta = read_meta(self.root)
+        meta["schema"] = 1
+        del meta["head"]
+        write_meta(self.root, meta)
+        drop_last_line(self.root)
+        problems = Store(self.root).verify()
+        self.assertTrue(problems,
+                        "schema-1 store.json over v2 lines with no head and a deleted tail "
+                        "verified clean")
+
+    def test_d3_genuine_schema_1_store_with_store_json_still_verifies_clean(self):
+        # Control: a real v1 log (no v2 lines) with store.json schema 1 keeps its verdict.
+        root = Path(self.tmp.name) / "genuine_v1"
+        (root / "events").mkdir(parents=True)
+        (root / "store.json").write_text(
+            json.dumps({"project": "genuine", "schema": 1}), encoding="utf-8")
+        day = root / "events" / "2026-11-14.jsonl"
+        first = {"kind": "note", "actor": "t", "seq": 1, "text": "one",
+                 "ts": "2026-11-14T00:00:01Z", "prev": "", "session": "", "refs": {}}
+        first_bytes = encode_event(first)
+        second = {"kind": "note", "actor": "t", "seq": 2, "text": "two",
+                  "ts": "2026-11-14T00:00:02Z", "prev": line_sha(first_bytes),
+                  "session": "", "refs": {}}
+        day.write_bytes(first_bytes + b"\n" + encode_event(second) + b"\n")
+        self.assertEqual(Store(root).verify(), [])
+
     def test_p1_zero_event_store_without_head_is_clean(self):
         self.assertEqual(Store(self.root).verify(), [])
 
