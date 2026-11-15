@@ -195,5 +195,61 @@ class LockBehaviourTest(unittest.TestCase):
         self.assertEqual(len(event_lines(self.root)), 3)
 
 
+class HeadReplaceRetryTest(unittest.TestCase):
+    # os.replace of store.json can fail with PermissionError on Windows while another process
+    # holds the file open (a reader). The line is already appended at that point, so the head
+    # write must retry briefly rather than fail an append that landed.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = make_store(Path(self.tmp.name) / "store")
+        self.real_replace = store_mod.os.replace
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_permission_error_then_success_appends_and_head_matches(self):
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(src)
+            if len(calls) <= 2:
+                raise PermissionError(13, "Access is denied", str(dst))
+            return self.real_replace(src, dst)
+
+        with mock.patch.object(store_mod.os, "replace", new=flaky):
+            Store(self.root).append("k", "a", "first")
+        self.assertEqual(len(calls), 3)
+        lines = event_lines(self.root)
+        head = json.loads((self.root / "store.json").read_text(encoding="utf-8"))["head"]
+        self.assertEqual(head, store_mod.line_sha(lines[-1]))
+        self.assertFalse((self.root / "store.json.tmp").exists())
+        self.assertEqual(Store(self.root).verify(), [])
+
+    def test_permission_error_every_time_surfaces_and_leaves_no_tmp(self):
+        attempts = []
+
+        def locked(src, dst):
+            attempts.append(src)
+            raise PermissionError(13, "Access is denied", str(dst))
+
+        with mock.patch.object(store_mod.os, "replace", new=locked):
+            with self.assertRaises(PermissionError):
+                Store(self.root).append("k", "a", "first")
+        self.assertEqual(len(attempts), store_mod.REPLACE_RETRIES)
+        self.assertFalse((self.root / "store.json.tmp").exists())
+
+    def test_non_permission_oserror_is_not_retried(self):
+        attempts = []
+
+        def full(src, dst):
+            attempts.append(src)
+            raise OSError(28, "No space left on device")
+
+        with mock.patch.object(store_mod.os, "replace", new=full):
+            with self.assertRaises(OSError):
+                Store(self.root).append("k", "a", "first")
+        self.assertEqual(len(attempts), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

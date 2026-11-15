@@ -29,6 +29,24 @@ LOCK_NAME = ".append.lock"
 LOCK_TIMEOUT_SECONDS = 60.0
 LOCK_POLL_SECONDS = 0.01
 
+# store.json head replace: on Windows os.replace raises PermissionError while another process
+# holds store.json open (a reader). The line is already appended when this happens, so the head
+# write is retried a few times under the held lock before the error reaches the caller.
+REPLACE_RETRIES = 5
+REPLACE_RETRY_SECONDS = 0.1
+
+
+def _replace_with_retry(src, dst):
+    """os.replace that retries PermissionError (REPLACE_RETRIES attempts, short sleep between)."""
+    for attempt in range(1, REPLACE_RETRIES + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES:
+                raise
+            time.sleep(REPLACE_RETRY_SECONDS)
+
 
 class StoreError(Exception):
     """Raised for an unusable store or a refused append."""
@@ -200,7 +218,12 @@ class Store:
         meta["head"] = head
         tmp = self.path / "store.json.tmp"
         tmp.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, meta_path)
+        try:
+            _replace_with_retry(tmp, meta_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
         self._meta = meta
 
     def verify(self):
