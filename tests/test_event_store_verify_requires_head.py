@@ -188,6 +188,59 @@ class VerifyRequiresHeadTests(unittest.TestCase):
         day.write_bytes(first_bytes + b"\n" + encode_event(second) + b"\n")
         self.assertEqual(Store(root).verify(), [])
 
+    def _v1_store_with_v_line(self, name, count, index, value):
+        # Schema-1 store.json over a valid v1 chain of `count` lines. Line `index` (1-based,
+        # None for none) carries a "v" key with `value`; its bytes feed the next prev link.
+        root = Path(self.tmp.name) / name
+        (root / "events").mkdir(parents=True)
+        (root / "store.json").write_text(
+            json.dumps({"project": name, "schema": 1}), encoding="utf-8")
+        lines = []
+        prev = ""
+        for i in range(1, count + 1):
+            ev = {"kind": "note", "actor": "t", "seq": i, "text": "event %d" % i,
+                  "ts": "2026-11-14T00:00:%02dZ" % i, "prev": prev, "session": "", "refs": {}}
+            if i == index:
+                ev["v"] = value
+            raw = encode_event(ev)
+            lines.append(raw)
+            prev = line_sha(raw)
+        (root / "events" / "2026-11-14.jsonl").write_bytes(b"\n".join(lines) + b"\n")
+        return Store(root).verify()
+
+    def test_r1_v_line_in_middle_of_schema1_store_is_flagged(self):
+        problems = self._v1_store_with_v_line("mid", 3, 2, 2)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "middle line with v=2 not flagged: %r" % (problems,))
+
+    def test_r1_v_line_first_in_schema1_store_is_flagged(self):
+        problems = self._v1_store_with_v_line("first", 3, 1, 2)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:1:") for p in problems),
+                        "first line with v=2 not flagged: %r" % (problems,))
+
+    def test_r1_v_line_last_in_schema1_store_is_flagged(self):
+        problems = self._v1_store_with_v_line("last", 3, 3, 2)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:3:") for p in problems),
+                        "last line with v=2 not flagged: %r" % (problems,))
+
+    def test_r2_string_v_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("strv", 3, 2, "2")
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as string \"2\" not flagged: %r" % (problems,))
+
+    def test_r2_bool_true_v_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("boolv", 3, 2, True)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as bool true not flagged: %r" % (problems,))
+
+    def test_r2_float_v_on_schema1_line_is_flagged(self):
+        problems = self._v1_store_with_v_line("floatv", 3, 2, 2.0)
+        self.assertTrue(any(p.startswith("2026-11-14.jsonl:2:") for p in problems),
+                        "v as float 2.0 not flagged: %r" % (problems,))
+
+    def test_r2_control_genuine_schema1_store_without_v_keys_is_clean(self):
+        self.assertEqual(self._v1_store_with_v_line("novkeys", 3, None, None), [])
+
     def test_p1_zero_event_store_without_head_is_clean(self):
         self.assertEqual(Store(self.root).verify(), [])
 

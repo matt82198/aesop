@@ -224,11 +224,18 @@ class Store:
                     problems.append("%s: unparseable line" % where)
                     prev_line = raw
                     continue
-                if not v2 and ev.get("v") == 2:
-                    # A v2 line under store.json schema 1 is a downgrade (finding 1): the v1
-                    # checks alone would pass a deleted tail, so report it.
-                    problems.append("%s: v is 2 but store.json schema is 1 (schema downgrade)"
-                                    % where)
+                if not v2 and "v" in ev:
+                    # A genuine v1 line has no "v" key at all, so any "v" under store.json
+                    # schema 1 is a downgrade (finding 1): the v1 checks alone would pass a
+                    # deleted tail. Int 2 keeps the downgrade wording; other values get a
+                    # generic message.
+                    value = ev["v"]
+                    if isinstance(value, int) and not isinstance(value, bool) and value == 2:
+                        problems.append("%s: v is 2 but store.json schema is 1 "
+                                        "(schema downgrade)" % where)
+                    else:
+                        problems.append("%s: line has a v key but store.json schema is 1"
+                                        % where)
                 want = line_sha(prev_line) if prev_line is not None else ""
                 if ev.get("prev") != want:
                     problems.append("%s: prev mismatch (chain broken or earlier line removed)"
