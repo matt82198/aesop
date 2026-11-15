@@ -370,5 +370,92 @@ def encode_line(ev):
     return json.dumps(ev, sort_keys=True).encode("utf-8") + b"\n"
 
 
+class AppendFailureModeTests(unittest.TestCase):
+    """Append failure modes: a head write failing after the durable line, a torn last
+    line, and a store.json.tmp left behind by a failed head write."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.tmp = self._td.name
+
+    def test_ea_head_failure_after_durable_line_is_store_error_do_not_retry(self):
+        from unittest import mock
+        root = make_store(Path(self.tmp) / "st", "keyrun")
+        s = Store(root)
+        with mock.patch("event_store.store.os.replace",
+                        side_effect=PermissionError(13, "held by a reader")):
+            with self.assertRaises(StoreError) as cm:
+                s.append("note", "o", "one", ts="2026-10-01T10:00:00Z")
+        self.assertIn("durable at seq 1; do not retry", str(cm.exception))
+        self.assertEqual(count_events(root), 1)
+
+    def test_eb_cli_head_failure_exits_nonzero_with_durable_message_no_traceback(self):
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        from event_store import cli as cli_mod
+        rp, stores = registry_for(self.tmp)
+        args = argparse.Namespace(kind="note", actor="o", text="x", ref=[],
+                                  project="keyrun", session="")
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"EVENT_STORES_REGISTRY": str(rp)}), \
+                mock.patch("event_store.store.os.replace",
+                           side_effect=PermissionError(13, "held by a reader")), \
+                contextlib.redirect_stderr(err):
+            rc = cli_mod.cmd_append(args)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("durable at seq 1; do not retry", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(count_events(stores["keyrun"]["path"]), 1)
+
+    def test_ec_head_failure_then_verify_reports_head_mismatch(self):
+        from unittest import mock
+        root = make_store(Path(self.tmp) / "st", "keyrun")
+        s = Store(root)
+        s.append("note", "o", "one", ts="2026-10-01T10:00:00Z")
+        s.append("note", "o", "two", ts="2026-10-01T11:00:00Z")
+        self.assertEqual(s.verify(), [])
+        with mock.patch("event_store.store.os.replace",
+                        side_effect=PermissionError(13, "held by a reader")):
+            with self.assertRaises(StoreError):
+                s.append("note", "o", "three", ts="2026-10-01T12:00:00Z")
+        problems = Store(root).verify()
+        self.assertTrue(any("head does not match" in p for p in problems), problems)
+
+    def test_ed_torn_last_line_is_store_error_naming_line_and_writes_nothing(self):
+        root = make_store(Path(self.tmp) / "st", "keyrun")
+        Store(root).append("note", "o", "one", ts="2026-10-01T10:00:00Z")
+        day = root / "events" / "2026-10-01.jsonl"
+        with day.open("ab") as fh:
+            fh.write(b'{"v":2,"ts":"2026-10-01T1')
+        before = day.read_bytes()
+        head_before = (root / "store.json").read_bytes()
+        with self.assertRaises(StoreError) as cm:
+            Store(root).append("note", "o", "two", ts="2026-10-01T11:00:00Z")
+        self.assertIn("2026-10-01.jsonl", str(cm.exception))
+        self.assertEqual(day.read_bytes(), before)
+        self.assertEqual((root / "store.json").read_bytes(), head_before)
+
+    def test_ee_store_json_tmp_removed_when_head_tmp_write_fails(self):
+        from unittest import mock
+        root = make_store(Path(self.tmp) / "st", "keyrun")
+        s = Store(root)
+        s.append("note", "o", "one", ts="2026-10-01T10:00:00Z")
+        real_write_text = Path.write_text
+
+        def failing_write_text(self_path, data, *args, **kwargs):
+            if self_path.name == "store.json.tmp":
+                real_write_text(self_path, '{"project": "keyr', encoding="utf-8")
+                raise OSError(28, "no space left on device")
+            return real_write_text(self_path, data, *args, **kwargs)
+
+        with mock.patch.object(Path, "write_text", failing_write_text):
+            with self.assertRaises((OSError, StoreError)):
+                s.append("note", "o", "two", ts="2026-10-01T11:00:00Z")
+        self.assertFalse((root / "store.json.tmp").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
