@@ -80,8 +80,18 @@ class VerifyRequiresHeadTests(unittest.TestCase):
         del meta["head"]
         write_meta(self.root, meta)
         problems = Store(self.root).verify()
-        self.assertTrue(any("head" in p for p in problems),
+        self.assertTrue(any("missing or malformed" in p for p in problems),
                         "non-empty v2 store with no head verified clean: %r" % (problems,))
+
+    def test_r2b_single_event_store_without_head_is_reported(self):
+        # One event is the smallest non-empty store; the head requirement must hold there too.
+        fill(self.root, 1)
+        meta = read_meta(self.root)
+        del meta["head"]
+        write_meta(self.root, meta)
+        problems = Store(self.root).verify()
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "one-event v2 store with no head verified clean: %r" % (problems,))
 
     def test_r3_null_head_is_reported(self):
         fill(self.root, 3)
@@ -89,8 +99,8 @@ class VerifyRequiresHeadTests(unittest.TestCase):
         meta["head"] = None
         write_meta(self.root, meta)
         problems = Store(self.root).verify()
-        self.assertTrue(problems,
-                        "non-empty v2 store with a null head verified clean")
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "non-empty v2 store with a null head verified clean: %r" % (problems,))
 
     def test_r4_wrong_type_head_is_reported(self):
         fill(self.root, 3)
@@ -98,8 +108,9 @@ class VerifyRequiresHeadTests(unittest.TestCase):
         meta["head"] = 12345
         write_meta(self.root, meta)
         problems = Store(self.root).verify()
-        self.assertTrue(problems,
-                        "non-empty v2 store with a non-string head verified clean")
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "non-empty v2 store with a non-string head verified clean: %r"
+                        % (problems,))
 
     def test_r5_malformed_head_shape_is_reported(self):
         fill(self.root, 3)
@@ -107,8 +118,9 @@ class VerifyRequiresHeadTests(unittest.TestCase):
         meta["head"] = "not-a-sha256"
         write_meta(self.root, meta)
         problems = Store(self.root).verify()
-        self.assertTrue(problems,
-                        "non-empty v2 store with a malformed head shape verified clean")
+        self.assertTrue(any("missing or malformed" in p for p in problems),
+                        "non-empty v2 store with a malformed head shape verified clean: %r"
+                        % (problems,))
 
     def test_p1_zero_event_store_without_head_is_clean(self):
         self.assertEqual(Store(self.root).verify(), [])
