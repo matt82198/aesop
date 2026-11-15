@@ -7,7 +7,8 @@ The cursor is {"seq": N, "head": sha} stored under AESOP_STATE_ROOT at
 
 Each pass runs under the store's append lock (store._append_lock): verify the chain, check
 the recorded head, read the cursor, refuse on any unknown kind, emit TRIGGER lines for
-trigger kinds past the cursor, then advance the cursor by atomic replace. Emission happens
+trigger kinds past the cursor, then advance the cursor by atomic replace (retried a few times on PermissionError, as Windows
+sharing violations from racing watchers are transient). Emission happens
 before the cursor write, so a crash in between re-emits on the next pass (at-least-once);
 consumers dedupe on (project, seq).
 A consumer must discard the TRIGGER lines of any pass that exits non-zero, because a failed
@@ -22,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -35,6 +37,8 @@ CURSOR_DIR = "event-watch"
 TRIGGER_KINDS = frozenset({"verdict", "ruling", "handback"}) & KINDS
 PROJECT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 HEAD_RE = re.compile(r"^[0-9a-f]{64}$")
+REPLACE_RETRIES = 5
+REPLACE_RETRY_DELAY_SECONDS = 0.1
 
 
 class WatchError(Exception):
@@ -77,7 +81,18 @@ def _write_cursor(path, seq, head):
         fh.write(json.dumps({"seq": seq, "head": head}, sort_keys=True) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    for attempt in range(REPLACE_RETRIES + 1):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                raise
+            time.sleep(REPLACE_RETRY_DELAY_SECONDS)
 
 
 def _check_store(store, entries):

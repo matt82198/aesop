@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -326,6 +327,60 @@ class WatchTest(unittest.TestCase):
         self.assertIn("malformed", out)
         self.assertEqual(triggers(out), [])
         self.assertEqual(self.cursor_bytes(), before)
+
+    def test_r14_seq_zero_cursor_with_head_is_refused(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        self.cursor.write_text(json.dumps({"seq": 0, "head": "a" * 64}), encoding="utf-8")
+        before = self.cursor_bytes()
+        rc, out = self.cli()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("FAILED", out)
+        self.assertIn("does not match", out)
+        self.assertEqual(triggers(out), [])
+        self.assertEqual(self.cursor_bytes(), before)
+
+    def test_r15_transient_replace_permission_error_is_retried(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        real_replace = os.replace
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(src)
+            if len(calls) <= 2:
+                raise PermissionError(32, "sharing violation")
+            return real_replace(src, dst)
+
+        emitted = []
+        with mock.patch.object(watch.os, "replace", side_effect=flaky), \
+                mock.patch.object(time, "sleep"):
+            code = watch.run(Store(self.store_root), self.cursor, emit=emitted.append)
+        self.assertEqual(code, 0, emitted)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(json.loads(self.cursor_bytes())["seq"], 1)
+
+    def test_r16_persistent_replace_failure_fails_closed_and_cleans_tmp(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        self.assertEqual(self.cli()[0], 0)
+        add(self.store_root, "ruling")
+        before = self.cursor_bytes()
+        attempts = []
+
+        def always_locked(src, dst):
+            attempts.append(src)
+            raise PermissionError(32, "sharing violation")
+
+        emitted = []
+        with mock.patch.object(watch.os, "replace", side_effect=always_locked), \
+                mock.patch.object(time, "sleep"):
+            code = watch.run(Store(self.store_root), self.cursor, emit=emitted.append)
+        self.assertEqual(code, 1, emitted)
+        self.assertIn("FAILED", emitted[-1])
+        self.assertEqual(len(attempts), watch.REPLACE_RETRIES + 1)
+        self.assertEqual(self.cursor_bytes(), before)
+        self.assertFalse(self.cursor.with_name(self.cursor.name + ".tmp").exists())
 
 
 if __name__ == "__main__":
