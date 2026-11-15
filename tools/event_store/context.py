@@ -99,7 +99,8 @@ def build_context(store_path, task=None, max_bytes=None):
         return _cap([BROKEN_LINE] + [_one_line(p) for p in problems], max_bytes)
     facts = []
     for raw, ev in _raw_event_lines(store):
-        if task is not None and (ev.get("refs") or {}).get(TASK_REF_KEY) != task:
+        refs = ev.get("refs")
+        if task is not None and not (isinstance(refs, dict) and refs.get(TASK_REF_KEY) == task):
             continue
         facts.append("seq=%s sha=%s ts=%s actor=%s kind=%s %s" % (
             _one_line(ev.get("seq")),
