@@ -166,6 +166,7 @@ class WatchTest(unittest.TestCase):
         rc, out = self.cli()
         self.assertEqual(rc, 1, out)
         self.assertIn("FAILED", out)
+        self.assertIn("store does not verify", out)
         self.assertEqual(triggers(out), [])
         self.assertEqual(self.cursor_bytes(), before)
 
@@ -180,6 +181,7 @@ class WatchTest(unittest.TestCase):
         rc, out = self.cli()
         self.assertEqual(rc, 1, out)
         self.assertIn("FAILED", out)
+        self.assertIn("store does not verify", out)
         self.assertEqual(triggers(out), [])
         self.assertEqual(self.cursor_bytes(), before)
 
@@ -199,6 +201,7 @@ class WatchTest(unittest.TestCase):
         rc, out = self.cli()
         self.assertEqual(rc, 1, out)
         self.assertIn("FAILED", out)
+        self.assertIn("a first run needs --init", out)
         self.assertFalse(self.cursor.exists())
 
     def test_r5_cursor_ahead_of_tail_fails(self):
@@ -220,6 +223,7 @@ class WatchTest(unittest.TestCase):
         rc, out = self.cli()
         self.assertEqual(rc, 1, out)
         self.assertIn("FAILED", out)
+        self.assertIn("unknown kind 'frobnicate'", out)
         self.assertEqual(triggers(out), [])
         self.assertEqual(self.cursor_bytes(), before)
 
@@ -274,6 +278,53 @@ class WatchTest(unittest.TestCase):
             code = watch.run(Store(self.store_root), self.cursor, emit=emit)
         self.assertEqual(code, 1)
         self.assertIn("FAILED", emitted[-1])
+        self.assertEqual(self.cursor_bytes(), before)
+
+    def test_r11_partial_batch_failure_leaves_cursor_unchanged(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        add(self.store_root, "ruling")
+        self.assertEqual(self.cli()[0], 0)
+        add(self.store_root, "handback")
+        add(self.store_root, "verdict")
+        before = self.cursor_bytes()
+        triggered = []
+
+        def emit(line):
+            if line.startswith("TRIGGER "):
+                triggered.append(line)
+                if len(triggered) == 2:
+                    raise OSError("consumer pipe closed")
+
+        code = watch.run(Store(self.store_root), self.cursor, emit=emit)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(triggered), 2)
+        self.assertEqual(self.cursor_bytes(), before)
+
+    def test_r12_failed_cursor_replace_keeps_previous_cursor(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        self.assertEqual(self.cli()[0], 0)
+        add(self.store_root, "ruling")
+        before = self.cursor_bytes()
+        with mock.patch.object(watch.os, "replace", side_effect=OSError("disk full")):
+            code = watch.run(Store(self.store_root), self.cursor, emit=lambda line: None)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.cursor_bytes(), before)
+        self.assertEqual(json.loads(before)["seq"], 1)
+
+    def test_r13_negative_cursor_seq_refused_without_trigger(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        add(self.store_root, "note")
+        first_line = self.day_file().read_bytes().split(b"\n")[0]
+        self.cursor.write_text(
+            json.dumps({"seq": -1, "head": store_mod.line_sha(first_line)}), encoding="utf-8")
+        before = self.cursor_bytes()
+        rc, out = self.cli()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("malformed", out)
+        self.assertEqual(triggers(out), [])
         self.assertEqual(self.cursor_bytes(), before)
 
 

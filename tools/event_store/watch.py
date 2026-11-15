@@ -10,6 +10,9 @@ the recorded head, read the cursor, refuse on any unknown kind, emit TRIGGER lin
 trigger kinds past the cursor, then advance the cursor by atomic replace. Emission happens
 before the cursor write, so a crash in between re-emits on the next pass (at-least-once);
 consumers dedupe on (project, seq).
+A consumer must discard the TRIGGER lines of any pass that exits non-zero, because a failed
+pass may already have emitted some of them. Emission runs while the append lock is held, so a
+consumer must read stdout promptly and must never block on it: a stalled reader stalls appenders.
 
 Output: "TRIGGER seq=N kind=K ref=P" lines, then "WATCH OK cursor=N", or "WATCH FAILED:
 <reason>" with exit 1 and no cursor change. Exit codes: 0 ok, 1 failed, 2 refused/usage.
@@ -70,8 +73,10 @@ def _read_cursor(path):
 def _write_cursor(path, seq, head):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"seq": seq, "head": head}, sort_keys=True) + "\n",
-                   encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"seq": seq, "head": head}, sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, path)
 
 
