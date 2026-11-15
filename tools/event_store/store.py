@@ -191,8 +191,9 @@ class Store:
     def _write_head(self, head):
         """Record the sha of the store's last line as store.json "head" (atomic replace).
 
-        Head is an optional key: a store.json without it verifies exactly as before, so
-        existing stores do not go red. Only the one key changes; other keys are kept.
+        Head is required once a schema-2 store holds events: verify reports a non-empty
+        schema-2 store whose head is missing or malformed. A zero-event store has no head
+        to check. Only the one key changes; other keys are kept.
         """
         meta_path = self.path / "store.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -265,11 +266,20 @@ class Store:
             if not v2 and file_ts is not None:
                 prev_file_ts = file_ts
         head = self._meta.get("head") if v2 else None
-        if head is not None:
+        want_head = line_sha(prev_line) if prev_line is not None else ""
+        if v2 and prev_line is not None and not _is_sha256(head):
+            # A non-empty v2 store must carry a head. Without it, deleting the last line
+            # would verify clean (finding A1), so a missing or malformed head is a problem.
+            problems.append("store.json: head missing or malformed on a non-empty store "
+                            "(the head anchor is required once the store holds events)")
+        elif head is not None and head != want_head:
             # The chain proves each line against its predecessor, not the final line's own
             # bytes. The recorded head covers the tail, so an edit to the last line is caught.
-            want_head = line_sha(prev_line) if prev_line is not None else ""
-            if head != want_head:
-                problems.append("store.json: head does not match the last line (last line "
-                                "edited, or lines removed or appended outside the store)")
+            problems.append("store.json: head does not match the last line (last line "
+                            "edited, or lines removed or appended outside the store)")
         return problems
+
+
+def _is_sha256(value):
+    """True when value is a lowercase 64-hex sha256 string."""
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
