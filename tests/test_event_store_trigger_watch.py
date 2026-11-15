@@ -382,6 +382,28 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self.cursor_bytes(), before)
         self.assertFalse(self.cursor.with_name(self.cursor.name + ".tmp").exists())
 
+    def test_r17_non_permission_replace_error_is_not_retried(self):
+        self.cli("--init")
+        add(self.store_root, "verdict")
+        self.assertEqual(self.cli()[0], 0)
+        add(self.store_root, "ruling")
+        before = self.cursor_bytes()
+        attempts = []
+
+        def disk_full(src, dst):
+            attempts.append(src)
+            raise OSError(28, "disk full")
+
+        emitted = []
+        with mock.patch.object(watch.os, "replace", side_effect=disk_full), \
+                mock.patch.object(time, "sleep") as sleep:
+            code = watch.run(Store(self.store_root), self.cursor, emit=emitted.append)
+        self.assertEqual(code, 1, emitted)
+        self.assertIn("FAILED", emitted[-1])
+        self.assertEqual(len(attempts), 1)
+        sleep.assert_not_called()
+        self.assertEqual(self.cursor_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
