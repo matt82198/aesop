@@ -306,15 +306,12 @@ def main(argv=None):
         if args.dest_dir
         else (home_dir / "Library" / "LaunchAgents")
     )
-    state_dir = (
-        Path(args.state_dir)
-        if args.state_dir
-        else (
-            Path(os.environ["AESOP_STATE_ROOT"])
-            if os.environ.get("AESOP_STATE_ROOT")
-            else (aesop_root / "state")
-        )
-    )
+    if args.state_dir:
+        state_dir = Path(args.state_dir)
+    elif not args.aesop_root and os.environ.get("AESOP_STATE_ROOT"):
+        state_dir = Path(os.environ["AESOP_STATE_ROOT"])
+    else:
+        state_dir = aesop_root / "state"
 
     agents = build_agent_specs(
         aesop_root=aesop_root,

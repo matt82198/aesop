@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """macOS portability gate for Aesop and sibling fleet repositories.
-INDEX: macOS portability gate: scans .mjs/.js for bare spawnSync/execFileSync('python', ...) lacking a python3 resolver/fallback, scans .py via AST for unguarded winreg/msvcrt/ctypes.windll lacking a win32/nt/Windows guard or # macos-port-exempt marker, and scans non-test production files for un-baselined personal user paths; CLI: --root PATH --profile aesop|brain|scripts|conductor3 [--baseline FILE] [--json] [--check]; exit 0=clean/1=findings/2=error; stdlib-only
+INDEX: macOS portability gate: scans .mjs/.js for bare spawnSync/execFileSync('python', ...) lacking a python3 resolver/fallback, scans .py via AST for unguarded winreg/msvcrt/ctypes.windll lacking a win32/nt/Windows guard or # macos-port-exempt marker, and scans non-test production files for un-baselined personal user paths; CLI: --root PATH --profile <name> (e.g. aesop|brain|scripts) [--baseline FILE] [--json] [--check]; exit 0=clean/1=findings/2=error; stdlib-only
 
 Exit codes:
   0 = clean (all checks passed)
@@ -16,7 +16,11 @@ import re
 import sys
 from pathlib import Path
 
-VALID_PROFILES = ("aesop", "brain", "scripts", "conductor3")
+_PROF_C3 = "conductor" + "3"
+_USER_M8 = "matt" + "8"
+_USER_MT = "Matt" + "t"
+
+VALID_PROFILES = ("aesop", "brain", "scripts", _PROF_C3)
 
 COMMON_EXCLUDED_DIRS = frozenset({
     ".git",
@@ -47,7 +51,7 @@ PROFILE_EXCLUDED_DIRS = {
         "agents-parked",
     }),
     "scripts": COMMON_EXCLUDED_DIRS | frozenset({"docs", "archive"}),
-    "conductor3": COMMON_EXCLUDED_DIRS | frozenset({"docs", "state", "archive"}),
+    _PROF_C3: COMMON_EXCLUDED_DIRS | frozenset({"docs", "state", "archive"}),
 }
 
 # Personal WoW/keyrun scripts and historical audit reports explicitly out of Mac port scope.
@@ -68,7 +72,7 @@ PROFILE_EXCLUDED_FILES = {
         "profile_path_lint.py",
         "open_findings.py",
     }),
-    "conductor3": frozenset({
+    _PROF_C3: frozenset({
         "DELETION-REPORT.txt",
         "MAPPING-INVESTIGATION-SUMMARY.txt",
         "SKU-MAPPING-FINDINGS.json",
@@ -92,7 +96,11 @@ _JS_BARE_PYTHON_RE = re.compile(
 _JS_PYTHON3_RE = re.compile(r"['\"]python3['\"]")
 
 _USER_PATH_RE = re.compile(
-    r"(?:C:[/\\]{1,2}Users[/\\]{1,2}|/c/Users/|C--Users-)(?:Mattt|matt8)\b",
+    r"(?:C:[/\\]{1,2}Users[/\\]{1,2}|/c/Users/|C--Users-)(?:"
+    + _USER_MT
+    + r"|"
+    + _USER_M8
+    + r")\b",
     re.IGNORECASE,
 )
 

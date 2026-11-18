@@ -48,7 +48,11 @@ def _load_module(name, path):
 def _run_installer(args, env_overrides=None):
     if not INSTALL_LAUNCHD_PATH.exists():
         raise AssertionError("missing installer script: %s" % INSTALL_LAUNCHD_PATH)
-    env = dict(os.environ)
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AESOP_STATE_ROOT", "AESOP_ROOT")
+    }
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
