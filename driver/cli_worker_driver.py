@@ -43,6 +43,7 @@ from proc_util import kill_process_tree, run_shell_bounded, _DRAIN_TIMEOUT_S
 
 _STDERR_TAIL_CHARS = 400
 _GIT_TIMEOUT_S = 60.0
+_PROMPT_PLACEHOLDER = "{prompt}"
 
 
 def _validate_argv(argv: Sequence[str]) -> Tuple[str, ...]:
@@ -228,9 +229,13 @@ class CliWorkerDriver(AgentDriver):
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
+        # A "{prompt}" argv element receives the prompt as an argument (agy -p
+        # takes its prompt this way). When present, stdin is left empty.
+        args = [prompt if part == _PROMPT_PLACEHOLDER else part for part in self._argv]
+        stdin_text = "" if _PROMPT_PLACEHOLDER in self._argv else prompt
         try:
             proc = subprocess.Popen(
-                list(self._argv),
+                args,
                 cwd=workdir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -244,7 +249,7 @@ class CliWorkerDriver(AgentDriver):
             return 127, "", str(exc)
 
         try:
-            stdout, stderr = proc.communicate(input=prompt, timeout=self._timeout_s)
+            stdout, stderr = proc.communicate(input=stdin_text, timeout=self._timeout_s)
             return proc.returncode, stdout or "", stderr or ""
         except subprocess.TimeoutExpired:
             kill_process_tree(proc)

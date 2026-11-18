@@ -1,0 +1,18 @@
+{
+  "backend": "cli",
+  "argv": [
+    "C:/Users/Mattt/AppData/Local/agy/bin/agy.exe",
+    "-p",
+    "{prompt}",
+    "--model",
+    "gemini-4-hydrogen-low",
+    "--print-timeout",
+    "300s",
+    "--output-format",
+    "text"
+  ],
+  "timeout_s": 330,
+  "model_map": {
+    "worker": "gemini-4-hydrogen-low"
+  }
+}

@@ -53,6 +53,11 @@ elif mode == "fail":
     sys.exit(3)
 elif mode == "hang":
     time.sleep(60)
+elif mode == "argv":
+    # prompt arrives as the final argv element, not on stdin
+    prompt_text = sys.argv[3]
+    pathlib.Path(target).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(target).write_text(prompt_text + "\\n", encoding="utf-8")
 """
 
 
@@ -175,6 +180,37 @@ class TestCliWorkerDispatch(_CliRepoFixture):
         elapsed = time.monotonic() - start
         self.assertFalse(result.ok)
         self.assertLess(elapsed, 30.0)
+
+
+class TestCliWorkerPromptArgv(_CliRepoFixture):
+    """A {prompt} placeholder in argv delivers the prompt as an argv element."""
+
+    def test_prompt_placeholder_is_substituted_into_argv(self):
+        argv = [sys.executable, str(self.fake), "argv", "out/owned.txt", "{prompt}"]
+        driver = CliWorkerDriver(argv=argv, timeout_s=30.0)
+        result = driver.dispatch_worker(
+            WorkerRequest(
+                prompt="write the file",
+                owned_files=("out/owned.txt",),
+                workdir=str(self.repo),
+            )
+        )
+        self.assertTrue(result.ok, result.error)
+        written = (self.repo / "out" / "owned.txt").read_text(encoding="utf-8")
+        self.assertEqual(written, "write the file\n")
+
+    def test_placeholder_is_not_passed_literally_without_prompt(self):
+        argv = [sys.executable, str(self.fake), "argv", "out/owned.txt", "{prompt}"]
+        driver = CliWorkerDriver(argv=argv, timeout_s=30.0)
+        driver.dispatch_worker(
+            WorkerRequest(
+                prompt="",
+                owned_files=("out/owned.txt",),
+                workdir=str(self.repo),
+            )
+        )
+        written = (self.repo / "out" / "owned.txt").read_text(encoding="utf-8")
+        self.assertNotIn("{prompt}", written)
 
 
 class TestCliWorkerBridge(_CliRepoFixture):
