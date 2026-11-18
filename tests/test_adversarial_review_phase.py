@@ -132,6 +132,16 @@ class FakeReviewDriver(AgentDriver):
             )
 
         # Return result based on whether we should refute or approve
+        # Every worker response must carry a schema-valid patch (files list with
+        # path/contents) so the pre-test model-output gate accepts it.
+        patch = {
+            "files": [
+                {"path": f, "contents": f"# Fixed by FakeReviewDriver dispatch {self.dispatch_count}\n"}
+                for f in files_written
+            ],
+            "summary": "done",
+            "done": True,
+        }
         if slug in self.refute_slugs:
             # Return refutation (approved=False, indicating issues found)
             return WorkerResult(
@@ -139,6 +149,7 @@ class FakeReviewDriver(AgentDriver):
                 status=WORKER_DONE,
                 ok=False,  # Refuted: issues found
                 error="Reviewer refuted: logic is incorrect",
+                structured=dict(patch),
                 files_written=tuple(files_written),
                 tokens_spent=self.tokens_per_call,
             )
@@ -150,7 +161,7 @@ class FakeReviewDriver(AgentDriver):
                 worker_id=worker_id,
                 status=WORKER_DONE,
                 ok=True,  # For build: verified; for review: approved (no issues)
-                structured={"review": "approved"},
+                structured=dict(patch),
                 files_written=tuple(files_written),
                 tokens_spent=self.tokens_per_call,
             )
