@@ -179,6 +179,10 @@ class FakeDriverForShip(AgentDriver):
                 fpath.parent.mkdir(parents=True, exist_ok=True)
                 fpath.write_text(f"# Fixed by dispatch {self.dispatch_count}\n")
                 files_written.append(f)
+            patch_files = [
+                {"path": f, "contents": f"# Fixed by dispatch {self.dispatch_count}\n"}
+                for f in files_written
+            ]
         except Exception as exc:
             return WorkerResult(
                 worker_id=worker_id,
@@ -197,7 +201,11 @@ class FakeDriverForShip(AgentDriver):
             worker_id=worker_id,
             status=WORKER_DONE,
             ok=True,
-            structured={"summary": f"Fixed {len(request.owned_files)} files"},
+            structured={
+                "files": patch_files,
+                "summary": f"Fixed {len(request.owned_files)} files",
+                "done": True,
+            },
             files_written=tuple(files_written),
             tokens_spent=100,
         )
