@@ -37,7 +37,7 @@ Each cycle:
 
 **Output formats**:
 - **BRIEF.md**: Human-readable notes, status lines, warnings; overwritten each cycle.
-- **SIGNALS.json**: Flat JSON object with signal key → {value, timestamp, details}; overwritten each cycle.
+- **SIGNALS.json**: Flat JSON object with signal key → {value, timestamp, details}; overwritten each cycle. `junk.durationMs` is the monotonic (`performance.now()`) wall time of the junk-script walk only, excluding process spawn and git calls; the `tests/collect-signals.test.mjs` time bounds assert on it, not on whole-process time.
 
 **Extended signals** (opt-in, default OFF): junk, strayRepo, respawnWatch, unreviewedPrompts checks; skip-step if disabled.
 - Config key: `monitor.extended_signals` (boolean, default `false`) in aesop.config.json (check monitor section).

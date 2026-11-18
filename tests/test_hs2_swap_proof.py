@@ -129,11 +129,16 @@ class ShipCapableFakeDriver(AgentDriver):
                 ok=False,
                 error="file write failed: %s" % exc,
             )
+        patch = {
+            "files": [{"path": f, "contents": "# written by fake dispatch\n"} for f in files_written],
+            "summary": "done",
+            "done": True,
+        }
         return WorkerResult(
             worker_id=worker_id,
             status=WORKER_DONE,
             ok=True,
-            structured={"summary": "done"},
+            structured=patch,
             files_written=tuple(files_written),
             tokens_spent=100,
         )
