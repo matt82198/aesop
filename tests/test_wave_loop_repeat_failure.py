@@ -200,6 +200,59 @@ class TestRepairRoundIntegration(unittest.TestCase):
         # Round 2 still uses the normal repair prompt (carries the repair header).
         self.assertIn("Test failed with exit code", prompts[1])
 
+    def test_repair_round_two_carries_latest_test_output(self):
+        """Each repair round must send the LATEST test output, not round 0's.
+
+        Initial dispatch prints FAIL-A; repair round 1 dispatches and prints
+        FAIL-B; repair round 2 dispatches and prints FAIL-C. The LAST TEST OUTPUT
+        handed to the worker in repair round 2 must be FAIL-B, not FAIL-A.
+        """
+        sent_last_outputs = []
+        dispatch_outputs = iter(["FAIL-B\n", "FAIL-C\n"])
+
+        def fake_build(driver, repair_item):
+            sent_last_outputs.append(repair_item.get("lastTestOutput", ""))
+            return dict(repair_item)
+
+        def fake_dispatch(driver, manifest_item, workdir=None):
+            return {
+                "verified": False,
+                "testExit": 1,
+                "testStdout": next(dispatch_outputs),
+                "testStderr": "",
+                "error": None,
+                "filesWritten": [],
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "mod.py").write_text("VALUE = 3\n", encoding="utf-8")
+            item = {
+                "slug": "s2",
+                "prompt": "TASK: make VALUE 2",
+                "ownsFiles": ["mod.py"],
+                "workDir": tmp,
+            }
+            item_result = {
+                "verified": False,
+                "testExit": 1,
+                "testStdout": "FAIL-A\n",
+                "testStderr": "",
+                "error": None,
+                "repairs": 0,
+                "filesWritten": [],
+            }
+            with mock.patch.object(wave_loop, "build_manifest_item", side_effect=fake_build), \
+                    mock.patch.object(wave_loop, "dispatch_item", side_effect=fake_dispatch):
+                r1 = wave_loop._repair_one_round([(0, item, item_result)], None, None, _FakeClaim())
+                wave_loop._repair_one_round(r1, None, None, _FakeClaim())
+
+        self.assertEqual(len(sent_last_outputs), 2)
+        # Repair round 1 carries the initial dispatch output (FAIL-A).
+        self.assertIn("FAIL-A", sent_last_outputs[0])
+        # Repair round 2 must carry the latest output (FAIL-B), not the stale FAIL-A.
+        self.assertIn("FAIL-B", sent_last_outputs[1])
+        self.assertNotIn("FAIL-A", sent_last_outputs[1])
+
 
 if __name__ == "__main__":
     unittest.main()

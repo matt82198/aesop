@@ -2288,6 +2288,10 @@ def _repair_one_round(
             item_result["testExit"] = dispatch_result.get("testExit")
             item_result["error"] = dispatch_result.get("error")
             item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
+            # Refresh captured test output from THIS round so the next repair
+            # round's LAST TEST OUTPUT is the latest, not round 0's.
+            item_result["testStdout"] = dispatch_result.get("testStdout", "")
+            item_result["testStderr"] = dispatch_result.get("testStderr", "")
             item_result["repairs"] += 1
 
             if state_dir:
