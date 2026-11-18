@@ -368,8 +368,16 @@ def validate_api_key_env(name, where: str = "backend") -> None:
 # blocks require an explicit base_url; the orchestrator seat may omit it).
 DEFAULT_ORCHESTRATOR_BASE_URL = "https://api.openai.com/v1"
 
-_VALID_WORKER_BACKENDS = ("claude", "codex", "openai-compatible", "anthropic")
+_VALID_WORKER_BACKENDS = ("claude", "codex", "openai-compatible", "anthropic", "cli")
 _VALID_ORCHESTRATOR_BACKENDS = ("harness", "claude", "openai-compatible")
+
+
+def _validate_cli_argv(argv) -> None:
+    """Raise unless argv is a non-empty list of non-empty strings."""
+    if not isinstance(argv, list) or not argv:
+        raise ValueError("'argv' must be a non-empty list of strings")
+    if not all(isinstance(part, str) and part for part in argv):
+        raise ValueError("'argv' entries must be non-empty strings")
 
 
 def _validate_worker_seat(block: dict) -> None:
@@ -414,6 +422,11 @@ def _validate_worker_seat(block: dict) -> None:
             raise ValueError("'model' must be a string")
         if "api_key_env" in block:
             validate_api_key_env(block["api_key_env"], where="seats.worker")
+    if backend_name == "cli":
+        # Headless CLI worker: argv is required and must be a list of strings.
+        if "argv" not in block:
+            raise ValueError("backend 'cli' requires 'argv' field")
+        _validate_cli_argv(block["argv"])
 
 
 def _validate_orchestrator_seat(block: dict) -> None:
@@ -753,6 +766,24 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
             max_owned_bytes=config.get("max_owned_bytes", 200_000),
             max_retries=config.get("max_retries", 2),
             timeout_s=config.get("timeout_s", 120.0),
+        )
+
+    if backend_name == "cli":
+        # Import here to avoid circular dependency.
+        try:
+            from cli_worker_driver import CliWorkerDriver
+        except ImportError as exc:
+            raise RuntimeError(
+                "Cannot import CliWorkerDriver. Make sure cli_worker_driver.py is in the driver/ directory."
+            ) from exc
+
+        if "argv" not in config:
+            raise ValueError("backend 'cli' requires 'argv' field")
+        _validate_cli_argv(config["argv"])
+        return CliWorkerDriver(
+            argv=config["argv"],
+            timeout_s=config.get("timeout_s", 120.0),
+            model_map=config.get("model_map", {}),
         )
 
     raise ValueError(f"Unknown backend '{backend_name}'")
