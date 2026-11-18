@@ -29,6 +29,7 @@ Exit codes: 0 = cadences match (or skipped), 1 = drift found, 2 = cannot evaluat
 """
 
 import json
+import plistlib
 import re
 import subprocess
 import sys
@@ -245,6 +246,120 @@ def query_task_xml(task_name):
 
 
 # --------------------------------------------------------------------------
+# macOS launchd plists -> live facts
+# --------------------------------------------------------------------------
+
+_LAUNCHD_PS1_LABEL_MAP = (
+    ("com.aesop.watchdog", "AesopWatchdogDaemon"),
+    ("com.aesop.monitor", "AesopRefinementMonitor"),
+    ("com.aesop.merge-queue", "AesopMergeQueue"),
+)
+DEFAULT_LAUNCHD_SELFHEAL_SECONDS = 60
+
+
+def default_expected_launchd_cadences(root=None):
+    """Derive {launchd label -> expected StartInterval seconds} from install-tasks.ps1."""
+    base = Path(root) if root else Path(__file__).resolve().parent.parent
+    ps1_path = base / "daemons" / "install-tasks.ps1"
+    expected_minutes = {
+        "AesopWatchdogDaemon": 5,
+        "AesopRefinementMonitor": 20,
+        "AesopMergeQueue": 5,
+    }
+    if ps1_path.is_file():
+        source = ps1_path.read_text(encoding="utf-8", errors="replace")
+        expected_minutes.update(parse_expected_cadences(source))
+
+    cadences = {}
+    for label, ps1_name in _LAUNCHD_PS1_LABEL_MAP:
+        cadences[label] = int(expected_minutes[ps1_name]) * 60
+    cadences["com.aesop.selfheal"] = DEFAULT_LAUNCHD_SELFHEAL_SECONDS
+    return cadences
+
+
+def parse_launchd_plist(plist_path):
+    """Parse one launchd .plist file into {interval_seconds, enabled}."""
+    path = Path(plist_path)
+    if not path.is_file():
+        raise TaskMissingError(str(path))
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise TaskQueryError("cannot read plist %s: %s" % (path, exc))
+    try:
+        data = plistlib.loads(raw)
+    except Exception as exc:
+        raise CadenceError("malformed launchd plist %s: %s" % (path, exc))
+    if not isinstance(data, dict):
+        raise CadenceError("launchd plist %s root must be a dict" % path)
+
+    interval = data.get("StartInterval")
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+        raise CadenceError("launchd plist %s declares no valid StartInterval" % path)
+
+    disabled = bool(data.get("Disabled", False))
+    return {
+        "interval_seconds": float(interval),
+        "enabled": not disabled,
+    }
+
+
+def check_launchd_cadence(plist_dir, expected=None, root=None):
+    """Validate launchd .plist cadences in plist_dir against expected seconds.
+
+    Exit-code precedence matches check_cadences(): 2 > 1 > 0.
+    """
+    if expected is None:
+        expected = default_expected_launchd_cadences(root=root)
+
+    dest = Path(plist_dir)
+    tasks = []
+    worst = 0
+    for label in sorted(expected):
+        want_seconds = float(expected[label])
+        plist_path = dest / (label + ".plist")
+        record = {
+            "task": label,
+            "expected_seconds": want_seconds,
+            "expected_minutes": want_seconds / 60.0,
+            "plist_path": str(plist_path),
+        }
+        try:
+            live = parse_launchd_plist(plist_path)
+        except TaskMissingError:
+            record.update(status="MISSING", detail="plist is not installed")
+            worst = max(worst, 1)
+        except (TaskQueryError, CadenceError) as exc:
+            record.update(status="QUERY_ERROR", detail=str(exc))
+            worst = 2
+        else:
+            actual_sec = live["interval_seconds"]
+            record["actual_seconds"] = actual_sec
+            record["actual_minutes"] = actual_sec / 60.0
+            record["enabled"] = live["enabled"]
+            if not live["enabled"]:
+                record.update(status="DISABLED", detail="plist is installed but Disabled=true")
+                worst = max(worst, 1)
+            elif abs(actual_sec - want_seconds) > 1e-9:
+                record.update(
+                    status="INTERVAL_MISMATCH",
+                    detail="runs every %gs, definition says %gs" % (actual_sec, want_seconds),
+                )
+                worst = max(worst, 1)
+            else:
+                record.update(status="OK", detail="every %gs as defined" % want_seconds)
+        tasks.append(record)
+
+    return {
+        "status": "OK" if worst == 0 else ("DRIFT" if worst == 1 else "ERROR"),
+        "exit_code": worst,
+        "platform": "darwin",
+        "plist_dir": str(dest),
+        "tasks": tasks,
+    }
+
+
+# --------------------------------------------------------------------------
 # Verdicts
 # --------------------------------------------------------------------------
 
@@ -315,16 +430,17 @@ def render_text(report):
 
 _USAGE = (
     "usage: task_cadence_check.py [--json] [--root DIR] "
-    "[--install-script PATH] [--help]"
+    "[--install-script PATH] [--launchd-dir DIR] [--help]"
 )
 
 
-def run_cli(argv, platform=None, query=query_task_xml):
+def run_cli(argv, platform=None, query=query_task_xml, launchd_dir=None):
     """Return (exit_code, output_text). Pure enough for tests to drive."""
     platform = platform if platform is not None else sys.platform
     as_json = False
     root = None
     script = None
+    cli_launchd_dir = launchd_dir
 
     args = list(argv)
     while args:
@@ -341,8 +457,28 @@ def run_cli(argv, platform=None, query=query_task_xml):
             if not args:
                 return 2, "error: --install-script requires a value\n" + _USAGE
             script = args.pop(0)
+        elif arg == "--launchd-dir":
+            if not args:
+                return 2, "error: --launchd-dir requires a value\n" + _USAGE
+            cli_launchd_dir = args.pop(0)
         else:
             return 2, "error: unknown argument %r\n%s" % (arg, _USAGE)
+
+    if str(platform).startswith("darwin"):
+        base = Path(root) if root else Path(__file__).resolve().parent.parent
+        plist_dir = (
+            Path(cli_launchd_dir)
+            if cli_launchd_dir
+            else (Path.home() / "Library" / "LaunchAgents")
+        )
+        try:
+            expected_launchd = default_expected_launchd_cadences(root=base)
+        except CadenceError as exc:
+            return 2, "error: %s" % exc
+        report = check_launchd_cadence(plist_dir=plist_dir, expected=expected_launchd)
+        if as_json:
+            return report["exit_code"], json.dumps(report, indent=2)
+        return report["exit_code"], render_text(report)
 
     if not str(platform).startswith("win"):
         if as_json:

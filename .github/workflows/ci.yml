@@ -357,6 +357,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/portability_check.py --root . --baseline .portability-baseline.json
 
+      - name: macOS portability gate
+        if: matrix.python-shard == 0
+        run: python tools/macos_portability_gate.py --root . --profile aesop
+
       - name: Pyflakes ratchet gate (Guardrail G15)
         if: matrix.python-shard == 0
         run: python tools/pyflakes_gate.py --root . --baseline .pyflakes-baseline.json

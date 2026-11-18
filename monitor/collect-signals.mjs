@@ -719,6 +719,17 @@ function checkMainCiStatus() {
 // clean bill of health. Every failure path emits state:'UNKNOWN' with
 // degraded:true and count:null so no consumer can read a broken check as
 // "0 stalls". Only a check that actually ran yields state 'OK'/'STALLED'.
+function resolvePythonBin() {
+  const probe = spawnSync('python3', ['--version'], {
+    stdio: 'ignore',
+    timeout: 5000,
+  });
+  if (!probe.error && probe.status === 0) {
+    return 'python3';
+  }
+  return 'python';
+}
+
 function degradedStallSignal(reason) {
   return {
     available: false,
@@ -754,7 +765,7 @@ function checkAgentStalls() {
 
   try {
     // Invoke stall_check.py with a bounded timeout (fail-closed on any failure)
-    const result = spawnSync('python', [stallCheckPy, '--json'], {
+    const result = spawnSync(resolvePythonBin(), [stallCheckPy, '--json'], {
       encoding: 'utf8',
       timeout: 5000,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -842,7 +853,7 @@ function performAutoLogRotation(logFiles, actionsLogPath) {
     try {
       // Invoke rotate_logs.py with thresholds from config
       // Use execFileSync instead of execSync for command injection protection (no shell)
-      execFileSync('python', [
+      execFileSync(resolvePythonBin(), [
         rotateLogsPy,
         logPath,
         '--max-lines',

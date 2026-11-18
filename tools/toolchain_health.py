@@ -62,11 +62,13 @@ REQUIRED_BINARIES = {
     "bash": [
         "C:\\Program Files\\Git\\bin\\bash.exe",
         "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+        "/opt/homebrew/bin/bash",
+        "/usr/local/bin/bash",
         "/usr/bin/bash",
         "/bin/bash",
     ],
     "git": ["git"],
-    "python": ["python", "python3"],
+    "python": ["python", "python3"] if sys.platform == "win32" else ["python3", "python"],
     "node": ["node"],
     "curl": ["curl"],
 }

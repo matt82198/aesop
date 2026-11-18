@@ -502,22 +502,24 @@ if (isRuntimeCommand) {
         i++;
       }
     }
-    const result = spawnSync('python3', [initScript, ...initArgs], {
+    function resolvePythonBin() {
+      const probe = spawnSync('python3', ['--version'], {
+        stdio: 'ignore',
+        timeout: 5000,
+        windowsHide: true
+      });
+      if (!probe.error && probe.status === 0) {
+        return 'python3';
+      }
+      return 'python';
+    }
+    const pythonBin = resolvePythonBin();
+    const result = spawnSync(pythonBin, [initScript, ...initArgs], {
       stdio: 'inherit',
       timeout: 30000,
       windowsHide: true
     });
-    if (result.error) {
-      // Fallback to 'python' if 'python3' is not found
-      const fallback = spawnSync('python', [initScript, ...initArgs], {
-        stdio: 'inherit',
-        timeout: 30000,
-        windowsHide: true
-      });
-      process.exit(exitCodeFromSpawnResult(fallback));
-    } else {
-      process.exit(exitCodeFromSpawnResult(result));
-    }
+    process.exit(exitCodeFromSpawnResult(result));
     return;
   }
 
