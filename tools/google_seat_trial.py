@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Hot-swap trial runner: drive the aesop worker seat with a Google Gemini model.
+"""INDEX: Hot-swap trial runner driving the aesop worker seat with a Google Gemini model (--config/--result/--max-attempts; key read by env var name only; exit 0/1/2).
+
+Hot-swap trial runner: drive the aesop worker seat with a Google Gemini model.
 
 Reads a config file whose ``seats.worker`` block selects the openai-compatible
 backend pointed at Google's OpenAI-compatible endpoint. For each trial task it
