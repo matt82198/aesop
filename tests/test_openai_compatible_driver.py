@@ -852,6 +852,7 @@ class TestConstructTimeBaseUrlValidation(unittest.TestCase):
         driver = OpenAICompatibleDriver(
             base_url="http://127.0.0.1:11434/v1",
             model="m",
+            allow_unverified_models=True,
             transport=FakeTransport(),
         )
         self.assertEqual(driver._base_url, "http://127.0.0.1:11434/v1")
