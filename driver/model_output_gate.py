@@ -89,6 +89,8 @@ def _check_node_syntax(path: str, contents: str) -> Optional[str]:
             [node, "--check", str(target)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_NODE_CHECK_TIMEOUT_S,
         )
     if proc.returncode == 0:
