@@ -1,0 +1,14 @@
+{
+  "seats": {
+    "worker": {
+      "backend": "openai-compatible",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "model": "gemini-4-hydrogen",
+      "api_key_env": "GOOGLE_API_KEY",
+      "timeout_s": 120
+    }
+  },
+  "trial": {
+    "tasks": []
+  }
+}

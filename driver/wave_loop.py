@@ -3294,6 +3294,20 @@ Examples:
         action="store_true",
         help="Enable git operations (stage, commit, push verified items)",
     )
+    parser.add_argument(
+        "--driver",
+        choices=["claude", "codex"],
+        default=None,
+        help=(
+            "OVERRIDE the configured worker seat (claude|codex). Default: "
+            "seats.worker from aesop.config.json, else claude"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to aesop.config.json (default: ./aesop.config.json)",
+    )
 
     args = parser.parse_args()
 
@@ -3313,17 +3327,17 @@ Examples:
         print(f"Error: failed to load manifest: {e}", file=sys.stderr)
         return 1
 
-    # For now, use the Claude Code reference driver.
-    # In the future, this should be configurable via backend_config.
-    try:
-        from claude_code_driver import ClaudeCodeDriver
-        driver = ClaudeCodeDriver()
-    except ImportError:
-        print(
-            "Error: could not import ClaudeCodeDriver. "
-            "Ensure driver/ is on the Python path.",
-            file=sys.stderr,
-        )
+    # Worker seat: seats.worker from aesop.config.json when present, else the
+    # Claude Code driver (byte-identical default). --driver overrides.
+    from wave_scheduler import resolve_worker_driver
+
+    driver, driver_error = resolve_worker_driver(
+        driver_override=args.driver,
+        config_path=args.config,
+        execute=False,
+    )
+    if driver_error:
+        print(f"ERROR: {driver_error}", file=sys.stderr)
         return 1
 
     # Prepare git config if --git flag is used.
