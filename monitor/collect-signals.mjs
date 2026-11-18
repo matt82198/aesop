@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, releaseLock } from '../tools/lock.mjs';
@@ -331,7 +332,11 @@ function checkLogFiles(securityAlertsContent = null) {
 
 // 5) Junk-script sprawl detection
 function detectJunkScripts() {
-  if (!fs.existsSync(TEMP_ROOT)) return { total: 0, quarantinable: 0, bytes: 0, oldest: [], recentCount: 0 };
+  // Monotonic timer around the junk walk ONLY (no spawn or git time). Reported as junk.durationMs.
+  const walkStart = performance.now();
+  if (!fs.existsSync(TEMP_ROOT)) {
+    return { total: 0, quarantinable: 0, bytes: 0, oldest: [], recentCount: 0, durationMs: performance.now() - walkStart };
+  }
   const sessionDirs = (() => {
     try {
       return fs.readdirSync(TEMP_ROOT, { withFileTypes: true })
@@ -370,6 +375,7 @@ function detectJunkScripts() {
     recentCount: tempScripts.filter(x => now - x.ageMs < HOUR).length,
     // Store all temp scripts for AUTO quarantine action
     _scripts: tempScripts,
+    durationMs: performance.now() - walkStart,
   };
   return junk;
 }
