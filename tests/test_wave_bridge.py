@@ -22,10 +22,12 @@ No dependencies: no openai, no jsonschema, no pytest.
 """
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent
@@ -45,6 +47,7 @@ from agent_driver import (  # noqa: E402
 from claude_code_driver import ClaudeCodeDriver  # noqa: E402
 from codex_driver import CodexDriver  # noqa: E402
 from wave_bridge import build_manifest_item, dispatch_item  # noqa: E402
+import model_output_gate  # noqa: E402
 
 
 class FakeTransport:
@@ -728,6 +731,164 @@ class TestRepairContextEnrichment(unittest.TestCase):
         # Empty owned files should return empty diff
         diff = _get_owned_files_diff("/tmp", [])
         self.assertEqual(diff, "")
+
+
+class _SpyCodexDriver(CodexDriver):
+    """CodexDriver that records every run_command call before delegating."""
+
+    def __init__(self, transport):
+        super().__init__(transport=transport)
+        self.commands = []
+
+    def run_command(self, cmd, cwd=None, shell=False):
+        self.commands.append(cmd)
+        return super().run_command(cmd, cwd=cwd, shell=shell)
+
+
+class _RecordingTransport(FakeTransport):
+    """FakeTransport that also keeps every outbound payload."""
+
+    def __init__(self, responses):
+        super().__init__(responses=responses)
+        self.payloads = []
+
+    def __call__(self, payload):
+        self.payloads.append(payload)
+        return super().__call__(payload)
+
+
+def _patch(files):
+    return {"files": files, "summary": "gate test", "done": True}
+
+
+class TestModelOutputGate(unittest.TestCase):
+    """Pre-test output gates: malformed worker output never reaches the test command.
+
+    Gate failures regenerate at most model_output_gate.MAX_REGENS (2) times per
+    item. After that the item fails with reason 'malformed-output' and no test
+    command runs. Clean output runs the test exactly once, with no regeneration.
+    """
+
+    GOOD_PY = "def value():\n    return 1\n"
+    TEST_CMD = f"{sys.executable} -c pass"
+
+    def _run(self, responses, owned=("module.py",)):
+        transport = _RecordingTransport(responses)
+        driver = _SpyCodexDriver(transport=transport)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # dispatch_worker reads owned files before calling the model.
+        for name in owned:
+            (Path(tmp.name) / name).write_text("# seed\n", encoding="utf-8")
+        item = {
+            "slug": "gate-item",
+            "ownsFiles": list(owned),
+            "prompt": "Write module.py",
+            "testCmd": self.TEST_CMD,
+        }
+        result = dispatch_item(driver, item, workdir=tmp.name)
+        return result, driver, transport
+
+    def test_empty_files_list_is_caught_before_tests(self):
+        """files=[] fails the schema gate; regen twice then malformed-output; no test run."""
+        responses = [make_response(_patch([]))]
+        result, driver, transport = self._run(responses)
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "malformed-output")
+        self.assertEqual(driver.commands, [], msg="test command must not run on malformed output")
+        self.assertEqual(transport._idx, 3, msg="1 original + 2 regenerations")
+        self.assertEqual(len(result["gateFailures"]), 3)
+        self.assertIn("files list is empty", result["gateFailures"][0])
+
+    def test_syntax_error_file_is_caught_before_tests(self):
+        """A .py file that does not compile fails the parse gate; no test run."""
+        bad = [{"path": "module.py", "contents": "def broken(:\n    pass\n"}]
+        result, driver, transport = self._run([make_response(_patch(bad))])
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "malformed-output")
+        self.assertEqual(driver.commands, [])
+        self.assertEqual(transport._idx, 3)
+        self.assertTrue(result["gateFailures"][0].startswith("parse: module.py: SyntaxError"))
+
+    def test_regen_recovers_then_tests_run_once(self):
+        """Empty first response, valid second response: one regen, then tests run once."""
+        good = [{"path": "module.py", "contents": self.GOOD_PY}]
+        responses = [make_response(_patch([])), make_response(_patch(good))]
+        result, driver, transport = self._run(responses)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["testExit"], 0)
+        self.assertEqual(driver.commands, [self.TEST_CMD])
+        self.assertEqual(transport._idx, 2)
+        self.assertEqual(len(result["gateFailures"]), 1)
+        self.assertNotIn("reason", result, msg="a recovered item is not a malformed-output failure")
+
+    def test_clean_response_runs_tests_without_regen(self):
+        """Clean output: no gate failures, no regeneration, tests run exactly as before."""
+        good = [{"path": "module.py", "contents": self.GOOD_PY}]
+        result, driver, transport = self._run([make_response(_patch(good))])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["gateFailures"], [])
+        self.assertEqual(transport._idx, 1)
+        self.assertEqual(driver.commands, [self.TEST_CMD])
+
+    def test_regen_prompt_names_the_exact_gate_failure(self):
+        """The regeneration request carries the gate failure text, not a generic retry."""
+        responses = [make_response(_patch([])), make_response(_patch([]))]
+        result, driver, transport = self._run(responses)
+
+        self.assertGreaterEqual(len(transport.payloads), 2)
+        regen_text = json.dumps(transport.payloads[1], default=str)
+        self.assertIn("files list is empty", regen_text)
+
+    def test_python_parse_gate_compiles_without_executing(self):
+        """Valid syntax that would exit if executed must pass the gate untouched."""
+        exits = [{"path": "module.py", "contents": "import sys\nsys.exit(3)\n"}]
+        result, driver, transport = self._run([make_response(_patch(exits))])
+
+        self.assertEqual(transport._idx, 1, msg="valid syntax must not be regenerated")
+        self.assertEqual(result["gateFailures"], [])
+        self.assertEqual(driver.commands, [self.TEST_CMD])
+
+    def test_json_parse_gate_rejects_invalid_json(self):
+        """A .json file that does not parse fails the parse gate."""
+        bad = [{"path": "data.json", "contents": "{bad"}]
+        result, driver, transport = self._run(
+            [make_response(_patch(bad))], owned=("data.json",)
+        )
+
+        self.assertEqual(result["reason"], "malformed-output")
+        self.assertEqual(driver.commands, [])
+        self.assertTrue(result["gateFailures"][0].startswith("parse: data.json: invalid JSON"))
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_js_parse_gate_uses_node_check_when_available(self):
+        """A .mjs file that node --check rejects fails the parse gate."""
+        bad = [{"path": "mod.mjs", "contents": "export const = ;\n"}]
+        result, driver, transport = self._run(
+            [make_response(_patch(bad))], owned=("mod.mjs",)
+        )
+
+        self.assertEqual(result["reason"], "malformed-output")
+        self.assertEqual(driver.commands, [])
+        self.assertTrue(result["gateFailures"][0].startswith("parse: mod.mjs: node --check failed"))
+
+    def test_js_parse_gate_skipped_when_no_node(self):
+        """No node on PATH: the JS parse gate is skipped and tests run as before."""
+        bad = [{"path": "mod.mjs", "contents": "export const = ;\n"}]
+        with mock.patch.object(model_output_gate.shutil, "which", return_value=None):
+            result, driver, transport = self._run(
+                [make_response(_patch(bad))], owned=("mod.mjs",)
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["gateFailures"], [])
+        self.assertEqual(driver.commands, [self.TEST_CMD])
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Dict, Optional, Any
 
@@ -52,6 +53,7 @@ from agent_driver import (
     ROLE_WORKER,
 )
 from verification_policy import verification_policy
+from model_output_gate import MAX_REGENS, REASON_MALFORMED, gate_worker_output
 
 
 def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -218,6 +220,38 @@ def dispatch_item(
         )
         result = driver.dispatch_worker(request)
 
+        # Pre-test output gates. A gate failure regenerates the patch with the
+        # exact failure named in the prompt, at most MAX_REGENS times. Regens
+        # never touch the repair cap in wave_loop. After the last regen fails,
+        # the item fails as malformed-output and no test command runs.
+        gate_failures = []
+        regens = 0
+        while result.ok:
+            outcome = gate_worker_output(result.structured)
+            if outcome.ok:
+                break
+            gate_failures.append(outcome.summary())
+            if regens >= MAX_REGENS:
+                return {
+                    "route": "driver",
+                    "ok": False,
+                    "testExit": None,
+                    "filesWritten": list(result.files_written or []),
+                    "error": f"model output failed pre-test gates: {gate_failures[-1]}",
+                    "workerId": result.worker_id,
+                    "verified": False,  # Not verified (malformed output, tests not run)
+                    "reason": REASON_MALFORMED,
+                    "gateFailures": gate_failures,
+                    "testStdout": "",
+                    "testStderr": "",
+                }
+            regens += 1
+            regen_note = (
+                f"\n\nGATE FAILURE on previous attempt: {gate_failures[-1]}. "
+                "Return the full JSON patch again with this fixed."
+            )
+            result = driver.dispatch_worker(replace(request, prompt=prompt + regen_note))
+
         if not result.ok:
             # Worker dispatch failed (malformed JSON, ownership violation, etc.).
             return {
@@ -228,6 +262,7 @@ def dispatch_item(
                 "error": f"dispatch_worker failed: {result.error}",
                 "workerId": result.worker_id,
                 "verified": False,  # Not verified (dispatch failed)
+                "gateFailures": gate_failures,
                 "testStdout": "",
                 "testStderr": "",
             }
@@ -247,6 +282,7 @@ def dispatch_item(
                 "workerId": result.worker_id,
                 "verified": False,  # Not verified (no test to run)
                 "reason": "no_test_command",
+                "gateFailures": gate_failures,
                 "testStdout": "",
                 "testStderr": "",
             }
@@ -264,6 +300,7 @@ def dispatch_item(
             "error": None if ok else f"test failed with exit {test_result.exit_code}",
             "workerId": result.worker_id,
             "verified": ok,  # Verified if and only if test passed (exit 0)
+            "gateFailures": gate_failures,
             "testStdout": test_result.stdout,
             "testStderr": test_result.stderr,
         }

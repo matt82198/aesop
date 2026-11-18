@@ -2015,6 +2015,8 @@ def _dispatch_and_journal(
             "workerId": dispatch_result.get("workerId"),
             "testStdout": dispatch_result.get("testStdout", ""),
             "testStderr": dispatch_result.get("testStderr", ""),
+            "reason": dispatch_result.get("reason"),
+            "gateFailures": dispatch_result.get("gateFailures", []),
         }
 
         # Write journal entry for this item's outcome. filesWritten is
@@ -2028,6 +2030,8 @@ def _dispatch_and_journal(
                 "instance_id": instance_id,
                 "filesWritten": item_result["filesWritten"],
                 "fingerprint": _item_fingerprint(item),
+                "reason": item_result["reason"],
+                "gateFailures": item_result["gateFailures"],
             }, repo=repo)
 
         return (item_index, item_result)
