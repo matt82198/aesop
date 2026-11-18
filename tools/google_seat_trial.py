@@ -153,10 +153,12 @@ def main(argv: list[str] | None = None) -> int:
     seat = config["seats"]["worker"]
     key_env = seat.get("api_key_env", "")
     if not os.environ.get(key_env):
-        # Name only; the value is never read into output.
+        # Fixed text only: the config's api_key_env value is never passed to
+        # an output call. The operator finds the variable via the config path.
         print(
-            f"ERROR: environment variable {key_env} is not set. Set it in your "
-            "shell and re-run. (No key value is read or printed.)",
+            "ERROR: the worker seat's API key environment variable is not set. "
+            "Set it in your shell (name is at seats.worker.api_key_env in the "
+            "trial config) and re-run. (No key value is read or printed.)",
             file=sys.stderr,
         )
         return EXIT_KEY_UNSET

@@ -201,8 +201,73 @@ class TrialRunnerTests(unittest.TestCase):
                 ["--config", example, "--result", str(Path(tmp) / "r.json")]
             )
         self.assertEqual(rc, 2)
-        self.assertIn(GOOGLE_KEY_ENV, err.getvalue())
+        # Restructured 2026-11-18 (CodeQL #52): the message names the config
+        # path, not the variable, so the config value never reaches output.
+        self.assertIn("seats.worker.api_key_env", err.getvalue())
+        self.assertNotIn(GOOGLE_KEY_ENV, err.getvalue())
         mk.assert_not_called()
+
+    @staticmethod
+    def _trial_config(tmp: str, key_env: str) -> str:
+        """Offline trial config: absolute fixture paths under tmp, no repo writes."""
+        tmpdir = Path(tmp)
+        test_file = tmpdir / "test_item.py"
+        test_file.write_text("def test_ok():\n    pass\n", encoding="utf-8")
+        config = {
+            "seats": {"worker": {
+                "backend": "openai-compatible",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+                "model": GOOGLE_MODEL,
+                "api_key_env": key_env,
+            }},
+            "trial": {"tasks": [{
+                "slug": "item",
+                "test_path": str(test_file),
+                "module_path": str(tmpdir / "item.py"),
+                "test_cmd": "exit 0",
+            }]},
+        }
+        return _write_config(tmp, config)
+
+    @staticmethod
+    def _fake_transport(_request):
+        """Canned model reply; never touches the network."""
+        return {"choices": [{"message": {"content": "x = 1"}}],
+                "usage": {"total_tokens": 1}}
+
+    def test_key_value_never_reaches_stdout_or_stderr_on_success(self):
+        # Dummy key value assembled at runtime; never a literal key shape.
+        dummy = "".join(["Zq", "9", "Kd", "Trial", "Dummy", "Value", "Q7"])
+        env = {k: v for k, v in os.environ.items() if k != GOOGLE_KEY_ENV}
+        env[GOOGLE_KEY_ENV] = dummy
+        out, err = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self._trial_config(tmp, GOOGLE_KEY_ENV)
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(self.trial, "make_openai_compatible_transport",
+                                      return_value=self._fake_transport), \
+                    contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = self.trial.main(
+                    ["--config", cfg, "--result", str(Path(tmp) / "r.json")]
+                )
+        self.assertEqual(rc, 0)
+        self.assertNotIn(dummy, out.getvalue())
+        self.assertNotIn(dummy, err.getvalue())
+
+    def test_unset_key_message_names_config_path_not_variable_name(self):
+        env = {k: v for k, v in os.environ.items() if k != GOOGLE_KEY_ENV}
+        example = str(REPO_ROOT / "tools" / "google_seat_trial.example.json")
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                contextlib.redirect_stderr(err):
+            rc = self.trial.main(
+                ["--config", example, "--result", str(Path(tmp) / "r.json")]
+            )
+        self.assertEqual(rc, 2)
+        self.assertNotIn(GOOGLE_KEY_ENV, err.getvalue())
+        self.assertIn("seats.worker.api_key_env", err.getvalue())
 
 
 if __name__ == "__main__":
