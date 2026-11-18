@@ -76,6 +76,7 @@ from agent_driver import AgentDriver, CommandResult
 from proc_util import kill_process_tree, run_shell_bounded
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
+from brief_lint import apply_brief_lint, is_strict
 
 # ========================================================================
 # Interrupt Seam (Handoff Proof Testing Only)
@@ -1975,6 +1976,13 @@ def _dispatch_and_journal(
     """
     try:
         manifest_item = build_manifest_item(driver, item)
+
+        # Brief lint: the prompt must carry every name and string the acceptance
+        # test checks. Default appends a required section; strict refuses (raises
+        # into the catch-all below, so the item is marked failed, never dispatched).
+        manifest_item = apply_brief_lint(
+            manifest_item, workdir, state_dir, strict=is_strict(item)
+        )
 
         # INCREMENT 1: Pre-dispatch test enrichment. If the item has a
         # testCmd, run it once pre-dispatch (bounded timeout). If it FAILS,
