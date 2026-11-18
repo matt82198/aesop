@@ -58,9 +58,7 @@ CODE_AUDIT_PREFIXES = (
 _WINDOWS_DRIVE_PREFIX = "C:" + "(?:/|\\\\{1,2})"
 _WINDOWS_USERS_SEG = "Users" + "(?:/|\\\\{1,2})"
 WINDOWS_USER_PATH_RE = re.compile(
-    _WINDOWS_DRIVE_PREFIX
-    + _WINDOWS_USERS_SEG
-    + r"(?:[a-zA-Z0-9_\-\.]+|(?=$|[\s\"']))",
+    _WINDOWS_DRIVE_PREFIX + _WINDOWS_USERS_SEG + r"[a-zA-Z0-9_\-\.]+",
     re.IGNORECASE,
 )
 _MERGE_STAGE_RE = re.compile(r"^[0-7]+\s+[0-9a-fA-F]+\s+[123]\t(.+)$")
@@ -435,7 +433,7 @@ def _select_audit_files(repo_path, tracked_rel_paths):
 
 
 def _check_windows_user_paths(repo_path, timeout=DEFAULT_TIMEOUT):
-    """Detect un-baselined C:/Users/ or C:\\Users\\ literal paths."""
+    """Detect un-baselined Windows user-profile literal paths."""
     baseline = _load_portability_baseline(repo_path)
     tracked = _list_tracked_files(repo_path, timeout=timeout)
     targets = _select_audit_files(repo_path, tracked)
