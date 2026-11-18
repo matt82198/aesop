@@ -13,7 +13,9 @@ The config schema for the backend block:
     "base_url": "..."(optional),              # required for openai-compatible
     "api_key_env": "..."(optional),           # optional; env var for API key
     "tier": N(optional),                      # deprecated; ignored if present
-    "is_local": bool(optional)                # optional for openai-compatible
+    "is_local": bool(optional),               # optional for openai-compatible
+    "allow_unverified_models": bool(optional) # default false; true lets a hosted
+                                              # model without json_schema support build
   }
 
 HS-1 unified two-seat schema (0.4.0): ONE namespaced block selects BOTH seats:
@@ -722,6 +724,9 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
             max_owned_bytes=config.get("max_owned_bytes", 200_000),
             max_retries=config.get("max_retries", 2),
             timeout_s=config.get("timeout_s", 120.0),
+            allow_unverified_models=bool(
+                config.get("allow_unverified_models", False)
+            ),
         )
 
     if backend_name == "anthropic":
@@ -869,12 +874,20 @@ def describe_backend(config: Optional[dict] = None) -> str:
             from openai_compatible_driver import OpenAICompatibleDriver
         except ImportError:
             return "openai-compatible (import failed)"
-        driver = OpenAICompatibleDriver(
-            base_url=config["base_url"],
-            model=config["model"],
-            api_key_env=config.get("api_key_env", "OPENAI_API_KEY"),
-            is_local=config.get("is_local", False),
-        )
+        try:
+            driver = OpenAICompatibleDriver(
+                base_url=config["base_url"],
+                model=config["model"],
+                api_key_env=config.get("api_key_env", "OPENAI_API_KEY"),
+                is_local=config.get("is_local", False),
+                allow_unverified_models=bool(
+                    config.get("allow_unverified_models", False)
+                ),
+            )
+        except ValueError as exc:
+            # Same contract as the codex branch: describe surfaces a guard
+            # refusal instead of crashing.
+            return f"openai-compatible (invalid model config: {exc})"
         return driver.describe()
 
     return f"unknown backend '{backend_name}'"
