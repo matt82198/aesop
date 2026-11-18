@@ -29,8 +29,7 @@
   (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
 - **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
 - **anthropic_transport.py** — stdlib urllib transport for the Anthropic endpoint.
-- **cli_worker_driver.py** — `backend: "cli"`: headless vendor CLI as argv subprocess (no shell), prompt on stdin; git-status ownership check; worker_filesystem_access=False.
-- **backend_config.py** — Seat config builder: reads `aesop.config.json` seats block, constructs driver instances.
+- **backend_config.py** — Seat config builder: reads `aesop.config.json` seats block, constructs driver instances. `backend: "cli"` → cli_worker_driver.py (argv subprocess, no shell, git-status ownership check).
 - **context_pack.py** — Context-pack assembly for orchestrator decisions (allowlist-only reads).
   `add_evidence_to_pack()` is the ONLY supported way to attach already-in-memory evidence
   text to a pack built outside `build_context_pack()` — pure in-memory, never touches
