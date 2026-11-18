@@ -14,9 +14,9 @@ These tests parse .github/workflows/ci.yml and assert, over the parsed step
   3. the actionlint install step and the CI workflow linter gate that requires
      actionlint still exist (the step was hardened, not removed).
 
-The expected digest is GitHub's published sha256 for
-actionlint_1.7.12_linux_amd64.tar.gz (release asset digest, rhysd/actionlint
-v1.7.12). The tarball itself is never downloaded by this test.
+The expected digests are GitHub's published sha256 digests for rhysd/actionlint
+v1.7.12 release assets (darwin_arm64, darwin_amd64, linux_amd64). The tarball
+itself is never downloaded by this test.
 """
 
 import re
@@ -29,12 +29,32 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 ACTIONLINT_VERSION = "1.7.12"
-ACTIONLINT_TARBALL = f"actionlint_{ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-ACTIONLINT_URL = (
-    f"https://github.com/rhysd/actionlint/releases/download/"
-    f"v{ACTIONLINT_VERSION}/{ACTIONLINT_TARBALL}"
+ACTIONLINT_RELEASE_BASE = (
+    f"https://github.com/rhysd/actionlint/releases/download/v{ACTIONLINT_VERSION}/"
 )
-ACTIONLINT_SHA256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+ACTIONLINT_ASSETS = {
+    f"actionlint_{ACTIONLINT_VERSION}_darwin_arm64.tar.gz": (
+        "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"
+    ),
+    f"actionlint_{ACTIONLINT_VERSION}_darwin_amd64.tar.gz": (
+        "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644"
+    ),
+    f"actionlint_{ACTIONLINT_VERSION}_linux_amd64.tar.gz": (
+        "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    ),
+}
+MACOS_MIGRATED_CI_JOBS = (
+    "docs-only-gate",
+    "windows-sensitive-paths",
+    "ci",
+    "windows",
+    "browser-proofs",
+    "state-drift-gate",
+    "pr-footprint-gate",
+    "pr-symbol-survival",
+    "incident-report-gate",
+)
+WINDOWS_CI_JOBS = ("windows-shard", "ps1-syntax-check")
 
 # A network fetch whose output reaches a shell interpreter on the same pipeline,
 # or a shell interpreter fed by process substitution from a fetch.
@@ -94,28 +114,78 @@ class CiActionlintPinTest(unittest.TestCase):
         _job, _idx, step = steps[0]
         run = step["run"]
 
-        self.assertIn(ACTIONLINT_URL, run, "actionlint must download the exact pinned release URL")
         self.assertIn(
-            f"{ACTIONLINT_SHA256}  ",
+            ACTIONLINT_RELEASE_BASE,
             run,
-            "actionlint tarball sha256 must be verified against the pinned digest",
+            "actionlint must download from the exact pinned v1.7.12 release base URL",
+        )
+        for tarball, digest in ACTIONLINT_ASSETS.items():
+            self.assertIn(
+                tarball,
+                run,
+                f"actionlint install must include pinned tarball {tarball}",
+            )
+            self.assertIn(
+                digest,
+                run,
+                f"actionlint install must pin SHA-256 digest for {tarball}",
+            )
+        self.assertRegex(
+            run,
+            r"uname\s+-s",
+            "actionlint install must detect OS dynamically via uname -s",
         )
         self.assertRegex(
             run,
-            r"sha256sum\s+-c\b",
-            "the pinned digest must be checked with sha256sum -c",
+            r"uname\s+-m",
+            "actionlint install must detect architecture dynamically via uname -m",
         )
-        # The digest check must run before the archive is extracted or installed.
+        self.assertIn(
+            "shasum -a 256 -c -",
+            run,
+            "the pinned digest must be verified with shasum -a 256 -c - on macOS",
+        )
+        self.assertIn(
+            "sha256sum -c -",
+            run,
+            "the pinned digest must fall back to sha256sum -c - when shasum is absent",
+        )
+        # Both digest checks must run before the archive is extracted or installed.
+        tar_pos = run.index("tar -xzf")
         self.assertLess(
-            run.index("sha256sum -c"),
-            run.index("tar "),
-            "sha256 verification must precede extraction",
+            run.index("shasum -a 256 -c -"),
+            tar_pos,
+            "shasum verification must precede tar extraction",
+        )
+        self.assertLess(
+            run.index("sha256sum -c -"),
+            tar_pos,
+            "sha256sum fallback verification must precede tar extraction",
         )
         self.assertNotIn(
             "download-actionlint.bash",
             run,
             "the unpinned downloader script must not be used",
         )
+
+    def test_primary_ci_shards_run_on_macos_latest(self):
+        data = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
+        jobs = data.get("jobs") or {}
+        self.assertEqual(jobs["ci"]["runs-on"], "macos-latest")
+        for job_id in MACOS_MIGRATED_CI_JOBS:
+            self.assertIn(job_id, jobs, f"expected job {job_id!r} in ci.yml")
+            self.assertEqual(
+                jobs[job_id]["runs-on"],
+                "macos-latest",
+                f"expected job {job_id!r} to run on macos-latest",
+            )
+        for job_id in WINDOWS_CI_JOBS:
+            self.assertIn(job_id, jobs, f"expected job {job_id!r} in ci.yml")
+            self.assertEqual(
+                jobs[job_id]["runs-on"],
+                "windows-latest",
+                f"expected job {job_id!r} to stay on windows-latest",
+            )
 
     def test_actionlint_install_and_required_linter_gate_still_present(self):
         self.assertEqual(len(_actionlint_install_steps()), 1)

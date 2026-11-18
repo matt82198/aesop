@@ -24,7 +24,8 @@
         "tests/test-backup-fleet-heartbeat-guard.sh",
         "tests/test-backup-fleet-secret-gate.sh",
         "tests/test-backup-fleet-blocked-heartbeat.sh",
-        "tests/backup-fleet.test.sh"
+        "tests/backup-fleet.test.sh",
+        "tests/test_macos_shell_portability.py"
       ]
     },
     {

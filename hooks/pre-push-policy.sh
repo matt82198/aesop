@@ -149,9 +149,11 @@ resolve_py_bin() {
     printf '%s' "$_AESOP_PY_BIN"
     return 0
   fi
-  local have_timeout=""
+  local timeout_bin=""
   if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
-    have_timeout="1"
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
   else
     printf 'WARN: timeout binary not found; python interpreter probe is unbounded\n' >&2
   fi
@@ -160,8 +162,8 @@ resolve_py_bin() {
     if ! command -v "$c" >/dev/null 2>&1; then
       continue
     fi
-    if [ -n "$have_timeout" ]; then
-      timeout 5 "$c" -c "import sys" </dev/null >/dev/null 2>&1
+    if [ -n "$timeout_bin" ]; then
+      "$timeout_bin" 5 "$c" -c "import sys" </dev/null >/dev/null 2>&1
     else
       "$c" -c "import sys" </dev/null >/dev/null 2>&1
     fi
@@ -410,11 +412,30 @@ audit_lock_owner() {
   printf '%s' "$owner"
 }
 
+shell_pid() {
+  # Subshell-accurate PID across Bash 4+ ($BASHPID) and macOS /bin/bash 3.2
+  # (where BASHPID is unset: a fresh sh -c child prints its $PPID, which is
+  # the calling subshell's exact PID). Optional $1 assigns via printf -v.
+  local _spid
+  if [ -n "${BASHPID:-}" ]; then
+    _spid="$BASHPID"
+  else
+    _spid=$(sh -c 'printf "%s" "$PPID"')
+  fi
+  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
+    printf -v "$1" '%s' "$_spid"
+  else
+    printf '%s' "$_spid"
+  fi
+}
+
 audit_trace() {
   # Diagnostic only: when AUDIT_TRACE_FILE is set, append "<time> bashpid=<p> <event>".
   # Never affects control flow or the chain.
   [ -n "${AUDIT_TRACE_FILE:-}" ] || return 0
-  printf '%s bashpid=%s %s\n' "${EPOCHREALTIME:-0}" "$BASHPID" "$*" >> "$AUDIT_TRACE_FILE" 2>/dev/null || true
+  local _trace_pid
+  shell_pid _trace_pid
+  printf '%s bashpid=%s %s\n' "${EPOCHREALTIME:-0}" "$_trace_pid" "$*" >> "$AUDIT_TRACE_FILE" 2>/dev/null || true
 }
 
 # Set once this process has waited out the full deadline; later acquires fail at once
@@ -460,7 +481,7 @@ acquire_audit_lock() {
       # both get mkdir success for one directory in the same microsecond. Ownership is
       # decided by an O_EXCL create of the pid file (noclobber), which exactly one
       # writer can win; the loser keeps waiting and never touches the directory.
-      me="$BASHPID"
+      shell_pid me
       if (set -C; printf '%s\n' "$me" > "$lock_dir/pid") 2>/dev/null; then
         audit_trace "pid-written"
         return 0
@@ -491,11 +512,12 @@ acquire_audit_lock() {
 }
 
 release_audit_lock() {
-  # Removes the lock only when this writer (BASHPID) is the recorded owner.
-  local lock_dir="$1" recorded_owner
+  # Removes the lock only when this writer (shell_pid) is the recorded owner.
+  local lock_dir="$1" recorded_owner me
   recorded_owner=$(audit_lock_owner "$lock_dir")
+  shell_pid me
   audit_trace "release recorded_owner=${recorded_owner:-none}"
-  if [ "$recorded_owner" = "$BASHPID" ]; then
+  if [ -n "$me" ] && [ "$recorded_owner" = "$me" ]; then
     rm -rf -- "$lock_dir" 2>/dev/null
     audit_trace "release-removed"
   fi
@@ -3111,7 +3133,14 @@ run_test_mode() {
       exit 1
     fi
 
-    sed -i '2s/"reason":"[^"]*"/"reason":"TAMPERED"/g' "$AESOP_ROOT/state/SECURITY-AUDIT.log"
+    "$(resolve_py_bin)" -c '
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text(encoding="utf-8").splitlines(True)
+if len(lines) >= 2:
+    lines[1] = re.sub(r"\"reason\":\"[^\"]*\"", "\"reason\":\"TAMPERED\"", lines[1])
+p.write_text("".join(lines), encoding="utf-8")
+' "$AESOP_ROOT/state/SECURITY-AUDIT.log"
 
     if ! verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log" >/dev/null 2>&1; then
       printf 'PASS: Verification detected tampered middle line\n'

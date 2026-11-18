@@ -23,7 +23,7 @@ node --version && python3 --version && git --version && bash --version
 ```
 
 ### OS Notes
-- **Windows**: Use Git Bash for all shell commands; paths use `/c/Users/...` POSIX style
+- **Windows**: Use Git Bash for all shell commands; drive paths use `/c/...` POSIX style (example: `/c/Users/<user>`)
 - **Linux/macOS**: Standard Bash; ensure `/usr/bin/bash` or equivalent exists
 
 ---

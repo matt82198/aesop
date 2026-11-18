@@ -36,7 +36,7 @@ function makeState(over = {}) {
     status: {
       model: 'claude-haiku-5-5',
       provider: 'anthropic',
-      cwd: 'C:/Users/Mattt/aesop',
+      cwd: '/workspace/aesop',
       tokens: 0,
       elapsedMs: 0,
       spinnerTick: 0,
@@ -125,7 +125,7 @@ test('render_streaming_assistant_spinner_glyph_changes_with_tick', async () => {
 test('render_wrapping_never_exceeds_columns', async () => {
   const { renderFrame } = await loadRender();
   const longText = ('word '.repeat(120)).trim();
-  const longCwd = 'C:/Users/Mattt/' + 'deeply/nested/'.repeat(20) + 'project';
+  const longCwd = '/workspace/' + 'deeply/nested/'.repeat(20) + 'project';
   const state = makeState({
     transcript: [
       { role: 'user', text: longText },

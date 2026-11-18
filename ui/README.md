@@ -23,7 +23,7 @@ Example with custom paths:
 
 ```bash
 cd /opt/aesop    # no AESOP_ROOT set: the checkout containing ui/config.py is used
-export AESOP_TRANSCRIPTS_ROOT=/home/user/.claude/projects
+export AESOP_TRANSCRIPTS_ROOT="$HOME/.claude/projects"
 export PORT=9000
 python ui/serve.py
 ```

@@ -97,7 +97,7 @@ audit_failure_diag() {
   ls -la "$diag_root/state" 2>&1 | sed 's/^/  | /'
   printf -- '--- diag: lock trace (AUDIT_TRACE_FILE, first 120 lines) ---\n'
   head -n 120 "$diag_root/audit-trace.txt" 2>&1 | sed 's/^/  | /'
-  printf -- '--- diag: python: %s / sha256sum: %s ---\n' "$(command -v python3 || command -v python)" "$(command -v sha256sum)"
+  printf -- '--- diag: python: %s / sha256: %s ---\n' "$(command -v python3 || command -v python)" "$(command -v sha256sum || command -v shasum)"
 }
 
 printf '\n=== Finding 1b: 8 concurrent writers x 5 rounds (chain verifies, no lost entries) ===\n'
@@ -616,7 +616,7 @@ printf '\n=== Test 9 (existing): Hash-chain builds across 2+ events ===\n'
     exit 1
   fi
 
-  line1_hash=$(printf '%s' "$line1" | sha256sum | awk '{print $1}')
+  line1_hash=$(printf '%s' "$line1" | compute_sha256)
   line2_prev=$(printf '%s' "$line2" | python3 -c "import sys, json; print(json.load(sys.stdin).get('prev_hash', ''))")
 
   if [ "$line1_hash" != "$line2_prev" ]; then
@@ -677,7 +677,14 @@ printf '\n=== Test 11 (existing): verify-audit-log detects tampered line ===\n'
     exit 1
   fi
 
-  sed -i '2s/"reason":"[^"]*"/"reason":"TAMPERED"/g' "$AESOP_ROOT/state/SECURITY-AUDIT.log"
+  "$(resolve_py_bin)" -c '
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text(encoding="utf-8").splitlines(True)
+if len(lines) >= 2:
+    lines[1] = re.sub(r"\"reason\":\"[^\"]*\"", "\"reason\":\"TAMPERED\"", lines[1])
+p.write_text("".join(lines), encoding="utf-8")
+' "$AESOP_ROOT/state/SECURITY-AUDIT.log"
 
   if type verify_audit_log >/dev/null 2>&1; then
     if ! verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log" >/dev/null 2>&1; then

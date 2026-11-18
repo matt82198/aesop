@@ -1,3 +1,6 @@
+import os from 'node:os'
+import path from 'node:path'
+
 export const meta = {
   name: 'ci-to-green',
   description: 'Carry a jammed PR queue to green, merge it, then fix and PROVE the gate that should have caught the failure',
@@ -13,7 +16,7 @@ export const meta = {
   ],
 }
 
-const REPO = (args && args.repo) || 'C:/Users/matt8/aesop'
+const REPO = (args && args.repo) || process.env.AESOP_ROOT || path.join(os.homedir(), 'aesop')
 const MAX_CLUSTERS = (args && args.maxClusters) || 3
 // Optional: restrict the whole run to specific PRs (e.g. a single integration batch).
 // Without this, recon sweeps every open PR — wasteful when a batch supersedes them.
@@ -238,7 +241,7 @@ METHOD:
      python -m unittest tests.test_tools_importable
      python tools/encoding_lint.py
      python tools/claudemd_sync_gate.py
-     python C:/Users/matt8/scripts/secret_scan.py --staged
+     python ${path.join(os.homedir(), 'scripts', 'secret_scan.py')} --staged
 4. Push to the EXISTING branch (this updates its PR). Do not open new PRs, do not merge.
 5. If one branch cannot be fixed, record it in branchesFailed with the VERBATIM error and MOVE ON —
    one branch must never stall the others.

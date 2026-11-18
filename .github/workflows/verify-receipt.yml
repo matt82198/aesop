@@ -49,7 +49,7 @@ concurrency:
 
 jobs:
   verify-receipt:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     # Sized for the fetch window (300s) plus checkout, pip install and the offline verify,
     # with headroom for slow gh API calls. Keep above FETCH_WINDOW_S / 60 + ~5 minutes.
     timeout-minutes: 15

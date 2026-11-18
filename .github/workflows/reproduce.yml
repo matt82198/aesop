@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   reproduce:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 15
     steps:
       - name: Checkout (fresh clone, no reuse of cached state)
@@ -162,7 +162,13 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright and Chromium
-        run: pip install playwright && playwright install --with-deps chromium
+        run: |
+          pip install playwright
+          if [ "$(uname -s)" = "Linux" ]; then
+            playwright install --with-deps chromium
+          else
+            playwright install chromium
+          fi
 
       - name: Run dashboard browser proof (verify_dash)
         run: python tools/verify_dash.py

@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   docs-only-gate:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -96,7 +96,7 @@ jobs:
       is_docs_only: ${{ steps.is-docs-only.outputs.is_docs_only }}
 
   windows-sensitive-paths:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -154,7 +154,7 @@ jobs:
     # always() is what actually enforces "unconditional" against a failed
     # upstream job, not just an `if:`-skipped one. Do not remove.
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -196,8 +196,8 @@ jobs:
 
       - name: Set shard-specific temporary directory
         run: |
-          mkdir -p /tmp/shard-${{ matrix.python-shard }}
-          echo "TMPDIR=/tmp/shard-${{ matrix.python-shard }}" >> $GITHUB_ENV
+          mkdir -p "$RUNNER_TEMP/shard-${{ matrix.python-shard }}"
+          echo "TMPDIR=$RUNNER_TEMP/shard-${{ matrix.python-shard }}" >> $GITHUB_ENV
 
       - name: Configure git (required for hook installation tests)
         run: |
@@ -266,15 +266,37 @@ jobs:
       - name: Install actionlint (GitHub-semantics workflow validator)
         if: matrix.python-shard == 0
         # Pinned release tarball, sha256-verified before extraction (no remote script
-        # is piped into a shell). Digest = GitHub's published sha256 for the v1.7.12
-        # linux_amd64 release asset. GAP 2026-10-06: PyYAML-valid main-full.yml was
-        # rejected by GitHub ("Unexpected value 'exclude'") and ran ZERO jobs for ~10
-        # merges; actionlint flags that class at PR time.
+        # is piped into a shell). Digests = GitHub's published sha256 for v1.7.12
+        # darwin_arm64, darwin_amd64, and linux_amd64 release assets. GAP 2026-10-06:
+        # PyYAML-valid main-full.yml was rejected by GitHub ("Unexpected value 'exclude'")
+        # and ran ZERO jobs for ~10 merges; actionlint flags that class at PR time.
         run: |
           mkdir -p "$HOME/.local/bin"
           tmp_dir="$(mktemp -d)"
-          curl -fsSL -o "$tmp_dir/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $tmp_dir/actionlint.tar.gz" | sha256sum -c -
+          case "$(uname -s):$(uname -m)" in
+            Darwin:arm64)
+              TARBALL="actionlint_1.7.12_darwin_arm64.tar.gz"
+              EXPECTED_SHA="aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"
+              ;;
+            Darwin:x86_64)
+              TARBALL="actionlint_1.7.12_darwin_amd64.tar.gz"
+              EXPECTED_SHA="5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644"
+              ;;
+            Linux:x86_64)
+              TARBALL="actionlint_1.7.12_linux_amd64.tar.gz"
+              EXPECTED_SHA="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+              ;;
+            *)
+              echo "Unsupported OS/arch for actionlint: $(uname -s)/$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl -fsSL -o "$tmp_dir/actionlint.tar.gz" "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$TARBALL"
+          if command -v shasum >/dev/null 2>&1; then
+            echo "$EXPECTED_SHA  $tmp_dir/actionlint.tar.gz" | shasum -a 256 -c -
+          else
+            echo "$EXPECTED_SHA  $tmp_dir/actionlint.tar.gz" | sha256sum -c -
+          fi
           tar -xzf "$tmp_dir/actionlint.tar.gz" -C "$tmp_dir" actionlint
           install -m 0755 "$tmp_dir/actionlint" "$HOME/.local/bin/actionlint"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -520,7 +542,7 @@ jobs:
     # Keeps the required check name for branch protection (no config change needed).
     # Always reports a conclusion (success when matrix was intentionally skipped on pull_request).
     needs: [windows-shard, windows-sensitive-paths, docs-only-gate]
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     if: always()
     steps:
       - name: Resolve Windows run result
@@ -584,7 +606,7 @@ jobs:
     # so a failed/cancelled docs-only-gate still lets browser-proofs run
     # instead of silently skipping.
     if: always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -619,7 +641,12 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: |
+          if [ "$(uname -s)" = "Linux" ]; then
+            npx playwright install --with-deps chromium
+          else
+            npx playwright install chromium
+          fi
 
       - name: Run Playwright specs (npx playwright test)
         run: npx playwright test
@@ -672,7 +699,7 @@ jobs:
   # A non-deterministic view (e.g. a wall-clock stamp leaking into a materialized file)
   # or a rebuild that clobbers a stored STATE.md turns this job red.
   state-drift-gate:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -697,7 +724,7 @@ jobs:
   # critical for preventing fixture explosions (incident: 339K line deletions in 2 PRs today).
   pr-footprint-gate:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -735,7 +762,7 @@ jobs:
   # The step propagates the tool's exit code (0 pass, 1 missing symbol, 2 tool/git error).
   pr-symbol-survival:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -786,7 +813,7 @@ jobs:
   # is red and visible on the PR, but branch protection does not gate on it yet.
   incident-report-gate:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -124,3 +124,4 @@ Tests never touch real AESOP_ROOT/state; all invocations point at throwaway mkte
 Map of all domains: /CLAUDE.md
 
 - **Box fence in run-watchdog.sh**: `run_box_fence` runs tools/box_fence.py before the lock and any cycle; a FAIL logs an ERROR line to FLEET-BACKUP.log and exits 1 (daemon and --once); WARN (offline) logs and continues.
+- **macOS bounded timeout (`backup-fleet.sh`)**: `run_bounded_timeout` wraps per-repo and autodiscovery bounds via GNU `timeout`, Homebrew `gtimeout`, or a Python process-group fallback exiting 124 on `TimeoutExpired` (tests: `tests/test_macos_shell_portability.py`).

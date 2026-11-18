@@ -58,6 +58,51 @@ trap cleanup_temp_files EXIT INT TERM
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }
+
+run_bounded_timeout() {
+  # Portable bounded execution: GNU timeout, Homebrew gtimeout, or Python fallback
+  # (stock macOS lacks GNU timeout). Returns 124 on timeout.
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+  local py_bin=""
+  if command -v python3 >/dev/null 2>&1; then
+    py_bin="python3"
+  elif command -v python >/dev/null 2>&1; then
+    py_bin="python"
+  else
+    "$@"
+    return $?
+  fi
+  "$py_bin" -c '
+import os, signal, subprocess, sys
+secs = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    p = subprocess.Popen(cmd, start_new_session=True)
+except FileNotFoundError:
+    sys.exit(127)
+try:
+    sys.exit(p.wait(timeout=secs))
+except subprocess.TimeoutExpired:
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            p.kill()
+    else:
+        p.kill()
+    p.wait()
+    sys.exit(124)
+' "$secs" "$@"
+}
 # Diagnostics from inside process_repo: its stdout is the NUL verdict record, so
 # these go to the log file and stderr only (SEM-6).
 log_err() { echo "[$(ts)] $*" | tee -a "$LOG" >&2; }
@@ -477,7 +522,7 @@ $real_dir"
         # Wrap process_repo in bounded timeout (per-repo operation timeout)
         # Pass function definition to subshell since process_repo is a function
         # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
-        timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
+        run_bounded_timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
         local proc_exit=$?
         if [ "$proc_exit" -eq 124 ]; then
           # Timeout hit: log as TIMEOUT status
@@ -508,7 +553,7 @@ $real_dir"
       mv "$temp_json" "$REPOS_STATUS"
       exit 0
     }
-    timeout "$AUTODISCOVERY_TIMEOUT" discover_repos "$processed_paths" "$discovery_file" 2>&1 || {
+    run_bounded_timeout "$AUTODISCOVERY_TIMEOUT" discover_repos "$processed_paths" "$discovery_file" 2>&1 || {
       local disc_exit=$?
       if [ "$disc_exit" -eq 124 ]; then
         log "WARN: autodiscovery timed out after ${AUTODISCOVERY_TIMEOUT}s; processing discovered repos"
@@ -525,7 +570,7 @@ $real_dir"
       temp_result=$(mktemp)
       # Pass function definition to subshell since process_repo is a function
       # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
-      timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
+      run_bounded_timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
       local proc_exit=$?
       if [ "$proc_exit" -eq 124 ]; then
         log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"

@@ -97,9 +97,12 @@ def _probe_ram_gb():
                     if line.startswith("MemTotal:"):
                         return round(int(line.split()[1]) * 1024 / (1024 ** 3), 1)
             return None
-        rc, out = _run(["sysctl", "-n", "hw.memsize"])
-        value = parse_int_output(out)
-        return round(value / (1024 ** 3), 1) if value else None
+        if sys.platform == "darwin" or not sys.platform.startswith("linux"):
+            rc, out = _run(["sysctl", "-n", "hw.memsize"], timeout=5)
+            if rc != 0:
+                return None
+            value = parse_int_output(out)
+            return round(value / (1024 ** 3), 1) if value and value > 0 else None
     except (OSError, ValueError, AttributeError):
         return None
 

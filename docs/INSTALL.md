@@ -229,15 +229,15 @@ Open `aesop.config.json` and customize for your repos (see [CONFIGURE.md](CONFIG
 
 ```json
 {
-  "aesop_root": "/home/user/my-aesop",
-  "brain_root": "/home/user/.claude",
+  "aesop_root": "~/my-aesop",
+  "brain_root": "~/.claude",
   "repos": [
     {
-      "path": "/home/user/my-repo1",
+      "path": "~/my-repo1",
       "name": "my-api"
     },
     {
-      "path": "/home/user/my-repo2",
+      "path": "~/my-repo2",
       "name": "my-frontend"
     }
   ],
@@ -256,10 +256,10 @@ cp -r skills/power/ ~/.claude/skills/power/
 cp -r skills/buildsystem/ ~/.claude/skills/buildsystem/
 
 # Set environment variable (add to ~/.bashrc or ~/.zprofile)
-export AESOP_ROOT=/home/user/my-aesop
+export AESOP_ROOT="$HOME/my-aesop"
 
 # Verify
-bash $AESOP_ROOT/daemons/run-watchdog.sh --once
+bash "$AESOP_ROOT/daemons/run-watchdog.sh" --once
 ```
 
 ---
@@ -315,16 +315,16 @@ Optional environment variables you can set in your shell:
 
 ```bash
 # Point to the Aesop harness root (used by daemons and tools)
-export AESOP_ROOT=/home/user/my-aesop
+export AESOP_ROOT="$HOME/my-aesop"
 
 # Optional: custom location for Aesop state directory (default: ./state)
-export AESOP_STATE_ROOT=/home/user/my-aesop/state
+export AESOP_STATE_ROOT="$HOME/my-aesop/state"
 
 # Optional: custom location for Claude Code home (used by /power skill)
-export BRAIN_ROOT=/home/user/.claude
+export BRAIN_ROOT="$HOME/.claude"
 
 # Optional: custom location for reusable scripts directory
-export SCRIPTS_ROOT=/home/user/scripts
+export SCRIPTS_ROOT="$HOME/scripts"
 ```
 
 ---

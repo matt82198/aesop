@@ -399,7 +399,7 @@ class CIThroughputTests(unittest.TestCase):
         )
 
         matrix = strategy.get("matrix", {})
-        self.assertEqual(matrix.get("os"), ["ubuntu-latest", "windows-latest"])
+        self.assertEqual(matrix.get("os"), ["macos-latest", "windows-latest"])
         self.assertEqual(matrix.get("python-shard"), [0, 1, 2, 3])
 
         # No platform may be trimmed: every os must keep every shard.

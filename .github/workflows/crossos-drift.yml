@@ -37,7 +37,7 @@ jobs:
       # crossos_drift.py shells out to `gh run list`; the defensive `gh workflow run` dispatch
       # below needs write too.
       actions: write
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -104,8 +104,8 @@ def wsl_available() -> bool:
 def host_is_windows() -> bool:
     """True on the Windows host, where the Linux shape is reached through WSL.
 
-    On any other host (the ubuntu CI runner) the shape IS the host, so the leg
-    runs natively and never probes for WSL.
+    On any other host (Linux CI runner or macOS/darwin) the POSIX shape runs
+    natively and never probes for WSL.
     """
     return sys.platform == "win32"
 
@@ -172,8 +172,8 @@ def run_node_tests_native(repo_root: Path, test_files: List[str], timeout: int =
 
 
 def run_native_leg(repo_root: Path, changed_files: List[str]) -> int:
-    """Linux host: run the owning suites natively. Failure of a suite is exit 1."""
-    print("Running tests natively (Linux host; no WSL needed)")
+    """POSIX host (Linux or macOS): run the owning suites natively. Failure of a suite is exit 1."""
+    print("Running tests natively (POSIX host; no WSL needed)")
     exit_code = 0
     if any(re.search(r"\.sh$|^hooks/|^tools/run_shell_tests\.sh$|^\.github/workflows/.*\.yml$", f)
            for f in changed_files):

@@ -72,14 +72,77 @@ def resolve_git_bash_path():
     )
 
 
+def resolve_darwin_bash_path():
+    """
+    Resolve bash path portably on macOS (darwin) in priority order:
+    1. env var AESOP_BASH (if set and exists)
+    2. /opt/homebrew/bin/bash (Apple Silicon Homebrew)
+    3. /usr/local/bin/bash (Intel Homebrew)
+    4. Path.home() / ".local" / "bin" / "bash" (user-local install)
+    5. shutil.which("bash") (on PATH)
+    6. /bin/bash (macOS system fallback)
+
+    Raises FileNotFoundError with clear message if none found.
+    """
+    attempted = []
+
+    env_path = os.environ.get("AESOP_BASH")
+    if env_path:
+        attempted.append(f"AESOP_BASH={env_path}")
+        if os.path.exists(env_path):
+            return env_path
+
+    candidates = [
+        "/opt/homebrew/bin/bash",
+        "/usr/local/bin/bash",
+    ]
+    try:
+        candidates.append(str(Path.home() / ".local" / "bin" / "bash"))
+    except RuntimeError:
+        pass
+    which_bash = shutil.which("bash")
+    if which_bash and which_bash not in candidates:
+        candidates.append(which_bash)
+    if "/bin/bash" not in candidates:
+        candidates.append("/bin/bash")
+
+    for candidate in candidates:
+        attempted.append(candidate)
+        if os.path.exists(candidate):
+            return candidate
+
+    raise FileNotFoundError(
+        "bash not found on macOS. Tried (in order): " + ", ".join(attempted)
+    )
+
+
 def find_terminal():
     """
     Locate a terminal executable.
-    Prefer Git Bash (process persists → pidfile valid), fallback to Windows Terminal.
+    On macOS (darwin), resolve bash via resolve_darwin_bash_path().
+    On Windows, prefer Git Bash (process persists → pidfile valid), fallback to Windows Terminal.
     Returns (terminal_path, command_builder_fn, is_wt_bool).
     command_builder_fn(script_path, title) returns command list to spawn.
-    is_wt_bool: True if using wt.exe (needs bash process tracking); False if git-bash (stable pid).
+    is_wt_bool: True if using wt.exe (needs bash process tracking); False if direct bash/git-bash (stable pid).
     """
+    if sys.platform == "darwin":
+        bash_path = resolve_darwin_bash_path()
+
+        def darwin_bash_cmd(script_path, title):
+            return [bash_path, os.path.abspath(script_path)]
+
+        return bash_path, darwin_bash_cmd, False
+
+    if sys.platform != "win32":
+        bash_path = shutil.which("bash") or "/bin/bash"
+        if not os.path.exists(bash_path):
+            raise FileNotFoundError(f"bash not found on {sys.platform}: {bash_path}")
+
+        def posix_bash_cmd(script_path, title):
+            return [bash_path, os.path.abspath(script_path)]
+
+        return bash_path, posix_bash_cmd, False
+
     git_bash = resolve_git_bash_path()
     wt_exe = shutil.which("wt.exe")
     bash_exe = r"C:\Program Files\Git\bin\bash.exe"
@@ -88,7 +151,7 @@ def find_terminal():
     if os.path.exists(git_bash):
         def git_bash_cmd(script_path, title):
             # Spawn git-bash.exe -c "bash '/path/to/script.sh'"
-            # Convert Windows path to POSIX: C:\Users\...\... -> /c/Users/...\...
+            # Convert Windows drive path to MSYS POSIX: D:\dir\file -> /d/dir/file
             script_abs = os.path.abspath(script_path)
             script_posix = "/" + script_abs[0].lower() + script_abs[2:].replace("\\", "/")
             return [git_bash, "-c", f"bash '{script_posix}'"]
@@ -119,7 +182,7 @@ def find_bash_process_by_script(script_path):
     try:
         script_abs = os.path.abspath(script_path)
         # Bash processes may show the path in either Windows or POSIX format
-        # Try both: C:\Users\... and /c/Users/...
+        # Try both Windows drive and MSYS POSIX path formats
 
         # Use PowerShell to find bash process matching either path format
         ps_cmd = (
@@ -150,6 +213,14 @@ def check_bash_running(script_path):
     Returns True if any bash/git-bash process is active.
     """
     try:
+        if sys.platform != "win32":
+            result = subprocess.run(
+                ["pgrep", "-f", os.path.abspath(script_path)],
+                capture_output=True,
+                encoding='utf-8', errors='replace',
+                timeout=5,
+            )
+            return result.returncode == 0
         result = subprocess.run(
             ["tasklist"],
             capture_output=True,
@@ -236,25 +307,26 @@ def main():
     cmd = cmd_builder(script_path, title)
 
     try:
-        # Windows process creation flags
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        popen_kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            # Windows process creation flags
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
 
-        # For git-bash: spawn detached so process persists after parent exits
-        # For wt.exe: spawn normally (it exits immediately anyway)
-        if is_wt:
-            creationflags = 0
+            # For git-bash: spawn detached so process persists after parent exits
+            # For wt.exe: spawn normally (it exits immediately anyway)
+            popen_kwargs["creationflags"] = (
+                0 if is_wt else (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            )
         else:
-            creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            popen_kwargs["start_new_session"] = True
 
         # Spawn the process without waiting
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
+        proc = subprocess.Popen(cmd, **popen_kwargs)
 
         # For git-bash, its pid persists and we can use it directly
         if not is_wt:

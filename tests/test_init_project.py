@@ -337,7 +337,7 @@ class TestInitProject(unittest.TestCase):
             content = ci.read_text(encoding="utf-8")
             self.assertIn("name: CI", content)
             self.assertIn("actions/checkout", content)
-            self.assertIn("ubuntu-latest", content)
+            self.assertIn("macos-latest", content)
 
     def test_config_has_identity(self):
         with tempfile.TemporaryDirectory() as td:

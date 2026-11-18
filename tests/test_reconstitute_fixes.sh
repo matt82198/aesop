@@ -23,6 +23,28 @@ assert_fail() {
   ((FAILED++)) || true
 }
 
+run_with_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+  local py_bin="python3"
+  command -v python3 >/dev/null 2>&1 || py_bin="python"
+  "$py_bin" -c '
+import subprocess, sys
+try:
+    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+' "$secs" "$@"
+}
+
 # ===== ISSUE 1: Target validation against fleet root =====
 test_issue1_target_validation() {
   echo ""
@@ -44,7 +66,7 @@ EOF
 
   git init --bare "$tmpdir/origin.bare" > /dev/null 2>&1
 
-  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_outside.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_outside.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "outside.*fleet\|escape\|invalid.*target"; then
     assert_pass "Path outside fleet root rejected with error"
@@ -61,7 +83,7 @@ EOF
 file://$tmpdir/origin.bare	$fleet_root/../outside_repo
 EOF
 
-  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_traversal.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_traversal.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "escape\|traversal\|outside.*fleet"; then
     assert_pass ".. traversal rejected with error"
@@ -79,7 +101,7 @@ EOF
 file://$tmpdir/origin.bare	$valid_target
 EOF
 
-  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_valid.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_valid.txt" 2>&1 || true)
 
   if echo "$output" | grep -q "Would clone"; then
     assert_pass "Valid path under fleet root accepted"
@@ -104,7 +126,7 @@ test_issue2_e2e_drives_real_script() {
 ext::sh -c 'echo bad' /tmp/target
 EOF
 
-  output=$(TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --repos-file "$tmpdir/repos_bad_url.txt" 2>&1 || true)
+  output=$(TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --repos-file "$tmpdir/repos_bad_url.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "invalid\|error"; then
     assert_pass "Real script rejects ext:: URL"
@@ -127,15 +149,19 @@ git@example	$tmpdir/target
 EOF
 
   # First verify real script rejects git@example (no colon)
-  output_real=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --repos-file "$tmpdir/repos_git_nocolon.txt" 2>&1 || true)
+  output_real=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --repos-file "$tmpdir/repos_git_nocolon.txt" 2>&1 || true)
 
   if echo "$output_real" | grep -qi "invalid.*url"; then
     # Good, real script rejects it with URL error
     # Now break the regex to accept git@ without colon
-    sed -i 's/git@\[a-zA-Z0-9.-\]+:/git@/g' "$broken_script"
+    "$(command -v python3 || command -v python)" -c '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text(encoding="utf-8").replace("git@[a-zA-Z0-9.-]+:", "git@"), encoding="utf-8")
+' "$broken_script"
 
     # Run broken script
-    output_broken=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 timeout 3 bash "$broken_script" --repos-file "$tmpdir/repos_git_nocolon.txt" 2>&1 || true)
+    output_broken=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 run_with_timeout 3 bash "$broken_script" --repos-file "$tmpdir/repos_git_nocolon.txt" 2>&1 || true)
 
     if ! echo "$output_broken" | grep -qi "invalid.*url"; then
       # Broken script accepted the git@example URL, proving test sensitivity
@@ -219,7 +245,7 @@ EOF
 
   echo "Test 4.1: Reject clone target reached via a junction/symlink escaping fleet root"
 
-  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 5 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_junction.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 run_with_timeout 5 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_junction.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "outside.*fleet\|escape\|invalid.*target"; then
     assert_pass "Junction/symlink escape rejected with error"
@@ -258,7 +284,7 @@ EOF
 
   echo "Test 5.1: Accept nested target whose parent directory doesn't exist yet"
 
-  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 5 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_newgroup.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 run_with_timeout 5 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_newgroup.txt" 2>&1 || true)
 
   if echo "$output" | grep -q "Would clone"; then
     assert_pass "Legit target with missing parent dir accepted"
@@ -284,7 +310,7 @@ test_issue3_legacy_space_targets() {
   local spaced_path="$tmpdir/my cloned repo"
   printf "file://%s\t%s\n" "$tmpdir/origin.bare" "$spaced_path" > "$tmpdir/repos_tab.txt"
 
-  output=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_tab.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_tab.txt" 2>&1 || true)
 
   if echo "$output" | grep -q "my cloned repo"; then
     assert_pass "Tab-delimited spaced path preserved correctly"
@@ -298,7 +324,7 @@ test_issue3_legacy_space_targets() {
   # This creates a space-delimited line (no tab)
   printf "file://%s %s\n" "$tmpdir/origin.bare" "$spaced_path" > "$tmpdir/repos_space.txt"
 
-  output=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_space.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 run_with_timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_space.txt" 2>&1 || true)
 
   # After the fix, either:
   # A) It should work and preserve the path with spaces

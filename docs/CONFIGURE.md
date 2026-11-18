@@ -10,15 +10,15 @@ After setup, you'll have an `aesop.config.json` in your harness root. This file 
 
 ```json
 {
-  "aesop_root": "/home/user/aesop",
-  "brain_root": "/home/user/.claude",
+  "aesop_root": "~/aesop",
+  "brain_root": "~/.claude",
   "repos": [
     {
-      "path": "/home/user/my-api",
+      "path": "~/my-api",
       "name": "api-backend"
     },
     {
-      "path": "/home/user/my-frontend",
+      "path": "~/my-frontend",
       "name": "web-frontend"
     }
   ],
@@ -66,11 +66,11 @@ Each repo object has:
 ```json
 "repos": [
   {
-    "path": "/home/user/tr-sample-tracker",
+    "path": "~/tr-sample-tracker",
     "name": "tracker"
   },
   {
-    "path": "/home/user/my-api",
+    "path": "~/my-api",
     "name": "api"
   }
 ]
@@ -118,11 +118,11 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
 
 ```json
 {
-  "aesop_root": "/home/user/aesop",
-  "brain_root": "/home/user/.claude",
+  "aesop_root": "~/aesop",
+  "brain_root": "~/.claude",
   "repos": [
     {
-      "path": "/home/user/my-app",
+      "path": "~/my-app",
       "name": "my-app"
     }
   ],
@@ -137,23 +137,23 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
 
 ```json
 {
-  "aesop_root": "/home/user/aesop",
-  "brain_root": "/home/user/.claude",
+  "aesop_root": "~/aesop",
+  "brain_root": "~/.claude",
   "repos": [
     {
-      "path": "/home/user/services/auth",
+      "path": "~/services/auth",
       "name": "auth-service"
     },
     {
-      "path": "/home/user/services/api",
+      "path": "~/services/api",
       "name": "api-gateway"
     },
     {
-      "path": "/home/user/services/data",
+      "path": "~/services/data",
       "name": "data-service"
     },
     {
-      "path": "/home/user/infra",
+      "path": "~/infra",
       "name": "infrastructure"
     }
   ],
@@ -168,11 +168,11 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
 
 ```json
 {
-  "aesop_root": "C:\\Users\\user\\aesop",
-  "brain_root": "C:\\Users\\user\\.claude",
+  "aesop_root": "C:\\Users\\example\\aesop",
+  "brain_root": "C:\\Users\\example\\.claude",
   "repos": [
     {
-      "path": "C:\\Users\\user\\projects\\my-api",
+      "path": "C:\\Users\\example\\projects\\my-api",
       "name": "api"
     }
   ],

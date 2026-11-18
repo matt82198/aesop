@@ -50,7 +50,7 @@ discover_tests() {
 live_hb_snapshot() {
   local f="$1"
   if [ -f "$f" ]; then
-    printf '%s|%s' "$(tr -d '[:space:]' < "$f" 2>/dev/null)" "$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    printf '%s|%s' "$(tr -d '[:space:]' < "$f" 2>/dev/null)" "$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)"
   else
     printf 'ABSENT|0'
   fi
