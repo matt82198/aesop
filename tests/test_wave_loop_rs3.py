@@ -159,7 +159,14 @@ class DispatchingFakeDriver(AgentDriver):
             worker_id=worker_id,
             status=WORKER_DONE,
             ok=True,
-            structured={"summary": "done"},
+            structured={
+                "files": [
+                    {"path": f, "contents": "# fake dispatch\n"}
+                    for f in files_written
+                ],
+                "summary": "done",
+                "done": True,
+            },
             files_written=tuple(files_written),
             tokens_spent=100,
         )
@@ -1345,6 +1352,67 @@ class TestRS6GitIdentityIsolation(unittest.TestCase):
                 f"git config --local {key} changed; "
                 f"_init_repo may have escaped temp dir",
             )
+
+
+class _EmptyPatchDriver(DispatchingFakeDriver):
+    """Every worker response is schema-shaped but writes zero files."""
+
+    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
+        self.dispatch_count += 1
+        self.total_tokens += 100
+        worker_id = "worker-%d" % self.dispatch_count
+        return WorkerResult(
+            worker_id=worker_id,
+            status=WORKER_DONE,
+            ok=True,
+            structured={"files": [], "summary": "nothing", "done": True},
+            files_written=(),
+            tokens_spent=100,
+        )
+
+
+class TestPreTestGateJournal(unittest.TestCase):
+    """The dispatched journal entry records the gate reason and failures."""
+
+    def test_dispatched_journal_entry_carries_reason_and_gate_failures(self):
+        from model_output_gate import MAX_REGENS, REASON_MALFORMED
+
+        driver = _EmptyPatchDriver()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            workdir = tmp / "work"
+            workdir.mkdir()
+            (workdir / "x.py").write_text("# seed\n")
+            item = {
+                "slug": "gate-journal-item",
+                "ownsFiles": ["x.py"],
+                "prompt": "p",
+                "testCmd": "exit 0",
+                "workDir": str(workdir),
+            }
+            _idx, result = wave_loop._dispatch_and_journal(
+                0,
+                item,
+                "gate-journal-item",
+                str(workdir),
+                None,
+                "inst-gate-1",
+                driver=driver,
+                state_dir=str(tmp),
+                pre_dispatch_repro_enabled=False,
+                pre_dispatch_repro_timeout=10,
+            )
+
+            self.assertEqual(result["reason"], REASON_MALFORMED)
+            self.assertEqual(len(result["gateFailures"]), 1 + MAX_REGENS)
+
+            journal_files = list((tmp / "journal").glob("*.json"))
+            entries = [json.loads(p.read_text(encoding="utf-8")) for p in journal_files]
+            dispatched = [e for e in entries if e.get("phase") == "dispatched"]
+            self.assertEqual(len(dispatched), 1)
+            self.assertEqual(dispatched[0]["reason"], REASON_MALFORMED)
+            self.assertEqual(dispatched[0]["gateFailures"], result["gateFailures"])
+            self.assertIn("files list is empty", dispatched[0]["gateFailures"][0])
 
 
 if __name__ == "__main__":

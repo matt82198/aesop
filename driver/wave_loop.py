@@ -77,6 +77,14 @@ from proc_util import kill_process_tree, run_shell_bounded
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
 from brief_lint import apply_brief_lint, is_strict
+from repeat_failure import (
+    build_fresh_prompt,
+    needs_fresh_redispatch,
+    read_owned_files,
+    record_failure,
+)
+
+IDENTICAL_FAILURE_REPEAT = "identical-failure-repeat"
 
 # ========================================================================
 # Interrupt Seam (Handoff Proof Testing Only)
@@ -2023,6 +2031,8 @@ def _dispatch_and_journal(
             "workerId": dispatch_result.get("workerId"),
             "testStdout": dispatch_result.get("testStdout", ""),
             "testStderr": dispatch_result.get("testStderr", ""),
+            "reason": dispatch_result.get("reason"),
+            "gateFailures": dispatch_result.get("gateFailures", []),
         }
 
         # Write journal entry for this item's outcome. filesWritten is
@@ -2036,6 +2046,8 @@ def _dispatch_and_journal(
                 "instance_id": instance_id,
                 "filesWritten": item_result["filesWritten"],
                 "fingerprint": _item_fingerprint(item),
+                "reason": item_result["reason"],
+                "gateFailures": item_result["gateFailures"],
             }, repo=repo)
 
         return (item_index, item_result)
@@ -2235,30 +2247,50 @@ def _repair_one_round(
                 }, repo=item.get("repo"))
             continue
 
+        # Repeat-failure streak (driver/repeat_failure.py). The baseline is the
+        # initial failure; later rounds record their own dispatch output.
+        fail_state = item_result.setdefault("failureState", {})
+        if not fail_state and item_result.get("testExit") is not None:
+            record_failure(
+                fail_state,
+                item_result.get("testStdout", ""),
+                item_result.get("testStderr", ""),
+                item_result.get("testExit"),
+            )
+        fresh_round = needs_fresh_redispatch(fail_state)
+
         # Build repair prompt: append test output to original prompt.
         original_prompt = item.get("prompt", "")
-        test_output = f"\n\nTest failed with exit code {item_result['testExit']}.\n"
-        if item_result.get("error"):
-            test_output += f"Error: {item_result['error']}\n"
-        repair_prompt = original_prompt + test_output
-
         repair_item = dict(item)
-        repair_item["prompt"] = repair_prompt
 
-        # Enrich repair item with lastTestOutput if test output was captured.
-        captured_stdout = item_result.get("testStdout", "")
-        captured_stderr = item_result.get("testStderr", "")
-        if captured_stdout or captured_stderr:
-            last_test_output = _cap_test_output(captured_stdout, captured_stderr)
-            if last_test_output:
-                repair_item["lastTestOutput"] = last_test_output
+        if fresh_round:
+            # Fresh-context redispatch after the first identical repeat: task,
+            # current owned file content and one failing case only.
+            repair_item["prompt"] = build_fresh_prompt(
+                original_prompt,
+                read_owned_files(workdir, item.get("ownsFiles", [])),
+                fail_state.get("lastCase", ""),
+            )
+        else:
+            test_output = f"\n\nTest failed with exit code {item_result['testExit']}.\n"
+            if item_result.get("error"):
+                test_output += f"Error: {item_result['error']}\n"
+            repair_item["prompt"] = original_prompt + test_output
 
-        # Enrich repair item with ownsFilesDiff (git diff of owned files).
-        owned_files = item.get("ownsFiles", [])
-        if owned_files:
-            owns_files_diff = _get_owned_files_diff(workdir, owned_files)
-            if owns_files_diff:
-                repair_item["ownsFilesDiff"] = owns_files_diff
+            # Enrich repair item with lastTestOutput if test output was captured.
+            captured_stdout = item_result.get("testStdout", "")
+            captured_stderr = item_result.get("testStderr", "")
+            if captured_stdout or captured_stderr:
+                last_test_output = _cap_test_output(captured_stdout, captured_stderr)
+                if last_test_output:
+                    repair_item["lastTestOutput"] = last_test_output
+
+            # Enrich repair item with ownsFilesDiff (git diff of owned files).
+            owned_files = item.get("ownsFiles", [])
+            if owned_files:
+                owns_files_diff = _get_owned_files_diff(workdir, owned_files)
+                if owns_files_diff:
+                    repair_item["ownsFilesDiff"] = owns_files_diff
 
         try:
             manifest_item = build_manifest_item(driver, repair_item)
@@ -2268,6 +2300,10 @@ def _repair_one_round(
             item_result["testExit"] = dispatch_result.get("testExit")
             item_result["error"] = dispatch_result.get("error")
             item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
+            # Refresh captured test output from THIS round so the next repair
+            # round's LAST TEST OUTPUT is the latest, not round 0's.
+            item_result["testStdout"] = dispatch_result.get("testStdout", "")
+            item_result["testStderr"] = dispatch_result.get("testStderr", "")
             item_result["repairs"] += 1
 
             if state_dir:
@@ -2281,7 +2317,27 @@ def _repair_one_round(
                 }, repo=repo)
 
             if not item_result["verified"]:
-                next_failed.append((item_index, item, item_result))
+                verdict = "repair"
+                if dispatch_result.get("testExit") is not None:
+                    verdict = record_failure(
+                        fail_state,
+                        dispatch_result.get("testStdout", ""),
+                        dispatch_result.get("testStderr", ""),
+                        dispatch_result.get("testExit"),
+                    )
+                if verdict == "end":
+                    # Second identical repeat: the item ends as failed. The
+                    # repair cap is unchanged; this only stops re-asking.
+                    item_result["error"] = IDENTICAL_FAILURE_REPEAT
+                    if state_dir:
+                        _write_journal_entry(state_dir, slug, "identical_failure_repeat", {
+                            "verified": False,
+                            "testExit": item_result["testExit"],
+                            "repairs": item_result["repairs"],
+                            "error": IDENTICAL_FAILURE_REPEAT,
+                        }, repo=item.get("repo"))
+                else:
+                    next_failed.append((item_index, item, item_result))
 
         except Exception as exc:
             item_result["error"] = f"repair exception: {exc}"

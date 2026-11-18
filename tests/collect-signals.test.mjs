@@ -109,18 +109,24 @@ function runCollector(aesopRoot, envOverrides = {}) {
 // (a) the walk sees zero entries (observable: SIGNALS.json junk.total === 0 with junk not skipped) and
 // (b) the collector completes in under 10 s. Ownership: the empty root is created under os.tmpdir()
 // (tests/helpers/isolated-env.mjs already holds HOME/USERPROFILE) and removed in finally.
-test('scan root: TEMP_ROOT pins the junk walk to an empty owned dir and completes under 10s', async (t) => {
+// The time bound applies to junk.durationMs, the collector's own timer around the junk walk only
+// (performance.now() in detectJunkScripts). It deliberately excludes process spawn and git calls:
+// whole-process wall time flaked on loaded Windows CI (PR 1415, collect-signals.test.mjs:123, 10735ms
+// for a run that takes ~2.7s locally). An empty owned dir is a handful of readdir/stat calls, so 10000ms
+// is a generous ceiling that still fails a walk which scans a large tree or stalls.
+test('scan root: TEMP_ROOT pins the junk walk to an empty owned dir and the junk walk finishes under 10s', async (t) => {
   const fixture = createFixture();
   const emptyScanRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-scan-root-'));
   try {
-    const startedAt = Date.now();
     runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', TEMP_ROOT: emptyScanRoot });
-    const elapsedMs = Date.now() - startedAt;
 
     const signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
     assert.notEqual(signals.junk.skipped, true, 'junk walk must run under extended signals');
     assert.equal(signals.junk.total, 0, 'an empty scan root must yield zero junk entries (no real temp-tree entries seen)');
-    assert.ok(elapsedMs < 10000, `collector with an empty scan root took ${elapsedMs}ms; bound is 10000ms`);
+    const durationMs = signals.junk.durationMs;
+    assert.equal(typeof durationMs, 'number', `junk.durationMs must be a number, got ${typeof durationMs}`);
+    assert.ok(Number.isFinite(durationMs) && durationMs >= 0, `junk.durationMs must be finite and non-negative, got ${durationMs}`);
+    assert.ok(durationMs < 10000, `junk walk over an empty scan root took ${durationMs}ms; bound is 10000ms`);
   } finally {
     try {
       rmRetrySync(emptyScanRoot);
@@ -133,19 +139,21 @@ test('scan root: TEMP_ROOT pins the junk walk to an empty owned dir and complete
 // caller passes no TEMP_ROOT. Today it inherits process.env (or os.tmpdir()/claude), so the walk covers the
 // live temp tree and this test fails on (a) and/or (b). S2 changes runCollector to default TEMP_ROOT to a
 // fresh empty mkdtemp dir under os.tmpdir().
-test('runCollector: with no TEMP_ROOT override the junk walk is pinned to an empty root and completes under 10s', async (t) => {
+test('runCollector: with no TEMP_ROOT override the junk walk is pinned to an empty root and the junk walk finishes under 10s', async (t) => {
   const fixture = createFixture();
   const savedTempRoot = process.env.TEMP_ROOT;
   delete process.env.TEMP_ROOT;
   try {
-    const startedAt = Date.now();
     runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true' });
-    const elapsedMs = Date.now() - startedAt;
 
     const signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
     assert.notEqual(signals.junk.skipped, true, 'junk walk must run under extended signals');
     assert.equal(signals.junk.total, 0, 'runCollector with no TEMP_ROOT override must walk an empty root (saw real temp-tree entries)');
-    assert.ok(elapsedMs < 10000, `runCollector with no TEMP_ROOT override took ${elapsedMs}ms; bound is 10000ms`);
+    // Same junk.durationMs bound and rationale as the scan-root test above (whole-process time is not measured).
+    const durationMs = signals.junk.durationMs;
+    assert.equal(typeof durationMs, 'number', `junk.durationMs must be a number, got ${typeof durationMs}`);
+    assert.ok(Number.isFinite(durationMs) && durationMs >= 0, `junk.durationMs must be finite and non-negative, got ${durationMs}`);
+    assert.ok(durationMs < 10000, `junk walk with no TEMP_ROOT override took ${durationMs}ms; bound is 10000ms`);
   } finally {
     if (savedTempRoot === undefined) {
       delete process.env.TEMP_ROOT;

@@ -17,13 +17,13 @@
   construct-time validate_base_url; key waiver only via loopback-validated is_local.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
-  bounded repair, per-repo batched git ship, recovery journal. Halt kill-switch checks
+  bounded repair (identical-failure repeats: 1st -> fresh-context redispatch via repeat_failure.py, 2nd -> item error identical-failure-repeat; repair_cap unchanged), per-repo batched git ship, recovery journal. Halt kill-switch checks
   at all phase boundaries (PHASE 3/5/5.75/6/7) mirror cost-ceiling pattern, abort cleanly
   when _check_halt() detects sentinel. Supports optional orchestrator_backend for
   live-seat swap (see driver/orchestrator-swap/). RS3-W + RS5 claim lifecycle: fail-CLOSED
   gate, fingerprint-bound journal, deterministic claim state. Pre-test and owned-files diff run through proc_util.run_shell_bounded (never shell=True timeout=); item file claims use the multi_dispatch keyspace (LeaseStore when multibox.enabled, instances stream when off); the advisory check is fail-closed (unreadable claims store raises ClaimStateUnknown, item skipped). Journal write failures (`_write_journal_entry`) are never silent: they print a `journal write failed` stderr line and return False (tracker e107455fa22b); tested in TestJournalWriteFailureSurfaced. Tests: test_wave_loop_rs3, test_wave_loop_halt_enforcement, test_wave_loop_pretest_bounded, test_claim_keyspace_contract.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items
-  (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
+  (build_manifest_item / dispatch_item; green ONLY from test exit code, see below). Pre-test schema/parse gates live in model_output_gate.py (MAX_REGENS=2, then `malformed-output`).
 - **brief_lint.py** — Brief lint, called in `_dispatch_and_journal` after build_manifest_item and before the first model call. ast-reads the item's acceptance test (explicit `acceptanceTestFile` key, else a `.py` token in testCmd), collects asserted string literals and names imported from the module under test, and checks the prompt contains them. Default appends a "Required names and strings" section and logs `brief-lint-added` to state_dir/brief_lint.log. Strict (item `briefLintStrict: true` or env `AESOP_BRIEF_LINT_STRICT=1`) raises BriefLintRefusal, so the item is marked failed and never dispatched. Tests: test_brief_lint_asserted_names.
 - **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
 - **anthropic_transport.py** — stdlib urllib transport for the Anthropic endpoint.
