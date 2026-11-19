@@ -164,10 +164,23 @@ resolve_py_bin() {
     fi
     if [ -n "$timeout_bin" ]; then
       "$timeout_bin" 5 "$c" -c "import sys" </dev/null >/dev/null 2>&1
+      rc=$?
     else
-      "$c" -c "import sys" </dev/null >/dev/null 2>&1
+      "$c" -c "import sys" </dev/null >/dev/null 2>&1 &
+      local _probe_pid=$! _probe_elapsed=0
+      while [ "$_probe_elapsed" -lt 5 ] && kill -0 "$_probe_pid" 2>/dev/null; do
+        sleep 1
+        _probe_elapsed=$((_probe_elapsed + 1))
+      done
+      if kill -0 "$_probe_pid" 2>/dev/null; then
+        kill -KILL "$_probe_pid" 2>/dev/null || true
+        wait "$_probe_pid" 2>/dev/null || true
+        rc=124
+      else
+        rc=0
+        wait "$_probe_pid" 2>/dev/null || rc=$?
+      fi
     fi
-    rc=$?
     if [ "$rc" -eq 0 ]; then
       printf '%s' "$c"
       return 0
@@ -413,14 +426,23 @@ audit_lock_owner() {
 }
 
 shell_pid() {
-  # Subshell-accurate PID across Bash 4+ ($BASHPID) and macOS /bin/bash 3.2
-  # (where BASHPID is unset: a fresh sh -c child prints its $PPID, which is
-  # the calling subshell's exact PID). Optional $1 assigns via printf -v.
-  local _spid
+  # Subshell-accurate PID across Bash 4+ ($BASHPID) and macOS /bin/bash 3.2.
+  # In Bash 3.2, when an EXIT/RETURN trap is active inside a $(...) subshell
+  # (e.g. out=$(verify_audit_log ...)), `_spid=$(sh -c ...)` forks an extra
+  # intermediate subshell for $(...), making $PPID of `sh` the ephemeral
+  # command-substitution PID rather than the caller's PID. Redirecting `sh -c`
+  # directly to a scratch file without $(...) keeps `sh` a direct child of the
+  # calling subshell so $PPID is always exact.
+  local _spid=""
   if [ -n "${BASHPID:-}" ]; then
     _spid="$BASHPID"
   else
-    _spid=$(sh -c 'printf "%s" "$PPID"')
+    local _pf="${TMPDIR:-/tmp}/.aesop-spid-$$-${RANDOM:-0}"
+    if sh -c 'printf "%s" "$PPID"' > "$_pf" 2>/dev/null; then
+      IFS= read -r _spid < "$_pf" 2>/dev/null || _spid=""
+      rm -f "$_pf" 2>/dev/null
+    fi
+    [ -n "$_spid" ] || _spid=$(sh -c 'printf "%s" "$PPID"')
   fi
   if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
     printf -v "$1" '%s' "$_spid"

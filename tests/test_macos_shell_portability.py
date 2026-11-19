@@ -343,6 +343,59 @@ verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log"
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(res.stdout, "linux_shape_skipped_delete_only_0123456789abcdef")
 
+    def test_bsd_mktemp_tmpdir_and_bounded_py_probe_without_timeout(self):
+        """backup-fleet honors TMPDIR in mktemp, and resolve_py_bin bounds hung python3 without GNU timeout."""
+        bf_text = BACKUP_FLEET_SCRIPT.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(bf_text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            if "=$(mktemp)" in stripped:
+                self.fail(f"Bare mktemp ignores TMPDIR on BSD/macOS at backup-fleet.sh:{lineno}: {stripped}")
+
+        # Shadow timeout/gtimeout (absent) and python3 (wedged sleeper); real python stays available
+        self._write_exe("timeout", "#!/bin/sh\nexit 127\n")
+        self._write_exe("gtimeout", "#!/bin/sh\nexit 127\n")
+        pid_file = self.tmp / "hung_py3.pids"
+        pid_posix = _posix_path(pid_file)
+        self._write_exe("python3", f"#!/bin/sh\necho $$ >> \"{pid_posix}\"\nexec sleep 60\n")
+        py_exe = _posix_path(Path(sys.executable))
+        self._write_exe("python", f"#!/bin/sh\nexec \"{py_exe}\" \"$@\"\n")
+
+        env = self._base_env(extra_path_dir=self.shadow_bin)
+        hook_posix = _posix_path(HOOK_SCRIPT)
+        aesop_state = _posix_path(self.tmp / "trapped_audit")
+
+        t0 = time.monotonic()
+        probe_res = self._run_bash(
+            f"""
+unset _AESOP_PY_BIN
+source "{hook_posix}"
+unset _AESOP_PY_BIN
+resolved=$(resolve_py_bin)
+rc=$?
+printf 'RC=%s BIN=%s\\n' "$rc" "$resolved"
+export AESOP_ROOT="{aesop_state}"
+mkdir -p "$AESOP_ROOT/state"
+trap ':' EXIT
+unset BASHPID
+log_block "seed_entry" || exit 31
+out=$(unset BASHPID; trap ':' EXIT; verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>&1) || exit 32
+if [ -d "$AESOP_ROOT/state/.audit-log-lock" ]; then
+  echo "LOCK_LEAKED"
+  exit 33
+fi
+echo "LOCK_CLEAN"
+""",
+            env=env,
+            timeout=25,
+        )
+        elapsed = time.monotonic() - t0
+        self.assertEqual(probe_res.returncode, 0, f"Probe/lock failed:\n{probe_res.stdout}\n{probe_res.stderr}")
+        self.assertLess(elapsed, 15.0, f"resolve_py_bin was not bounded without timeout ({elapsed:.2f}s)")
+        self.assertIn("RC=0 BIN=python", probe_res.stdout)
+        self.assertIn("LOCK_CLEAN", probe_res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

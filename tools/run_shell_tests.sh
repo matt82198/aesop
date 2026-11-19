@@ -177,6 +177,53 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   mkdir -p "$HOME" "$TMPDIR"
   trap 'rm -rf "$SHELL_TEST_ISO_ROOT"' EXIT
 
+  # Stock macOS lacks GNU `timeout` unless coreutils is installed. Provide a
+  # portable executable shim pinned to `gtimeout` or the resolved absolute
+  # Python binary (so tests that shadow `python3` on PATH do not affect `timeout`).
+  if ! command -v timeout >/dev/null 2>&1; then
+    mkdir -p "${SHELL_TEST_ISO_ROOT}/bin"
+    if command -v gtimeout >/dev/null 2>&1; then
+      printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v gtimeout)" > "${SHELL_TEST_ISO_ROOT}/bin/timeout"
+      chmod +x "${SHELL_TEST_ISO_ROOT}/bin/timeout"
+      export PATH="${SHELL_TEST_ISO_ROOT}/bin:${PATH}"
+    else
+      _py_shim_bin="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+      if [ -n "$_py_shim_bin" ]; then
+        cat > "${SHELL_TEST_ISO_ROOT}/bin/timeout" <<EOF
+#!/bin/sh
+if [ "\${1:-}" = "--version" ]; then echo "portable-timeout 1.0"; exit 0; fi
+exec "$_py_shim_bin" -c '
+import os, signal, subprocess, sys
+args = sys.argv[1:]
+while args and args[0].startswith("-"):
+    opt = args.pop(0)
+    if opt in ("-k", "-s") and args:
+        args.pop(0)
+if len(args) < 2:
+    sys.exit(125)
+raw_t = args[0].rstrip("s")
+secs = float(raw_t)
+proc = subprocess.Popen(args[1:], start_new_session=(os.name != "nt"))
+try:
+    sys.exit(proc.wait(timeout=secs))
+except subprocess.TimeoutExpired:
+    if os.name != "nt":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        proc.kill()
+    proc.wait()
+    sys.exit(124)
+' "\$@"
+EOF
+        chmod +x "${SHELL_TEST_ISO_ROOT}/bin/timeout"
+        export PATH="${SHELL_TEST_ISO_ROOT}/bin:${PATH}"
+      fi
+    fi
+  fi
+
   echo "Isolation: SHELL_TEST_ISO_ROOT=$SHELL_TEST_ISO_ROOT (HOME/USERPROFILE/TMPDIR/TMP/TEMP pinned under it for this run)"
   echo ""
 

@@ -252,7 +252,7 @@ scan_unpushed_commits() {
   # A missing scanner or interpreter returns 1 (refused), never 0 (tracker 00fa6e4cb68b).
   local py scan_out scan_rc
   py=$(resolve_scanner "$(basename "$repo")") || return 1
-  scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
+  scan_out=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-scan.XXXXXX" 2>/dev/null) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
   "$py" "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" > "$scan_out" 2>&1
   scan_rc=$?
   grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
@@ -275,7 +275,7 @@ scan_tracked_files() {
   # G (R-AUDIT-BKP-3): capture both listings to a file and check their status. A process
   # substitution would hide a failed listing, and the scan would then pass on zero files.
   local list_file list_rc
-  list_file=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture file listing (fail-closed)" >> "$LOG"; return 1; }
+  list_file=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-list.XXXXXX" 2>/dev/null) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture file listing (fail-closed)" >> "$LOG"; return 1; }
   { get_tracked_modifications "$repo" && get_untracked_files "$repo"; } > "$list_file"
   list_rc=$?
   if [ "$list_rc" -ne 0 ]; then
@@ -299,7 +299,7 @@ scan_tracked_files() {
   local py scan_out scan_rc
   py=$(resolve_scanner "$(basename "$repo")") || return 1
   # Same capture as scan_unpushed_commits: HIGH/FOUND/FATAL lines -> FLEET-BACKUP.log.
-  scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
+  scan_out=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-scan.XXXXXX" 2>/dev/null) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
   "$py" "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" > "$scan_out" 2>&1
   scan_rc=$?
   grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
@@ -344,7 +344,7 @@ process_repo() {
     local uncommitted=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 
     if [ "$uncommitted" -gt 0 ]; then
-      TMPIDX=$(mktemp)
+      TMPIDX=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-idx.XXXXXX" 2>/dev/null)
       GIT_INDEX_FILE="$TMPIDX" git read-tree HEAD 2>/dev/null
       GIT_INDEX_FILE="$TMPIDX" git add -A 2>/dev/null
       TREE=$(GIT_INDEX_FILE="$TMPIDX" git write-tree 2>/dev/null)
@@ -441,7 +441,7 @@ main() {
     exit 1
   fi
   log "=== cycle start ==="
-  temp_json=$(mktemp) || {
+  temp_json=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-json.XXXXXX" 2>/dev/null) || {
     # Hard failure: the cycle cannot stage its status file. Exit 1 WITHOUT a
     # heartbeat so the failed cycle reads as stale.
     log "ERROR: cannot create cycle scratch file; cycle aborted (exit 1, no heartbeat)"
@@ -518,7 +518,7 @@ except Exception:
 $real_dir"
 
       if is_touched "$dir"; then
-        temp_result=$(mktemp)
+        temp_result=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-res.XXXXXX" 2>/dev/null) || continue
         # Wrap process_repo in bounded timeout (per-repo operation timeout)
         # Pass function definition to subshell since process_repo is a function
         # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
@@ -551,7 +551,7 @@ $real_dir"
     # AUDIT FIX 1: Fall back to autodiscovery only when no repos configured
     log "No repos configured, using autodiscovery"
     local discovery_file
-    discovery_file=$(mktemp) || {
+    discovery_file=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-disc.XXXXXX" 2>/dev/null) || {
       log "ERROR: cannot create autodiscovery scratch file; skipping autodiscovery"
       echo "]" >> "$temp_json"
       mv "$temp_json" "$REPOS_STATUS"
@@ -571,7 +571,7 @@ $real_dir"
       if [ -z "$real_dir" ]; then continue; fi
       processed_paths="$processed_paths
 $real_dir"
-      temp_result=$(mktemp)
+      temp_result=$(mktemp "${TMPDIR:-/tmp}/aesop-bf-res.XXXXXX" 2>/dev/null) || continue
       # Pass function definition to subshell since process_repo is a function
       # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
       run_bounded_timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
