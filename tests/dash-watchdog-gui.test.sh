@@ -79,8 +79,28 @@ test_bash_syntax() {
 render_daemon_line() {
   local scratch="$1"; shift
   local out="$scratch/frame.txt"
-  env "$@" timeout 2 bash "$WATCHDOG_GUI" > "$out" 2>&1
-  sed -e 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$out" | grep 'Daemon:' | head -1
+  if command -v timeout >/dev/null 2>&1; then
+    env "$@" timeout 2 bash "$WATCHDOG_GUI" > "$out" 2>&1
+  elif command -v gtimeout >/dev/null 2>&1; then
+    env "$@" gtimeout 2 bash "$WATCHDOG_GUI" > "$out" 2>&1
+  else
+    local py_bin="python3"
+    command -v "$py_bin" >/dev/null 2>&1 || py_bin="python"
+    env "$@" "$py_bin" -c 'import os, signal, subprocess, sys
+p = subprocess.Popen(sys.argv[1:], start_new_session=True)
+try:
+    p.wait(timeout=2)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except OSError:
+        p.terminate()
+    try:
+        p.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        p.kill()' bash "$WATCHDOG_GUI" > "$out" 2>&1
+  fi
+  sed -e $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' "$out" | grep 'Daemon:' | head -1
 }
 
 test_heartbeat_read_from_daemon_path() {
