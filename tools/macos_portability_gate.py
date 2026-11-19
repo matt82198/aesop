@@ -57,7 +57,7 @@ PROFILE_EXCLUDED_DIRS = {
 # Personal WoW/keyrun scripts and historical audit reports explicitly out of Mac port scope.
 PROFILE_EXCLUDED_FILES = {
     "aesop": frozenset(),
-    "brain": frozenset({"memory-keys.json"}),
+    "brain": frozenset({"memory-keys.json", "ci/vendor/open_findings.py"}),
     "scripts": frozenset({
         "mouse_macro.py",
         "pp_brain.py",

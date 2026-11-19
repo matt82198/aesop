@@ -214,11 +214,28 @@ class CliWorkerDriver(AgentDriver):
                 error="ownership violation: wrote outside owned_files: " + ", ".join(outside),
             )
 
+        patch_files = []
+        for rel in changed:
+            full = Path(workdir) / rel
+            if full.is_file():
+                patch_files.append(
+                    {
+                        "path": rel,
+                        "contents": full.read_text(encoding="utf-8", errors="replace"),
+                    }
+                )
+        structured = {
+            "files": patch_files,
+            "summary": (stdout or "").strip()[:200] or "cli worker patch",
+            "done": True,
+        }
+
         return WorkerResult(
             worker_id=worker_id,
             status=WORKER_DONE,
             ok=True,
             text=stdout,
+            structured=structured,
             files_written=tuple(changed),
         )
 
