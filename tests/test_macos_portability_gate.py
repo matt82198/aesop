@@ -117,6 +117,56 @@ class TestMacosPortabilityGateJS(unittest.TestCase):
             proc = _run_gate(tmp, extra_args=["--json"])
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
+    def test_catches_indirect_fallback_and_argv_without_resolver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                Path(tmp) / "tools" / "fallback.mjs",
+                "const py = process.env.PY || 'python';\n"
+                "export default py;\n",
+            )
+            proc = _run_gate(tmp, extra_args=["--json"])
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(data["findings"][0]["rule"], "js-bare-python")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                Path(tmp) / "tools" / "argv.js",
+                "function call(cmd, argv) { return [cmd, argv]; }\n"
+                "function run(script) {\n"
+                "  return call('x', ['python', '-I', script]);\n"
+                "}\n",
+            )
+            proc = _run_gate(tmp, extra_args=["--json"])
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(data["findings"][0]["rule"], "js-bare-python")
+
+    def test_allows_indirect_fallback_and_argv_with_resolver_or_python3(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                Path(tmp) / "tools" / "good_indirect.mjs",
+                "import { resolvePythonBin } from './py.mjs';\n"
+                "const py = process.env.PY || 'python';\n"
+                "export function run(script) {\n"
+                "  const bin = resolvePythonBin();\n"
+                "  return [bin, ['python', '-I', script], py];\n"
+                "}\n",
+            )
+            proc = _run_gate(tmp, extra_args=["--json"])
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                Path(tmp) / "tools" / "good_python3.js",
+                "const bins = ['python', 'python3'];\n"
+                "const py = process.env.PY || 'python';\n"
+                "function call(cmd, argv) { return [cmd, argv]; }\n"
+                "call('x', ['python', '-I', 'tool.py']);\n",
+            )
+            proc = _run_gate(tmp, extra_args=["--json"])
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
 
 class TestMacosPortabilityGatePythonWinAPIs(unittest.TestCase):
     """Unguarded Windows-only Python API detection."""

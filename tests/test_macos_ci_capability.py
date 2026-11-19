@@ -2,7 +2,9 @@
 """Tests for macOS (darwin) portability across CI capability, Linux shape check,
 TUI launcher, and literal user-path regression checks.
 """
+import http.server
 import os
+import socket
 import subprocess
 import sys
 import unittest
@@ -193,6 +195,32 @@ class TestNoLiteralUserPathsRegression(unittest.TestCase):
                     needle in text,
                     f"Hardcoded user path {needle!r} found in {path.relative_to(REPO_ROOT)}",
                 )
+
+
+class TestQuietThreadingHTTPServerNoFqdn(unittest.TestCase):
+    """QuietThreadingHTTPServer must bind loopback without calling socket.getfqdn."""
+
+    def test_binds_loopback_without_calling_getfqdn(self):
+        ui_dir = str(REPO_ROOT / "ui")
+        if ui_dir not in sys.path:
+            sys.path.insert(0, ui_dir)
+        import handler  # noqa: E402
+
+        with mock.patch.object(
+            socket,
+            "getfqdn",
+            side_effect=AssertionError("must not call getfqdn on loopback"),
+        ):
+            server = handler.QuietThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                http.server.BaseHTTPRequestHandler,
+            )
+            try:
+                self.assertEqual(server.server_name, "127.0.0.1")
+                self.assertGreater(server.server_port, 0)
+                self.assertEqual(server.server_port, server.server_address[1])
+            finally:
+                server.server_close()
 
 
 if __name__ == "__main__":

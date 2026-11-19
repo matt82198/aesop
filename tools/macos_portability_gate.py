@@ -35,7 +35,7 @@ COMMON_EXCLUDED_DIRS = frozenset({
 })
 
 PROFILE_EXCLUDED_DIRS = {
-    "aesop": COMMON_EXCLUDED_DIRS | frozenset({"docs", "bench", "assets"}),
+    "aesop": COMMON_EXCLUDED_DIRS | frozenset({"docs", "bench", "assets", "examples"}),
     "brain": COMMON_EXCLUDED_DIRS | frozenset({
         "docs",
         "projects",
@@ -93,7 +93,14 @@ EXAMPLE_MARKERS = ("e.g.", "example", "default")
 _JS_BARE_PYTHON_RE = re.compile(
     r"\b(?:spawnSync|execFileSync|spawn|execFile)\s*\(\s*(['\"])python\1\s*,"
 )
+_JS_FALLBACK_PYTHON_RE = re.compile(
+    r"(?:\|\||\?\?)\s*(['\"])python\1"
+)
+_JS_ARGV_PYTHON_RE = re.compile(
+    r"\[\s*(['\"])python\1\s*,\s*(?:['\"]-[A-Za-z]|['\"][^'\"]*\.py\b|[A-Za-z_$])"
+)
 _JS_PYTHON3_RE = re.compile(r"['\"]python3['\"]")
+_JS_RESOLVE_PYTHON_RE = re.compile(r"['\"]python3['\"]|\bresolvePython\w*")
 
 _USER_PATH_RE = re.compile(
     r"(?:C:[/\\]{1,2}Users[/\\]{1,2}|/c/Users/|C--Users-)(?:"
@@ -191,7 +198,7 @@ def _strip_js_comments(source):
 
 
 def scan_js_file(filepath, rel_posix):
-    """Scan a .js or .mjs file for bare spawnSync/execFileSync('python', ...)."""
+    """Scan a .js or .mjs file for bare or indirect 'python' invocations."""
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as handle:
             raw_text = handle.read()
@@ -199,19 +206,33 @@ def scan_js_file(filepath, rel_posix):
         return []
 
     raw_lines = raw_text.splitlines()
-    stripped_lines = _strip_js_comments(raw_text).splitlines()
+    stripped_text = _strip_js_comments(raw_text)
+    stripped_lines = stripped_text.splitlines()
+    file_has_resolver = bool(_JS_RESOLVE_PYTHON_RE.search(stripped_text))
     findings = []
 
     for idx, line in enumerate(stripped_lines):
-        if not _JS_BARE_PYTHON_RE.search(line):
-            continue
         raw_line = raw_lines[idx] if idx < len(raw_lines) else line
         if EXEMPT_MARKER in raw_line:
             continue
-        window_start = max(0, idx - 15)
-        preceding = "\n".join(stripped_lines[window_start : idx + 1])
-        if _JS_PYTHON3_RE.search(preceding):
+
+        direct_hit = bool(_JS_BARE_PYTHON_RE.search(line))
+        indirect_hit = (
+            not file_has_resolver
+            and bool(
+                _JS_FALLBACK_PYTHON_RE.search(line)
+                or _JS_ARGV_PYTHON_RE.search(line)
+            )
+        )
+        if not direct_hit and not indirect_hit:
             continue
+
+        if direct_hit:
+            window_start = max(0, idx - 15)
+            preceding = "\n".join(stripped_lines[window_start : idx + 1])
+            if _JS_PYTHON3_RE.search(preceding):
+                continue
+
         findings.append({
             "rule": "js-bare-python",
             "file": rel_posix,

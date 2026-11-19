@@ -50,7 +50,7 @@ def copy_dist(root: Path, repo: Path):
 
 
 def start_server(root: Path, port: int, repo: Path, serve_script: Path,
-                 boot_tries: int = 50, boot_sleep: float = 0.2,
+                 boot_tries: int = 100, boot_sleep: float = 0.2,
                  collect_interval: str = "0.3"):
     """Start ui/serve.py with fixture environment and wait for readiness.
 
@@ -74,6 +74,7 @@ def start_server(root: Path, port: int, repo: Path, serve_script: Path,
     if state_root.resolve() == real_state.resolve():
         raise RuntimeError("state dir resolved to real repo state (~aesop/state)")
 
+    root.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ,
                AESOP_ROOT=str(root),
                AESOP_STATE_ROOT=str(state_root),
@@ -82,16 +83,44 @@ def start_server(root: Path, port: int, repo: Path, serve_script: Path,
                AESOP_PROOF_FIXTURES="1",
                AESOP_UI_COLLECT_INTERVAL=collect_interval,
                PORT=str(port))
-    server = subprocess.Popen([sys.executable, str(serve_script)], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    stderr_path = root / ".serve-stderr.log"
+    stderr_handle = open(stderr_path, "w", encoding="utf-8")
+    try:
+        server = subprocess.Popen(
+            [sys.executable, str(serve_script)],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_handle,
+        )
+    finally:
+        stderr_handle.close()
+
+    def _read_stderr():
+        try:
+            text = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return ""
+        if len(text) > 2000:
+            return "..." + text[-2000:]
+        return text
+
     for _ in range(boot_tries):
+        rc = server.poll()
+        if rc is not None:
+            raise RuntimeError(
+                f"server never came up (rc={rc}, stderr={_read_stderr()!r})"
+            )
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
             return server
         except OSError:
             time.sleep(boot_sleep)
     server.kill()
-    raise RuntimeError("server never came up")
+    try:
+        rc = server.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        rc = server.poll()
+    raise RuntimeError(f"server never came up (rc={rc}, stderr={_read_stderr()!r})")
 
 
 def stop_server(server):

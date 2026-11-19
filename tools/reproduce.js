@@ -62,6 +62,17 @@ function formatRow(label, status, timing, hint) {
   return `  ${paddedLabel} ${statusStr}${timingStr}${hintStr}`;
 }
 
+// Resolve Python interpreter portably (prefer python3, fallback to python)
+function resolvePythonBin() {
+  for (const candidate of ['python3', 'python']) {
+    const probe = spawnSync(candidate, ['--version'], { stdio: 'ignore' });
+    if (!probe.error && probe.status === 0) {
+      return candidate;
+    }
+  }
+  return 'python3';
+}
+
 // Run a subprocess and return pass/fail
 function runSubprocess(label, args, options = {}) {
   const { cwd = PACKAGE_ROOT, stdio = 'inherit', skipIfMissing = null } = options;
@@ -167,31 +178,33 @@ function runRepoMode() {
     });
   }
 
+  const pythonBin = resolvePythonBin();
+
   // Step 6: Python tool compile check
   results.push(runSubprocess(
     'Python tool import/compile smoke gate',
-    ['bash', '-c', 'python -m compileall -q tools/ && python -m unittest tests.test_tools_importable -v'],
+    ['bash', '-c', `${pythonBin} -m compileall -q tools/ && ${pythonBin} -m unittest tests.test_tools_importable -v`],
     { stdio: 'pipe' }
   ));
 
   // Step 7: Python tests
   results.push(runSubprocess(
     'Python tests (unittest discover)',
-    ['bash', '-c', 'python -m unittest discover -s tests -p "test_*.py" -v'],
+    ['bash', '-c', `${pythonBin} -m unittest discover -s tests -p "test_*.py" -v`],
     { stdio: 'inherit' }
   ));
 
   // Step 8: Benchmark scorer tests
   results.push(runSubprocess(
     'Benchmark scorer tests (test_bench_runner)',
-    ['python', '-m', 'unittest', 'tests.test_bench_runner', '-v'],
+    [pythonBin, '-m', 'unittest', 'tests.test_bench_runner', '-v'],
     { stdio: 'pipe' }
   ));
 
   // Step 9: Benchmark reproduction
   results.push(runSubprocess(
     'Offline benchmark reproduction',
-    ['python', 'tools/bench_runner.py', '--runner', 'mock'],
+    [pythonBin, 'tools/bench_runner.py', '--runner', 'mock'],
     { stdio: 'pipe' }
   ));
 
@@ -316,10 +329,11 @@ function runInstalledMode() {
   ));
 
   // Step 3: Secret-scan selftest
+  const pythonBin = resolvePythonBin();
   const scannerSelftest = path.join(PACKAGE_ROOT, 'tools', 'scanner_selftest.py');
   results.push(runSubprocess(
     'Secret-scan selftest',
-    ['python', scannerSelftest],
+    [pythonBin, scannerSelftest],
     { stdio: 'pipe', skipIfMissing: scannerSelftest }
   ));
 

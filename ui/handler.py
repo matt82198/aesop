@@ -3,6 +3,7 @@
 import http.server
 import json
 import queue
+import socketserver
 import sys
 import urllib.parse
 
@@ -1371,8 +1372,21 @@ class QuietThreadingHTTPServer(http.server.ThreadingHTTPServer):
     and clutter stderr with tracebacks.
 
     This server overrides handle_error() to suppress only these two exception types
-    while still reporting all other exceptions (real bugs, timeouts, etc.).
+    while still reporting all other exceptions (real bugs, timeouts, etc.), and
+    overrides server_bind() to avoid macOS socket.getfqdn() Bonjour .local stalls
+    on loopback addresses.
     """
+
+    def server_bind(self):
+        """Bind socket without calling socket.getfqdn() on loopback/wildcard hosts."""
+        host = self.server_address[0] if self.server_address else ""
+        if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0", ""):
+            socketserver.TCPServer.server_bind(self)
+            bound_host, bound_port = self.server_address[:2]
+            self.server_name = bound_host or "localhost"
+            self.server_port = bound_port
+            return
+        super().server_bind()
 
     def handle_error(self, request, client_address):
         """Suppress client disconnect exceptions; report all others.
