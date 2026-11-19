@@ -44,7 +44,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **handler.py** (HTTP routing + GET/POST endpoints):
 - `DashboardHandler` class (extends `http.server.BaseHTTPRequestHandler`).
-- `run_server(host, port, app_handler_fn)` â€” ThreadingHTTPServer required (SSE holds one connection per client).
+- `run_server(host, port, app_handler_fn)` â€” ThreadingHTTPServer required (SSE holds one connection per client). `QuietThreadingHTTPServer.server_bind` skips `socket.getfqdn()` on loopback/wildcard binds (`127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, `""`) to avoid macOS Bonjour `.local` mDNS stalls during startup.
 - Reads `config.X` / `csrf.SESSION_TOKEN` at call time. Tracker delete splits the path from the query before `item_id` (else archive 404s).
 - `serve_api_state` (`GET /api/state`): a cached section that is **empty** counts as not-yet-snapshotted and is recomputed inline. The "data" source seeds `{}` and is mtime-gated, so a quiet collector leaves that default cached; testing only for `None` let `{}` through and produced an empty first paint.
 
