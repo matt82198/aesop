@@ -24,7 +24,7 @@ test_backslash_sequences_literal() {
   local cleaned
 
   output=$(printf '%s\033[K\n' "$test_line" 2>&1 | head -1)
-  cleaned=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[K//g')
+  cleaned=$(printf '%s' "$output" | sed -e $'s/\x1b\\[[0-9;]*m//g' -e $'s/\x1b\\[K//g')
 
   if [ "$cleaned" = "$test_line" ]; then
     echo "PASS: Backslash sequences in data are printed literally"

@@ -235,8 +235,8 @@ test_c_blocked_verdict_survives_warn_line() {
 
   run_process_repo "$fx" "$fx/repo"
 
-  local state
-  state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$fx/record.out")
+  local state=""
+  IFS= read -r -d '' state < "$fx/record.out" || true
   if [ "$state" != "BLOCKED" ]; then
     fail "daemon's record parse reads state as [$(printf '%q' "$state")], expected BLOCKED"
     return 1

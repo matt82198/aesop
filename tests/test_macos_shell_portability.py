@@ -321,6 +321,28 @@ verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log"
                 if "sed -i " in stripped and not stripped.startswith("sed -i.bak"):
                     self.fail(f"Unportable GNU sed -i at {script_path.name}:{lineno}: {stripped}")
 
+    def test_no_bsd_sed_hex_escapes_or_awk_nul_rs(self):
+        """json_escape and backup-fleet NUL verdict parsing avoid BSD sed \\xNN and BSD awk RS=\"\\0\"."""
+        for script_path in (HOOK_SCRIPT, BACKUP_FLEET_SCRIPT):
+            text = script_path.read_text(encoding="utf-8", errors="replace")
+            for lineno, line in enumerate(text.splitlines(), 1):
+                stripped = line.lstrip()
+                if stripped.startswith("#"):
+                    continue
+                if 'RS="\\0"' in stripped or "RS='\\0'" in stripped:
+                    self.fail(f"Unportable BSD awk RS=\\0 at {script_path.name}:{lineno}: {stripped}")
+                if stripped.startswith("-e 's/[\\x") or "sed 's/\\x" in stripped or 'sed "s/\\x' in stripped:
+                    self.fail(f"Unportable BSD sed \\xNN escape at {script_path.name}:{lineno}: {stripped}")
+
+        hook_posix = _posix_path(HOOK_SCRIPT)
+        res = self._run_bash(
+            f'source "{hook_posix}"\n'
+            'out=$(json_escape "linux_shape_skipped_delete_only_0123456789abcdef")\n'
+            'printf "%s" "$out"\n'
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout, "linux_shape_skipped_delete_only_0123456789abcdef")
+
 
 if __name__ == "__main__":
     unittest.main()

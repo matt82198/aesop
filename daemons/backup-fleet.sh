@@ -529,8 +529,12 @@ $real_dir"
           log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
           printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
         fi
-        state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-        name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+        state=""
+        name=""
+        {
+          IFS= read -r -d '' state || true
+          IFS= read -r name || true
+        } < "$temp_result"
         rm -f "$temp_result"
         [ -z "$state" ] && continue
         [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
@@ -576,8 +580,12 @@ $real_dir"
         log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
         printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
       fi
-      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+      state=""
+      name=""
+      {
+        IFS= read -r -d '' state || true
+        IFS= read -r name || true
+      } < "$temp_result"
       rm -f "$temp_result"
       [ -z "$state" ] && continue
       [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }

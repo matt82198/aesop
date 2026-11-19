@@ -129,9 +129,13 @@ test_item1_nul_protocol_real_loop() {
       temp_result=$(mktemp)
       process_repo "$dir" > "$temp_result"
 
-      # Parse NUL-delimited data
-      state=$(sed "s/\x0.*//" "$temp_result")
-      name=$(sed "s/^[^\x0]*\x0//" "$temp_result")
+      # Parse NUL-delimited data via Bash read -d "" (portable across macOS BSD & GNU)
+      state=""
+      name=""
+      {
+        IFS= read -r -d "" state || true
+        IFS= read -r name || true
+      } < "$temp_result"
       rm -f "$temp_result"
 
       [ -z "$state" ] && exit 1
@@ -442,29 +446,35 @@ test_item5_portable_nul_parsing() {
   local test_data_file=$(mktemp)
   printf 'CLEAN\0fixture-repo\n' > "$test_data_file"
 
-  # Test 1: Parse using awk with RS="\0" (portable across sed implementations)
+  # Test 1: Parse using Bash native NUL-delimited read (portable across macOS BSD & GNU)
   local state=""
   local name=""
-  state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$test_data_file")
-  name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$test_data_file" | tr -d '\n')
+  {
+    IFS= read -r -d '' state || true
+    IFS= read -r name || true
+  } < "$test_data_file"
 
   if [ "$state" = "CLEAN" ]; then
-    pass "ITEM 5: State correctly parsed using portable awk (got: '$state')"
+    pass "ITEM 5: State correctly parsed using portable read -d '' (got: '$state')"
   else
-    fail "ITEM 5: State parse failed using portable awk (expected 'CLEAN', got: '$state')"
+    fail "ITEM 5: State parse failed using portable read -d '' (expected 'CLEAN', got: '$state')"
   fi
 
   if [ "$name" = "fixture-repo" ]; then
-    pass "ITEM 5: Name correctly parsed using portable awk (got: '$name')"
+    pass "ITEM 5: Name correctly parsed using portable read -d '' (got: '$name')"
   else
-    fail "ITEM 5: Name parse failed using portable awk (expected 'fixture-repo', got: '$name')"
+    fail "ITEM 5: Name parse failed using portable read -d '' (expected 'fixture-repo', got: '$name')"
   fi
 
   # Test 2: Verify it works with various state values
   for test_state in CLEAN PUSHED SNAPSHOTTED BLOCKED; do
     printf '%s\0test-repo\n' "$test_state" > "$test_data_file"
-    state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$test_data_file")
-    name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$test_data_file" | tr -d '\n')
+    state=""
+    name=""
+    {
+      IFS= read -r -d '' state || true
+      IFS= read -r name || true
+    } < "$test_data_file"
 
     if [ "$state" = "$test_state" ] && [ "$name" = "test-repo" ]; then
       pass "ITEM 5: Portable parsing works for state=$test_state"
@@ -473,10 +483,14 @@ test_item5_portable_nul_parsing() {
     fi
   done
 
-  # Test 3: Verify it works with special characters in repo name (no GNU sed needed)
+  # Test 3: Verify it works with special characters in repo name (no GNU sed/awk needed)
   printf 'CLEAN\0repo|with|pipe\n' > "$test_data_file"
-  state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$test_data_file")
-  name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$test_data_file" | tr -d '\n')
+  state=""
+  name=""
+  {
+    IFS= read -r -d '' state || true
+    IFS= read -r name || true
+  } < "$test_data_file"
 
   if [ "$name" = "repo|with|pipe" ]; then
     pass "ITEM 5: Special characters preserved in portable parsing"
