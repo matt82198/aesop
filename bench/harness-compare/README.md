@@ -18,13 +18,13 @@ Each task is run once per harness. Five lines per task:
 
 - Identical prompt: each harness gets the exact text of `prompt.md`, with no harness, model, or tool names added. The check, not the harness, decides pass or fail.
 - Fresh copy: every run starts from `prepare_task.py`, never from a directory a previous run touched. `prepare_task.py` refuses a non-empty destination.
-- Hidden checks: `corpus/tasks/<id>/check/` is never copied into the working directory. The seed holds no checker files.
+- Hidden checks: each check lives at `corpus/tasks/<id>/reference/check.py`, beside the reference module, so its plain imports resolve statically. `run_check` copies it into the working directory as `_hidden_check.py` for one run and removes it afterwards. `overlay_reference` never copies it. The seed holds no checker files.
 - Reference proof: every seed fails its check and every `reference/` passes it. `tests/test_harness_compare_corpus.py` enforces both.
 - Missing is missing: a task with no row for a harness is shown as `missing`, never as a pass or a fail.
 
 ## Corpus
 
-`corpus/manifest.jsonl` has 12 rows, one per task. Each task directory holds `prompt.md`, `seed/`, `check/check.py` and `reference/`.
+`corpus/manifest.jsonl` has 12 rows, one per task. Each task directory holds `prompt.md`, `seed/` and `reference/`. The hidden check is `reference/check.py`.
 
 | Category | Task ids |
 | --- | --- |
@@ -44,4 +44,4 @@ Each task is run once per harness. Five lines per task:
 
 Run the tests (stdlib, offline):
 
-`python -m unittest discover -s C:/Users/Mattt/aesop-wt-harness-corpus/tests -p "test_harness_compare_*.py"`
+`python -m unittest discover -s C:/Users/Mattt/aesop-wt-harness-corpus/tests -p test_harness_compare_corpus.py` and the same with `test_harness_compare_results.py`.

@@ -23,6 +23,8 @@ MANIFEST = HC_DIR / "corpus" / "manifest.jsonl"
 TASKS_DIR = HC_DIR / "corpus" / "tasks"
 RESULTS_ROOT = HC_DIR / "results"
 CHECK_TIMEOUT_CAP_S = 600
+CHECK_FILE = "check.py"
+RUN_CHECK_FILE = "_hidden_check.py"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -78,24 +80,39 @@ def prepare_task(row: dict, dest: Path) -> Path:
 
 
 def overlay_reference(row: dict, workdir: Path) -> Path:
-    """Copy the known-good reference files over ``workdir``. Used to prove the check passes."""
-    shutil.copytree(task_dir(row) / "reference", Path(workdir), dirs_exist_ok=True)
+    """Copy the known-good reference files over ``workdir``. Used to prove the check passes.
+
+    The hidden check sits beside the reference module but is never overlaid:
+    ``run_check`` copies it in for the duration of one check run only.
+    """
+    shutil.copytree(
+        task_dir(row) / "reference",
+        Path(workdir),
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(CHECK_FILE),
+    )
     return Path(workdir)
 
 
 def run_check(row: dict, workdir: Path) -> CheckResult:
     """Run the hidden check for ``row`` against ``workdir``.
 
-    The manifest ``check`` field is a command template with ``{task_dir}`` and
-    ``{workdir}`` placeholders. The leading ``python`` is replaced by the
-    interpreter running this module so the check never picks up a different one.
+    The check is ``corpus/tasks/<id>/reference/check.py``. It is copied into
+    ``workdir`` as ``_hidden_check.py`` so its plain imports (``from paginate
+    import ...``) resolve against the working copy, then removed in every case.
+    The manifest ``check`` field is a command template with a ``{workdir}``
+    placeholder. The leading ``python`` is replaced by the interpreter running
+    this module so the check never picks up a different one.
     """
-    command = row["check"].format(task_dir=str(task_dir(row)), workdir=str(Path(workdir)))
+    workdir = Path(workdir)
+    command = row["check"].format(task_dir=str(task_dir(row)), workdir=str(workdir))
     parts = command.split(" ", 1)
     if parts[0] != "python":
         raise ValueError("check command must start with python: %r" % command)
     argv = [sys.executable] + (parts[1].split(" ") if len(parts) > 1 else [])
     timeout = min(int(row["timeout_s"]), CHECK_TIMEOUT_CAP_S)
+    staged = workdir / RUN_CHECK_FILE
+    shutil.copyfile(task_dir(row) / "reference" / CHECK_FILE, staged)
     try:
         proc = subprocess.run(
             argv,
@@ -107,6 +124,8 @@ def run_check(row: dict, workdir: Path) -> CheckResult:
         )
     except subprocess.TimeoutExpired:
         return CheckResult(False, -1, "check timed out after %ss" % timeout)
+    finally:
+        staged.unlink(missing_ok=True)
     passed = proc.returncode == 0
     reason = "" if passed else (proc.stdout + proc.stderr).strip()[-400:]
     return CheckResult(passed, proc.returncode, reason)

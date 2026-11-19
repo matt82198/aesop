@@ -4,7 +4,6 @@ import os
 import sys
 
 WORKDIR = sys.argv[1]
-sys.path.insert(0, WORKDIR)
 
 failures = []
 

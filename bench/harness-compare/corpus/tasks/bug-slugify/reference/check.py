@@ -2,7 +2,6 @@
 
 import sys
 
-sys.path.insert(0, sys.argv[1])
 
 from slug import slugify  # noqa: E402
 

@@ -3,7 +3,6 @@
 import sys
 from datetime import date
 
-sys.path.insert(0, sys.argv[1])
 
 from ages import age_on  # noqa: E402
 

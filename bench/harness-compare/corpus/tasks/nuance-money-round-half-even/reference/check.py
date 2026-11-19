@@ -2,7 +2,6 @@
 
 import sys
 
-sys.path.insert(0, sys.argv[1])
 
 from money import line_total  # noqa: E402
 

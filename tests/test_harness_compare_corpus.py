@@ -73,26 +73,27 @@ class ManifestTests(unittest.TestCase):
                 self.assertEqual(row["prompt"], "corpus/tasks/%s/prompt.md" % row["id"])
                 self.assertTrue((HC_DIR / row["seed"]).is_dir())
                 self.assertTrue((HC_DIR / row["prompt"]).is_file())
-                self.assertTrue((task_dir / "check" / "check.py").is_file())
+                self.assertTrue((task_dir / "reference" / "check.py").is_file())
                 self.assertTrue((task_dir / "reference").is_dir())
                 self.assertTrue(any(p.is_file() for p in (task_dir / "reference").rglob("*")))
 
     def test_seed_holds_no_hidden_checker_files(self):
         for row in self.rows:
             with self.subTest(task=row["id"]):
-                task_dir = self.hc.task_dir(row)
-                for hidden in (task_dir / "check").rglob("*"):
-                    if hidden.is_file():
-                        rel = hidden.relative_to(task_dir / "check")
-                        self.assertFalse((task_dir / "seed" / rel).exists())
+                seed = self.hc.task_dir(row) / "seed"
+                self.assertFalse((seed / self.hc.CHECK_FILE).exists())
+                self.assertFalse((seed / self.hc.RUN_CHECK_FILE).exists())
 
-    def test_check_command_runs_python_against_task_check_dir(self):
+    def test_check_lives_beside_reference_and_no_check_dir_remains(self):
         for row in self.rows:
             with self.subTest(task=row["id"]):
-                self.assertTrue(
-                    row["check"].startswith("python {task_dir}/check/"),
-                    row["check"],
-                )
+                task_dir = self.hc.task_dir(row)
+                self.assertFalse((task_dir / "check").exists())
+
+    def test_check_command_runs_staged_check_against_workdir(self):
+        for row in self.rows:
+            with self.subTest(task=row["id"]):
+                self.assertEqual(row["check"], "python _hidden_check.py {workdir}")
 
     def test_prompt_is_harness_neutral_and_states_done_condition(self):
         for row in self.rows:
@@ -108,7 +109,7 @@ class ManifestTests(unittest.TestCase):
                 local = {p.stem for p in task_dir.rglob("*.py")}
                 local |= {p.name for p in task_dir.rglob("*") if p.is_dir()}
                 allowed = set(sys.stdlib_module_names) | local
-                for sub in ("seed", "check", "reference"):
+                for sub in ("seed", "reference"):
                     for py in (task_dir / sub).rglob("*.py"):
                         tree = ast.parse(py.read_text(encoding="utf-8"))
                         for node in ast.walk(tree):
@@ -135,6 +136,8 @@ class SeedFailsReferencePassesTests(unittest.TestCase):
                     ref_result = hc.run_check(row, ref_wd)
                     self.assertTrue(ref_result.passed, "reference fails: " + ref_result.reason)
                     self.assertEqual(ref_result.exit_code, 0)
+                    self.assertFalse((ref_wd / hc.RUN_CHECK_FILE).exists())
+                    self.assertFalse((seed_wd / hc.RUN_CHECK_FILE).exists())
 
 
 if __name__ == "__main__":

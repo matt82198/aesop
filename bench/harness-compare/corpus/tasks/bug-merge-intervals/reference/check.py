@@ -2,7 +2,6 @@
 
 import sys
 
-sys.path.insert(0, sys.argv[1])
 
 from intervals import merge_intervals  # noqa: E402
 
