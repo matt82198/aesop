@@ -57,7 +57,7 @@ function saveHistory(file, line) {
     return (err && err.code) || 'unknown error';
   }
 }
-import { resolveColor, resolveUnicode } from './render.mjs';
+import { displayWidth, resolveColor, resolveUnicode } from './render.mjs';
 import { Session, pipeSource } from './session.mjs';
 
 const HELP_TEXT = [
@@ -81,6 +81,12 @@ const HELP_TEXT = [
 // never wiped (no ESC[2J, no ESC[H).
 const CURSOR_UP = (n) => `\x1b[${n}A`;
 const CLEAR_TO_END = '\x1b[J';
+const SGR_PATTERN = /\x1b\[[0-9;]*m/g;
+// Physical terminal rows that logical lines occupy at `columns`: a line wider than the terminal
+// wraps onto extra rows, and an empty line still takes one.
+function physicalRows(lines, columns) {
+  return lines.reduce((n, l) => n + Math.max(1, Math.ceil(displayWidth(l) / columns)), 0);
+}
 // Bracketed paste mode: the terminal wraps pasted text in ESC[200~ / ESC[201~.
 const PASTE_ON = '\x1b[?2004h';
 const PASTE_OFF = '\x1b[?2004l';
@@ -144,8 +150,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   // Unset (or empty) AESOP_CHAT_HISTORY falls back to ~/.aesop/chat-history.json.
   const historyFile = env.AESOP_CHAT_HISTORY || join(os.homedir(), '.aesop', 'chat-history.json');
   const history = loadHistory(historyFile);
-  // Number of terminal lines the last frame drew; the next frame moves back over them.
-  let drawnLines = 0;
+  // Plain text of the lines the last frame drew. After a resize the terminal reflows those lines
+  // at the new width, so the next frame moves back over the physical rows they now occupy.
+  let drawnPlain = [];
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
@@ -153,8 +160,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     unicode: resolveUnicode({ env }),
     status: { cwd: process.cwd() },
     onFrame: (frame) => {
-      const up = drawnLines > 1 ? CURSOR_UP(drawnLines - 1) : '';
-      drawnLines = frame.split('\n').length;
+      const rows = physicalRows(drawnPlain, stdout.columns || 80);
+      const up = rows > 1 ? CURSOR_UP(rows - 1) : '';
+      drawnPlain = frame.split('\n').map((l) => l.replace(SGR_PATTERN, ''));
       stdout.write(`\r${up}${CLEAR_TO_END}${frame}`);
     },
   });
