@@ -12,7 +12,11 @@ import os
 # Add parent directory to path so we can import launch_tui
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-from launch_tui import resolve_git_bash_path
+from launch_tui import (
+    _script_match_patterns,
+    find_bash_process_by_script,
+    resolve_git_bash_path,
+)
 
 
 class TestResolveGitBashPath(unittest.TestCase):
@@ -80,6 +84,45 @@ class TestResolveGitBashPath(unittest.TestCase):
                     self.assertIn("Tried (in order)", error_msg)
                     # Should include the default fallback path
                     self.assertIn("C:\\Program Files\\Git", error_msg)
+
+
+class TestFindBashProcessShellOnly(unittest.TestCase):
+    """Prove find_bash_process_by_script uses /proc, bash, or ps -- never PowerShell."""
+
+    def test_proc_scan_finds_matching_bash_and_prefers_winpid(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as proc_dir:
+            p1 = Path(proc_dir) / "4201"
+            p1.mkdir()
+            script = str(Path(proc_dir) / "tui.sh")
+            (p1 / "cmdline").write_bytes(f"/usr/bin/bash\x00{script}\x00".encode("utf-8"))
+            (p1 / "winpid").write_text("9876\n", encoding="utf-8")
+
+            pid = find_bash_process_by_script(script, proc_root=proc_dir)
+            self.assertEqual(pid, 9876)
+
+    def test_windows_fallback_uses_bash_never_powershell(self):
+        seen_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            seen_cmds.append(cmd)
+            res = mock.Mock()
+            res.returncode = 0
+            res.stdout = "5432\n"
+            return res
+
+        with mock.patch("launch_tui.os.name", "nt"), mock.patch(
+            "launch_tui._resolve_bash_cli", return_value="/usr/bin/bash"
+        ), mock.patch("launch_tui.subprocess.run", side_effect=fake_run):
+            pid = find_bash_process_by_script("D:\\demo\\run.sh", proc_root="")
+            self.assertEqual(pid, 5432)
+            self.assertEqual(len(seen_cmds), 1)
+            self.assertNotIn("powershell", seen_cmds[0][0].lower())
+            self.assertIn("bash", seen_cmds[0][0].lower())
+
+        patterns = _script_match_patterns("D:\\demo\\run.sh")
+        self.assertTrue(any(p.startswith("/d/") for p in patterns))
 
 
 if __name__ == "__main__":
