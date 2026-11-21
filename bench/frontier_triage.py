@@ -1,11 +1,13 @@
 """Run the fixed sixteen-case, three-repeat frontier comparison using the Messages API."""
 import argparse
 import json
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from operational_transfer import CorpusItem, OrchestratorDriver, ROOT, build_finding_context_pack
-from anthropic_transport import make_anthropic_transport
+sys.path.insert(0, str(ROOT))
+from driver.anthropic_transport import make_anthropic_transport
 from frontier_slice import MODEL_PRICING_USD_PER_MTOK
 
 MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5")
