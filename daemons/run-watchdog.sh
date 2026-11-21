@@ -248,6 +248,25 @@ run_task_ingest() {
   return 0
 }
 
+# Peer push sweep (tools/peer_push_sweep.py): pushes committed codex/* and agy/* worktree
+# branches, one per cycle, through a detached locked worker. Advisory like the PR sweep:
+# a failure is logged and never fails the watchdog cycle (|| true at the call sites).
+run_peer_push_sweep() {
+  local aesop_root="$1"
+  local python_exe="$2"
+  local log_file="$3"
+  if [ -z "$python_exe" ] || [ ! -f "$aesop_root/tools/peer_push_sweep.py" ]; then
+    return 0
+  fi
+  local sweep_rc=0
+  "$python_exe" "$aesop_root/tools/peer_push_sweep.py" --aesop-root "$aesop_root" --log "$log_file" \
+    > /dev/null 2>> "$log_file" || sweep_rc=$?
+  if [ $sweep_rc -ne 0 ]; then
+    echo "[$(date '+%F %T')] ERROR: peer push sweep failed (exit $sweep_rc)" >> "$log_file"
+  fi
+  return 0
+}
+
 # Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
 # "HALTED: <reason>" if halt sentinel exists; returns 1 otherwise.
 # Never runs backup/push/scan work when halted — caller must skip the cycle.
@@ -416,6 +435,7 @@ main() {
     fi
     run_receipt_flush "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    run_peer_push_sweep "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     ingest_rc=0
     run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || ingest_rc=$?
     if [ $ingest_rc -ne 0 ]; then
@@ -464,6 +484,7 @@ main() {
     run_receipt_flush "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || true
+    run_peer_push_sweep "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     sleep 150
   done
 }
