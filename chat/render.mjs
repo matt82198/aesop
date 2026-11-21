@@ -235,7 +235,8 @@ export function renderFrame(state, opts = {}) {
   const statusText = [
     `${status.model ?? ''} via ${status.provider ?? ''}`,
     `cwd ${status.cwd ?? ''}`,
-    `tokens ${status.tokens ?? 0}`,
+    `tokens ${status.tokensEstimated ? '~' : ''}${status.tokens ?? 0}`,
+    ...(typeof status.cost === 'number' ? [`cost $${Number(status.cost.toFixed(4))}`] : []),
     formatElapsed(status.elapsedMs ?? 0),
   ].join(' | ');
   footer.push(...block('', '', statusText, columns, painter('reverse', color)));

@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
-import { authLines, harnessSource, listModelLines, loadRegistry, matchRoute, resolveSelection } from './harness.mjs';
+import { authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
 const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness']);
@@ -114,6 +114,7 @@ const HELP_TEXT = [
   '  /help                  list these commands',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
   '  /auth                  show credential status (no network call)',
+  '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
   '  /exit, /quit           leave chat (ctrl-c twice also quits)',
   '',
@@ -228,6 +229,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       },
       listModels: () => listModelLines(registry, env),
       auth: () => authLines(registry, env),
+      detect: () => detectLines(registry, env),
     }
     : {};
   const session = new Session({
@@ -248,9 +250,16 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     session.state.transcript.push({ role: 'system', text: `error: AESOP_CHAT_BACKEND: unknown value "${backendValue}" (use pipe, orchestrator or harness)` });
   }
   if (harness) {
-    // Fallback, skip and error lines go to the transcript as they happen (H-R12, H-R16, H-R19).
+    // Fallback, error and cancel lines go to the transcript as they happen (H-R12, H-R19, H-R21).
     const notify = (text) => session.state.transcript.push({ role: 'system', text });
-    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env, { notify });
+    // A skip notice is flashed for one frame: the transcript repaints every frame, so a line kept there
+    // would be drawn again on each repaint (H-R16 announces the skip once).
+    const flash = (text) => { session.setHint(text); session.setHint(null); };
+    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env, {
+      notify,
+      flash,
+      usage: (u) => session.setUsage(u),
+    });
     for (const text of registry.notices) session.state.transcript.push({ role: 'system', text });
     if (!selection) session.state.transcript.push({ role: 'system', text: 'no provider configured (see /help)' });
   }
@@ -301,7 +310,12 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       resolve(code);
     };
 
+    // The abort controller for the turn in flight. In harness mode ctrl-c while a reply streams aborts
+    // the request (H-R21); the pipe backend keeps the hint-then-quit behaviour.
+    let turnAbort = null;
     const submit = (line) => {
+      const ctl = harness ? new AbortController() : null;
+      turnAbort = ctl;
       let notice = null;
       // Consecutive duplicates store one entry, matching the reducer.
       if (line.trim() !== '') {
@@ -313,9 +327,11 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
         // A harness route turn (`/code ...`) reaches the backend with its task class; other slash lines are commands.
         const routed = harness ? matchRoute(registry, line) : null;
-        const chunks = routed ? backend.source(routed.body, { task: routed.task })
-          : line.startsWith('/') ? undefined : backend.source(line);
+        const signal = ctl ? ctl.signal : undefined;
+        const chunks = routed ? backend.source(routed.body, { task: routed.task, signal })
+          : line.startsWith('/') ? undefined : backend.source(line, ctl ? { signal } : undefined);
         await session.submit(line, chunks);
+        if (turnAbort === ctl) turnAbort = null;
         // A failed history save is shown as one visible status line; the session keeps running.
         if (notice) {
           session.state.transcript.push({ role: 'system', text: notice });
@@ -338,6 +354,11 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const onKeypress = (str, key) => {
       const before = input;
       try {
+        if (turnAbort && session.state.mode === 'streaming' && key && key.ctrl && key.name === 'c') {
+          // Ctrl-c during a streamed harness reply aborts that request; the turn shows "cancelled".
+          turnAbort.abort();
+          return;
+        }
         handleKey(str, key);
       } catch (err) {
         // A throw while handling a key (a failed render, for example) is shown as an error line and

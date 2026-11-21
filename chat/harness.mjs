@@ -91,7 +91,7 @@ export function assertProviderAllowed(provider, model) {
  *            notices: string[], defaultSelection: {provider: string, model: string}|null}}
  */
 export function loadRegistry(configPath) {
-  const registry = { providers: new Map(), notices: [], defaultSelection: null, aliases: new Map(), routes: new Map() };
+  const registry = { providers: new Map(), notices: [], defaultSelection: null, aliases: new Map(), routes: new Map(), detectCandidates: [] };
   if (!configPath || !existsSync(configPath)) return registry;
   let cfg;
   try {
@@ -135,6 +135,8 @@ export function loadRegistry(configPath) {
     if (resolved !== null) registry.aliases.set(name, resolved);
   }
   registry.routes = parseRoutes(cfg.routes, registry);
+  // Candidates for /detect only (H-R23). Nothing is probed until the user asks.
+  if (Array.isArray(cfg.detect_candidates)) registry.detectCandidates = cfg.detect_candidates;
   if (typeof cfg.default === 'string') {
     const picked = resolveSelection(registry, cfg.default);
     if (picked.error) registry.notices.push(`error: config: default: ${picked.error}`);
@@ -218,10 +220,11 @@ export function validateProviderConfig(config) {
  * Parses one stream line. SSE (`data: {json}`, `data: [DONE]`) and NDJSON (`{json}` per line) are both
  * accepted; comments, keepalives and other lines yield ''. Returns DONE on the SSE terminal frame.
  * @param {string} line line without its trailing CR
+ * @param {(usage: object) => void} [onUsage] receives a frame's `usage` object when it carries one (H-R22)
  * @returns {string|typeof DONE}
  * @throws {TurnFailure} bad-response when a frame is not JSON
  */
-function parseStreamLine(line) {
+function parseStreamLine(line, onUsage) {
   const text = line.trim();
   if (text === '' || text.startsWith(':')) return '';
   let payload;
@@ -239,6 +242,7 @@ function parseStreamLine(line) {
   } catch {
     throw new TurnFailure('bad-response', 'malformed stream frame');
   }
+  if (obj && typeof obj.usage === 'object' && obj.usage !== null && onUsage) onUsage(obj.usage);
   const content = obj?.choices?.[0]?.delta?.content ?? obj?.message?.content ?? obj?.response;
   return typeof content === 'string' ? content : '';
 }
@@ -356,6 +360,10 @@ function clockNow() {
  */
 export function harnessSource(registry, getSelection, env = process.env, options = {}) {
   const notify = typeof options.notify === 'function' ? options.notify : () => {};
+  // flash shows a line for one frame only (the transcript repaints every frame, so a skip notice
+  // written there would be drawn again on each repaint). Defaults to notify.
+  const flash = typeof options.flash === 'function' ? options.flash : notify;
+  const reportUsage = typeof options.usage === 'function' ? options.usage : () => {};
   const breakers = new Map();
   const latency = new Map();
   const breaker = (id) => {
@@ -401,10 +409,30 @@ export function harnessSource(registry, getSelection, env = process.env, options
     return out;
   };
 
-  // One request to one candidate. Returns {ok, yielded, failure}; yields each text delta as it arrives.
-  async function* streamOnce(entry, model, line) {
+  /**
+   * Prices one usage report for a provider: local is free, cost_per_mtok prices input and output.
+   * @returns {{total: number, prompt: number, completion: number, cost: number|null}}
+   */
+  const usageOf = (id, u) => {
+    const prompt = Number(u.prompt_tokens) || 0;
+    const completion = Number(u.completion_tokens) || 0;
+    const total = Number(u.total_tokens) || prompt + completion;
+    const entry = registry.providers.get(id);
+    let cost = null;
+    if (entry?.raw.is_local === true) cost = 0;
+    else if (entry && entry.raw.cost_per_mtok && typeof entry.raw.cost_per_mtok === 'object') {
+      const c = entry.raw.cost_per_mtok;
+      cost = ((Number(c.input) || 0) * prompt + (Number(c.output) || 0) * completion) / 1e6;
+    }
+    return { total, prompt, completion, cost };
+  };
+
+  // One request to one candidate. Returns {ok, yielded, failure, usage}; yields each text delta as it arrives.
+  // An abort on `signal` destroys the request, so the server sees the connection close (H-R21).
+  async function* streamOnce(entry, model, line, signal) {
     const id = entry.id;
-    const outcome = { ok: false, yielded: 0, failure: null };
+    const outcome = { ok: false, yielded: 0, failure: null, usage: null };
+    const reportOwn = (u) => { outcome.usage = u; };
     try {
       assertProviderAllowed({ ...entry.raw, id }, model);
     } catch (err) {
@@ -434,6 +462,9 @@ export function harnessSource(registry, getSelection, env = process.env, options
       timer.unref?.();
     };
     const timeoutFailure = () => new TurnFailure('timeout', `no response within ${timeoutMs} ms`);
+    const onAbort = () => { if (req) req.destroy(); };
+    if (signal?.aborted) return outcome;
+    signal?.addEventListener?.('abort', onAbort, { once: true });
     let res;
     try {
       res = await new Promise((resolve, reject) => {
@@ -476,6 +507,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
         } catch {
           throw new TurnFailure('bad-response', 'malformed JSON reply');
         }
+        if (obj && typeof obj.usage === 'object' && obj.usage !== null) reportOwn(obj.usage);
         const text = obj?.choices?.[0]?.message?.content ?? obj?.message?.content;
         if (typeof text === 'string' && text !== '') {
           noteFirst();
@@ -488,7 +520,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
           pending += decoder.write(chunk);
           let nl = pending.indexOf('\n');
           while (nl >= 0) {
-            const delta = parseStreamLine(pending.slice(0, nl).replace(/\r$/, ''));
+            const delta = parseStreamLine(pending.slice(0, nl).replace(/\r$/, ''), reportOwn);
             pending = pending.slice(nl + 1);
             if (delta === DONE) { done = true; break; }
             if (delta !== '') {
@@ -503,7 +535,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
         if (!done) {
           pending += decoder.end();
           if (pending.trim() !== '') {
-            const delta = parseStreamLine(pending.replace(/\r$/, ''));
+            const delta = parseStreamLine(pending.replace(/\r$/, ''), reportOwn);
             if (delta !== DONE && delta !== '') {
               noteFirst();
               outcome.yielded += 1;
@@ -518,6 +550,8 @@ export function harnessSource(registry, getSelection, env = process.env, options
       clearTimeout(timer);
       if (err instanceof TurnFailure) outcome.failure = err;
       else outcome.failure = timedOut ? timeoutFailure() : new TurnFailure('connect', 'stream cut');
+    } finally {
+      signal?.removeEventListener?.('abort', onAbort);
     }
     return outcome;
   }
@@ -526,6 +560,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
     const sel = getSelection();
     if (!sel.provider) throw new Error('no provider configured (see /help)');
     const task = opts.task ?? 'chat';
+    const signal = opts.signal;
     const route = registry.routes.get(task) ?? null;
     const primary = task === 'chat' ? { provider: sel.provider, model: sel.model } : route?.target ?? null;
     const list = route?.candidates ?? [primary, ...(route?.fallback ?? [])].filter(Boolean);
@@ -539,7 +574,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
       if (b.openUntil > clockNow()) {
         if (!b.announced) {
           b.announced = true;
-          notify(`skipping ${cand.provider}: circuit open after ${BREAKER_THRESHOLD} failures, retry after cooldown`);
+          flash(`skipping ${cand.provider}: circuit open after ${BREAKER_THRESHOLD} failures, retry after cooldown`);
         }
         continue;
       }
@@ -549,9 +584,15 @@ export function harnessSource(registry, getSelection, env = process.env, options
         notify(`error: ${cand.provider}: refused: unknown provider`);
         return;
       }
-      const outcome = yield* streamOnce(entry, cand.model, line);
+      const outcome = yield* streamOnce(entry, cand.model, line, signal);
       if (outcome.ok) {
         recordSuccess(cand.provider);
+        if (outcome.usage) reportUsage({ provider: cand.provider, ...usageOf(cand.provider, outcome.usage) });
+        return;
+      }
+      // Ctrl-c aborted the request: shown as cancelled, never a failure and never a fallback (H-R21).
+      if (signal?.aborted) {
+        notify(`cancelled: ${cand.provider} request aborted`);
         return;
       }
       const failure = outcome.failure;
@@ -602,6 +643,62 @@ export function probeProvider(entry, env = process.env, timeoutMs = 1000) {
     });
     req.on('error', () => resolve('unreachable'));
   });
+}
+
+/**
+ * Turns `detect_candidates` into loopback probe targets. A port number (or digit string) becomes
+ * http://127.0.0.1:<port>/v1. A URL is probed only when its host is loopback; any other host is listed
+ * as skipped and never contacted (H-R23). Anthropic hosts are skipped the same way.
+ * @param {unknown[]} candidates
+ * @returns {{targets: {label: string, base: string}[], lines: string[]}}
+ */
+export function detectTargets(candidates) {
+  const targets = [];
+  const lines = [];
+  for (const c of candidates) {
+    if (typeof c === 'number' || /^\d+$/.test(String(c))) {
+      const port = Number(c);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        lines.push(`detect: skipped ${String(c)}: not a valid port`);
+        continue;
+      }
+      targets.push({ label: `127.0.0.1:${port}`, base: `http://127.0.0.1:${port}/v1` });
+      continue;
+    }
+    let url;
+    try {
+      url = new URL(String(c));
+    } catch {
+      lines.push(`detect: skipped ${String(c)}: not a port or URL`);
+      continue;
+    }
+    const host = normalizeHost(url.hostname);
+    if (!LOOPBACK_HOSTS.has(host) || isAnthropicHost(host) || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+      lines.push(`detect: skipped ${url.host}: not loopback, not probed`);
+      continue;
+    }
+    targets.push({ label: url.host, base: `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}` });
+  }
+  return { targets, lines };
+}
+
+/**
+ * Lines for /detect: each loopback candidate gets one GET {base}/models probe; the rest are skipped.
+ * Runs only when the user asks (never at start). Sends no chat request.
+ * @param {ReturnType<typeof loadRegistry>|null} registry
+ * @param {Record<string, string|undefined>} [env]
+ * @param {(entry: object, env: object) => Promise<string>} [probe]
+ * @returns {Promise<string[]>}
+ */
+export async function detectLines(registry, env = process.env, probe = probeProvider) {
+  const { targets, lines } = detectTargets(registry?.detectCandidates ?? []);
+  if (targets.length === 0 && lines.length === 0) return ['detect: no detect_candidates configured'];
+  const out = [...lines];
+  for (const t of targets) {
+    const status = await probe({ raw: { base_url: t.base } }, env);
+    out.push(`detect ${t.label}: ${status === 'reachable' ? 'reachable' : 'unreachable (absent)'}`);
+  }
+  return out;
 }
 
 /**

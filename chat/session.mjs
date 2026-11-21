@@ -24,6 +24,7 @@ const HELP_LINES = [
   '  /help                  list these commands',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
   '  /auth                  show credential status (no network call)',
+  '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
   '  /exit, /quit           leave chat (ctrl-c twice also quits)',
   'Keys:',
@@ -136,6 +137,10 @@ export class Session {
     this.source = source;
     // Optional registry hooks (harness mode): setModel(arg) -> error text or null; listModels() -> lines.
     this.hooks = hooks;
+    // Committed totals from finished turns (see refreshTokens).
+    this.committedTokens = 0;
+    this.committedEstimated = false;
+    this.committedCost = undefined;
     this.state = {
       transcript: [],
       inputBuffer: '',
@@ -217,6 +222,10 @@ export class Session {
     } else if (cmd.command === 'models') {
       const lines = this.hooks.listModels ? await this.hooks.listModels() : ['models: harness backend not enabled (AESOP_CHAT_BACKEND=harness)'];
       for (const text of lines) this.state.transcript.push({ role: 'system', text });
+    } else if (cmd.command === 'detect') {
+      // Harness mode probes loopback candidates on request only (H-R23); otherwise there is nothing to probe.
+      const lines = this.hooks.detect ? await this.hooks.detect() : ['detect: harness backend not enabled (AESOP_CHAT_BACKEND=harness)'];
+      for (const text of lines) this.state.transcript.push({ role: 'system', text });
     } else if (cmd.command === 'clear') {
       this.state.transcript = [];
     } else if (cmd.command === 'auth') {
@@ -245,12 +254,38 @@ export class Session {
     }
   }
 
+  /**
+   * Records the provider's usage report for the turn in flight (H-R22). `usage.total` is the token
+   * count; `usage.cost` (number or null) adds to the running cost. Without a report the turn is
+   * estimated from its reply length (chars/4, shown with a leading ~).
+   * @param {{total: number, cost?: number|null}} usage
+   */
+  setUsage(usage) {
+    this.state.turnUsage = usage;
+  }
+
+  /**
+   * Refreshes the token and cost fields of the status bar from the committed totals plus this turn.
+   * @param {number} chars reply characters so far in this turn
+   */
+  refreshTokens(chars) {
+    const u = this.state.turnUsage;
+    const turn = u ? { n: u.total, est: false } : { n: Math.ceil(chars / 4), est: true };
+    this.state.status.tokens = this.committedTokens + turn.n;
+    this.state.status.tokensEstimated = this.committedEstimated || turn.est;
+    if (u && typeof u.cost === 'number') {
+      this.state.status.cost = (this.committedCost ?? 0) + u.cost;
+    }
+  }
+
   async runTurn(text, chunks) {
     const reply = { role: 'assistant', text: '', streaming: true };
     this.state.transcript.push({ role: 'user', text }, reply);
     this.state.mode = 'streaming';
     this.state.hint = null;
+    this.state.turnUsage = null;
     const started = Date.now();
+    let chars = 0;
     // The spinner and elapsed counter tick on a timer, so they keep moving while the backend stalls.
     // The timer is unref'd and cleared when the reply finishes, whichever way it ends.
     const ticker = setInterval(() => {
@@ -264,7 +299,8 @@ export class Session {
       for await (const chunk of chunks) {
         const piece = String(chunk);
         reply.text += piece;
-        this.state.status.tokens += piece.split(/\s+/).filter((w) => w !== '').length;
+        chars += piece.length;
+        this.refreshTokens(chars);
         this.state.status.elapsedMs = Date.now() - started;
         this.emit();
       }
@@ -275,6 +311,12 @@ export class Session {
       reply.streaming = false;
       this.state.mode = 'idle';
       this.state.status.elapsedMs = Date.now() - started;
+      this.refreshTokens(chars);
+      // Commit this turn's tokens and cost so the next turn builds on them.
+      this.committedTokens = this.state.status.tokens;
+      this.committedEstimated = this.state.status.tokensEstimated;
+      this.committedCost = this.state.status.cost;
+      this.state.turnUsage = null;
     }
     this.emit();
   }
