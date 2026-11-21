@@ -1,5 +1,7 @@
 # Infrastructure worker comparison
 
+**The repeatable gap in the two coder models was deciding when a useful addition or a plausible review claim qualified as a defect.** Both recognized all seven defects in the shared replay. Neither matched the disposition of either enhancement or any of the three refuted findings. The 27B model recovered four of those five decisions and lost two defects. A blanket escalation would exchange one error type for another.
+
 ## Protocol
 
 Compare all three locally installed Ollama tags on the same sixteen historical infrastructure findings. Give each worker the same brief, adjudication schema and one unassisted call at temperature zero. Report schema or transport failure separately from disagreement. A model's size or brand alone cannot establish a reasoning tier. The local study measures finding classification. The archived study measures whether a patch passed hidden tests.
@@ -59,6 +61,35 @@ For the five cases first introduced in this round, the models scored 3/5, 4/5 an
 The 27B worker's single disagreement was the dashboard resolving a different heartbeat directory from the daemon. It explicitly requested the read path, write path and directory evidence before accepting the claim. The historical fix establishes the defect. The brief supplied only a description. This is a candidate for an evidence-retrieval experiment. It would be misleading to train a worker that every coherent review allegation must be accepted.
 
 The 27B model supports thinking and uses a medium thinking level by default in this Ollama installation. The models share the request text, schema and zero-retry policy, but have different tokenizers and inference defaults. Token totals are reported by their own engines. Each judgment family here maps to a single expected label. A promotion trial should cross those factors, for example by including both a genuinely required missing signal and an optional missing diagnostic in the same family.
+
+## Shared-case scorecard
+
+Each row uses the same 12 historical findings, scored against the same project labels. The local runs were fresh. The archived Claude harness supplied its own ambient instructions, and the archived API runs had provider-specific generation settings. This comparison aligns the items and labels. It cannot isolate model weights from those harness differences. One registration case overlaps with the sixteen-case set.
+
+| Model | Defects /7 | Enhancements /2 | Refuted findings /3 | Total /12 |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen2.5-Coder 14B | 7 | 0 | 0 | 7 |
+| Qwen3-Coder 30B | 7 | 0 | 0 | 7 |
+| Qwen3.8 27B | 5 | 2 | 2 | 9 |
+| Haiku 4.5 | 7 | 0 | 3 | 10 |
+| Sonnet 5 | 7 | 0 | 3 | 10 |
+| Opus 4.8 | 6 | 1 | 3 | 10 |
+| Fable 5 | 4 | 2 | 3 | 9 |
+| GPT-4o | 6 | 0 | 0 | 6 |
+| GPT-5.5 | 5 | 0 | 2 | 7 |
+| GPT-5.6 Sol | 6 | 0 | 2 | 8 |
+| GPT-5.6 Luna | 6 | 0 | 2 | 8 |
+| GPT-5.6 Terra | 4 | 0 | 2 | 6 |
+
+All 12 archived GPT-4o mini blind attempts failed to yield a valid decision and are excluded from the semantic table. Enriched runs saw additional evidence and are a separate treatment.
+
+## What to distill next
+
+1. **Operational obligations.** Anchor the proposed obligation in a project contract or a relying consumer. Pair optional diagnostics with cases where a missing diagnostic prevents recovery. The labels here identify a disagreement worth investigating.
+2. **Refuting findings.** Give the reviewer independently verifiable source paths or a failing and passing behavioral check. Label what evidence was available at decision time. Score justified abstentions separately from wrong factual claims as well as reporting agreement with the final disposition.
+3. **Execution mechanics.** Track schema validation, patch application and visible-test failures separately from hidden-test failures. A reproducible submission error belongs in a driver or validator experiment. A cross-component state error is a candidate for a worker brief and behavioral regression.
+
+The current pilots used author-written rubrics. They did not test a worker distilling its own mistakes. To test that hypothesis, freeze a development set, give a worker and an independent adjudicator the same cases and evidence, and separately compress each into the same token allowance. Compare both against baseline and against evidence alone on untouched cases, including previously correct controls. Preserve ranking, schema failures, abstentions, tokens and evidence quality as separate outcomes. No rule in this report is ready for production promotion.
 
 ## Reproduction
 

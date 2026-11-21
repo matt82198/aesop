@@ -93,17 +93,20 @@ def shared_counts():
     for tag in (*BLIND_TAGS, *LOCAL):
         if tag in LOCAL:
             rows = read_rows(f"operational-shared-{tag}.jsonl")
-            pairs = [(r["case"], r["decision"]["verdict"]) for r in rows]
+            if any(r["model"].replace(":", "-") != tag or r["arm"] != "baseline"
+                   or r["expected"] != truth.get(r["case"]) for r in rows):
+                raise ValueError(f"Mismatched shared-corpus metadata for {tag}")
+            pairs = [(r["case"], r["decision"]["verdict"], r["decision"]["schema_validated"]) for r in rows]
         else:
             suffix = "-" + tag if tag else ""
             path = RESULTS / f"shadow-adjudication-2026-07-23{suffix}.json"
             rows = json.loads(path.read_text(encoding="utf-8"))["items"]
-            pairs = [(r["id"], r["challenger_classification"]) for r in rows if r["id"] in truth]
-        if len(pairs) != len(SHARED_CASES) or set(dict(pairs)) != set(SHARED_CASES):
+            pairs = [(r["id"], r["challenger_classification"], r["schema_valid"]) for r in rows if r["id"] in truth]
+        if len(pairs) != len(SHARED_CASES) or {key for key, _, _ in pairs} != set(SHARED_CASES):
             raise ValueError(f"Missing or duplicated common cases for {tag}")
-        by_class = Counter(truth[key] for key, verdict in pairs if truth[key] == verdict)
+        by_class = Counter(truth[key] for key, verdict, valid in pairs if valid and truth[key] == verdict)
         print(tag or "gpt-4o-mini", dict(by_class), "unscored",
-              sum(verdict == "DECISION_FAILED" for _, verdict in pairs))
+              sum(not valid or verdict == "DECISION_FAILED" for _, verdict, valid in pairs))
 
 
 if __name__ == "__main__":
