@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
-import { harnessSource, loadRegistry } from './harness.mjs';
+import { harnessSource, listModelLines, loadRegistry, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 function loadHistory(file) {
   if (!file) return [];
@@ -179,12 +179,27 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   const status = { cwd: process.cwd() };
   if (harness) Object.assign(status, { provider: selection ? selection.provider : null, model: selection ? selection.model : null });
   const backend = { source: source ?? pipeSource };
+  // Harness hooks: /model is checked against the registry (an unknown name leaves the selection
+  // unchanged); /models lists providers and aliases with probes that send only GET /models.
+  const hooks = harness
+    ? {
+      setModel: (arg) => {
+        const picked = resolveSelection(registry, arg);
+        if (picked.error) return picked.error;
+        session.state.status.provider = picked.provider;
+        session.state.status.model = picked.model;
+        return null;
+      },
+      listModels: () => listModelLines(registry, env),
+    }
+    : {};
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
     color: resolveColor({ env, argv, isTTY: true }),
     unicode: resolveUnicode({ env }),
     status,
+    hooks,
     onFrame: (frame) => {
       const rows = physicalRows(drawnPlain, stdout.columns || 80);
       const up = rows > 1 ? CURSOR_UP(rows - 1) : '';

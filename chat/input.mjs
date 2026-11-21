@@ -12,7 +12,7 @@
 
 import { INPUT_PREFIX } from './render.mjs';
 
-export const SLASH_COMMANDS = ['help', 'model', 'auth', 'clear', 'exit', 'quit'];
+export const SLASH_COMMANDS = ['help', 'model', 'models', 'auth', 'clear', 'exit', 'quit'];
 
 const HISTORY_LIMIT = 500;
 

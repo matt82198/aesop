@@ -129,10 +129,13 @@ export class Session {
     status = {},
     onFrame = () => {},
     source = pipeSource,
+    hooks = {},
   } = {}) {
     this.opts = { columns, rows, color, unicode };
     this.onFrame = onFrame;
     this.source = source;
+    // Optional registry hooks (harness mode): setModel(arg) -> error text or null; listModels() -> lines.
+    this.hooks = hooks;
     this.state = {
       transcript: [],
       inputBuffer: '',
@@ -190,7 +193,7 @@ export class Session {
     const text = String(line ?? '');
     const cmd = parseSlash(text);
     if (cmd !== null) {
-      this.runCommand(cmd);
+      await this.runCommand(cmd);
       this.emit();
       return;
     }
@@ -198,13 +201,21 @@ export class Session {
     await this.runTurn(text, chunks ?? this.source(text));
   }
 
-  runCommand(cmd) {
+  async runCommand(cmd) {
     if (cmd.error) {
       this.state.transcript.push({ role: 'system', text: cmd.error });
     } else if (cmd.command === 'help') {
       for (const text of HELP_LINES) this.state.transcript.push({ role: 'system', text });
     } else if (cmd.command === 'model') {
-      this.setModel(cmd.arg);
+      if (this.hooks.setModel) {
+        const error = await this.hooks.setModel(cmd.arg);
+        if (error) this.state.transcript.push({ role: 'system', text: error });
+      } else {
+        this.setModel(cmd.arg);
+      }
+    } else if (cmd.command === 'models') {
+      const lines = this.hooks.listModels ? await this.hooks.listModels() : ['models: harness backend not enabled (AESOP_CHAT_BACKEND=harness)'];
+      for (const text of lines) this.state.transcript.push({ role: 'system', text });
     } else if (cmd.command === 'clear') {
       this.state.transcript = [];
     } else if (cmd.command === 'auth') {
