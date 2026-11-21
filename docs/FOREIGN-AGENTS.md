@@ -28,3 +28,13 @@ traces it back. These rules keep the fleets from colliding.
 Caveat: citations reflect the tools' documentation as known at authoring time; the authoring
 session had no web access. Whether the installed agy build loads each file is unconfirmed until an
 agy session is observed honoring one.
+
+## Offload cheap work to local models
+
+`aesop ask` sends one prompt to a local open-weight model (default: Ollama `qwen3-coder:30b` on 127.0.0.1:11434, or the providers in `aesop.config.json`). It needs no TTY, keeps no history, and refuses Anthropic hosts and Claude model ids (exit 6). Plain mode prints only the answer on stdout; piped stdin is appended as context; `--json` prints `{ok, provider, model, text, elapsed_ms, error?}`. Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider error, 5 timeout, 6 boundary refused. Add `< /dev/null` when you have no stdin to give, so a shell that holds stdin open cannot hang the call. Local output is a draft: read it before you use it.
+
+```
+git diff --staged | aesop ask --system "Reply with one conventional-commit subject line only." "Write the commit message for this diff."
+tail -n 200 build.log | aesop ask "Summarize the failure in 3 bullets and name the first failing step."
+aesop ask --timeout 120 "Write a pytest skeleton (no bodies) for this module." < src/parser.py
+```
