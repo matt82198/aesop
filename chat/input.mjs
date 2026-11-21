@@ -17,7 +17,14 @@ export const SLASH_COMMANDS = ['help', 'model', 'auth', 'clear', 'exit', 'quit']
 const HISTORY_LIMIT = 500;
 
 /**
- * @returns {{inputBuffer: string, cursor: number, history: string[], historyIndex: number, draft: string, ctrlCPending: boolean, pasting: boolean}}
+ * Idle window (ms) after which an open paste is treated as stuck. A real paste delivers its bytes in
+ * one burst, so a gap this long with no key means the paste-end marker was lost; the next key then
+ * behaves as normal input (a plain Enter submits).
+ */
+export const PASTE_IDLE_MS = 400;
+
+/**
+ * @returns {{inputBuffer: string, cursor: number, history: string[], historyIndex: number, draft: string, ctrlCPending: boolean, pasting: boolean, pasteLastAt: number}}
  */
 export function createInputState() {
   return {
@@ -28,7 +35,13 @@ export function createInputState() {
     draft: '',
     ctrlCPending: false,
     pasting: false,
+    pasteLastAt: 0,
   };
+}
+
+// Key time in ms: key.now when the caller supplies it (tests inject it), otherwise the wall clock.
+function keyTime(key) {
+  return typeof key.now === 'number' ? key.now : Date.now();
 }
 
 // A lone TAB is accepted (expanded to spaces by the printable branch); every other control byte is not.
@@ -99,23 +112,30 @@ function historyDown(s) {
 export function applyKey(state, key = {}) {
   const name = key.name;
 
+  // Ctrl-c and Escape always leave paste mode, so a paste-start whose paste-end never arrived
+  // can be escaped from without restarting the process.
   if (key.ctrl && name === 'c') {
     if (state.ctrlCPending) {
-      return { state: { ...state, ctrlCPending: false }, effect: { type: 'quit' } };
+      return { state: { ...state, ctrlCPending: false, pasting: false }, effect: { type: 'quit' } };
     }
     return {
-      state: { ...state, ctrlCPending: true },
+      state: { ...state, ctrlCPending: true, pasting: false },
       effect: { type: 'hint', text: 'press ctrl-c again to quit' },
     };
   }
+  if (name === 'escape') return { state: { ...state, ctrlCPending: false, pasting: false }, effect: null };
 
-  const s = { ...state, ctrlCPending: false };
+  const now = keyTime(key);
+  let s = { ...state, ctrlCPending: false };
+  // A paste left open with no key for PASTE_IDLE_MS is stuck: drop paste mode before handling this key.
+  if (s.pasting && now - s.pasteLastAt >= PASTE_IDLE_MS) s = { ...s, pasting: false };
+  if (s.pasting) s = { ...s, pasteLastAt: now };
   const { cursor, inputBuffer: buf } = s;
 
   // Bracketed paste (ESC[200~ ... ESC[201~): readline reports the markers as paste-start and
   // paste-end. Inside a paste, Enter is a literal newline, so a multi-line paste is one buffer
   // that a later plain Enter submits.
-  if (name === 'paste-start') return { state: { ...s, pasting: true }, effect: null };
+  if (name === 'paste-start') return { state: { ...s, pasting: true, pasteLastAt: now }, effect: null };
   if (name === 'paste-end') return { state: { ...s, pasting: false }, effect: null };
   if (s.pasting && (name === 'return' || name === 'enter')) {
     return { state: insertText(s, '\n'), effect: null };
