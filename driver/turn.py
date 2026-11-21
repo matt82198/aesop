@@ -45,12 +45,12 @@ from turn_backend import (  # noqa: E402
     EXIT_TIMEOUT,
     EXIT_USAGE,
     default_provider,
-    refusal_reason,
     run_turn,
     TurnProvider,
     TurnResult,
 )
 from turn_frames import FrameWriter  # noqa: E402
+from turn_gate import parse_url, refusal_for  # noqa: E402
 from turn_stream import CancelToken, StreamResult, run_stream_turn  # noqa: E402
 
 PROG = "python -m driver.turn"
@@ -450,26 +450,29 @@ def main(argv=None, *, stdin=None, stdout=None, stderr=None, transport=None, can
 
     base = default_provider()
     if args.base_url is not None:
+        if parse_url(args.base_url) is None:
+            return _usage_fail("--base-url is not a URL", stderr)
         name = provider_name or CUSTOM_PROVIDER_NAME
         base = TurnProvider(name, args.base_url.rstrip("/"), base.model, is_local=_is_loopback_url(args.base_url))
     streaming = args.stream or args.frames or args.serve
 
-    # Refusal is decided on the raw ids and the host, before stdin is read and before any socket.
+    # The boundary gate (turn_gate) runs on the ids and the URL text before stdin is read and before
+    # any socket or DNS lookup. Every request runs the same gate again at send time (turn_stream).
     shown_name = provider_name or base.name
     shown_model = model_id or base.model
-    reason = refusal_reason(shown_name, shown_model, args.base_url)
+    reason = refusal_for({"id": shown_name, "raw": {"type": "openai", "base_url": base.base_url}}, shown_model)
     if reason:
+        line = f"error: {shown_name}: refused: {reason}"
         if args.frames or args.serve:
-            line = f"error: {shown_name}: refused: {reason}"
             writer = FrameWriter(_binary(stdout))
             writer.control(_hello())
             writer.control(_event("notify", text=line))
             writer.control(_done_message(StreamResult(False, "", shown_name, shown_model, 0, line, EXIT_REFUSED)))
             writer.end(EXIT_REFUSED)
-        elif args.stream:
-            stderr.write(f"error: {shown_name}: refused: {reason}\n")
+        elif args.json:
+            _emit(TurnResult(False, "", shown_name, shown_model, 0, line, EXIT_REFUSED), True, stdout, stderr)
         else:
-            _emit(TurnResult(False, "", shown_name, shown_model, 0, reason, EXIT_REFUSED), args.json, stdout, stderr)
+            stderr.write(line + "\n")
         return EXIT_REFUSED
 
     if args.base_url is not None:

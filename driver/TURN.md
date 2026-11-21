@@ -83,6 +83,18 @@ Ollama's `/v1` route ignores `num_ctx` and runs at 4096 tokens, silently cutting
 - Over the window: when the prompt alone exceeds the window, `warning: input ~N tokens exceeds the model window M; the start will be cut` is shown before the reply (a `notify` event in frames mode, stderr in the other modes). The exit code does not change.
 - Shared fixture: `tests/fixtures/num-ctx-cases.json` is run by `tests/test_turn_context.py` (this module) and by `tests/chat-num-ctx-fixture.test.mjs` (`sizeOllamaContext` and the sticky logic in `chat/harness.mjs`), so the two cannot drift.
 
+## The boundary gate (P4, `turn_gate.py`)
+
+Non-Anthropic only. `assert_provider_allowed(provider, model)` is the one gate, a port of `assertProviderAllowed` in `chat/harness.mjs` with the same reason texts. It does no I/O: no DNS lookup, no socket.
+
+- It runs twice. The CLI runs it on the ids and the URL text before stdin is read. Every request runs it again at send time on the entry as it is then (`stream_once`), so a config changed after load is still refused.
+- A refused turn exits 6 and shows `error: <provider>: refused: <reason>`. In `--serve` the turn's `done` carries exit 6 and the session keeps serving.
+- Refused: provider types `cli`, `exec`, `claude`, `anthropic`; a provider id that names Claude or Anthropic; a model id in which `claude` or `anthropic` is a whole token (bounded by start, end, whitespace or one of `/ : . _ -`), unless the type is `orchestrator`; a base_url whose host is `anthropic.com`, `claude.ai` or a subdomain (any case, trailing dot, userinfo tricks, percent-encoding); a scheme other than http or https; plain http to a non-loopback host without `allow_insecure: true`.
+- The provider-id rule is stricter than the Node harness, which checks only the type; where the two differ the driver wins. A `--base-url` that is not a URL at all is a usage error (exit 2), not a refusal.
+- Zero sockets is counted, not assumed: `tests/test_turn_gate.py` replaces `socket.socket` and `socket.getaddrinfo` with counting versions that also block anything that is not loopback, and asserts a count of 0 for every refused turn in every mode.
+- Shared fixture: `tests/fixtures/provider-config-cases.json` is run by the gate (`check_provider`), by `backend_config.validate_provider_entry` (which now applies the gate last) and by the Node suite (H-R26).
+- The P1 one-shot function `turn_backend.run_turn` keeps its own, broader substring check; it is reached only with an injected test transport.
+
 ## Tests
 
-`tests/test_turn_backend.py`, `tests/test_turn_cli.py` (P1), `tests/test_turn_stream.py`, `tests/test_turn_serve.py` (P2), `tests/test_turn_context.py` (P3). The fake provider is `tests/turn_fake_server.py` on 127.0.0.1; nothing touches a real network.
+`tests/test_turn_backend.py`, `tests/test_turn_cli.py` (P1), `tests/test_turn_stream.py`, `tests/test_turn_serve.py` (P2), `tests/test_turn_context.py` (P3), `tests/test_turn_gate.py` (P4). The fake provider is `tests/turn_fake_server.py` on 127.0.0.1; nothing touches a real network.

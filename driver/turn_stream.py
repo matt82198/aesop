@@ -44,9 +44,9 @@ from turn_backend import (  # noqa: E402
     EXIT_REFUSED,
     EXIT_TIMEOUT,
     EXIT_UNREACHABLE,
-    refusal_reason,
 )
 from turn_context import DEFAULT_SIZER, is_ollama  # noqa: E402
+from turn_gate import refusal_for  # noqa: E402
 
 # Exit code for a cancelled one-shot turn (128 + SIGINT), outside the aesop ask table.
 EXIT_CANCELLED = 130
@@ -472,10 +472,14 @@ def build_request(entry: dict, model: str, messages: list, env, *, sizer=None, n
 
 def stream_once(entry: dict, model: str, messages: list, *, env=None, cancel=None,
                 on_delta=None, on_first=None, connect=None, sizer=None, notify=None) -> Outcome:
-    """One request to one provider entry `{"id", "raw"}`. The boundary gate runs first."""
+    """One request to one provider entry `{"id", "raw"}`.
+
+    The boundary gate (turn_gate) runs first, at request time, on the entry as
+    it is now: a refused turn builds no request, resolves no name and opens no
+    socket.
+    """
     env = os.environ if env is None else env
-    raw = entry["raw"]
-    reason = refusal_reason(entry["id"], model, raw.get("base_url"))
+    reason = refusal_for(entry, model)
     if reason:
         return Outcome(failure=TurnFailure("refused", reason))
     try:
