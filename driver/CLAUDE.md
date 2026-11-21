@@ -15,6 +15,7 @@
   seam (FakeTransport in tests: no API key or network).
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
   construct-time validate_base_url; key waiver only via loopback-validated is_local.
+- **turn_backend.py / turn.py** — TUI driver P1: `python -m driver.turn [--json] [--model p/m] [--system s] [--timeout s] "prompt"`, one turn over openai_compatible_driver (proxy env ignored), exit codes = aesop ask (0/2/3/4/5/6). Anthropic/Claude ids and hosts refused (6) before any socket. Tests: test_turn_backend, test_turn_cli.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
   bounded repair (identical-failure repeats: 1st -> fresh-context redispatch via repeat_failure.py, 2nd -> item error identical-failure-repeat; repair_cap unchanged), per-repo batched git ship, recovery journal. Halt kill-switch checks
