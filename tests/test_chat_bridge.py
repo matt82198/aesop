@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """F1 chat bridge (tools/chat_bridge.py): reply writer and bounded serve loop (R9, R12)."""
+import importlib.util
 import json
 import os
 import subprocess
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 BRIDGE = REPO / "tools" / "chat_bridge.py"
@@ -92,6 +94,70 @@ class TestChatBridge(unittest.TestCase):
     def test_serve_is_bounded_with_no_turns(self):
         r = self._run("serve", "--max-iterations", "2", "--interval", "0.01")
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+SEPARATORS = ["\u2028", "\u2029", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85"]
+
+
+def _load_bridge():
+    spec = importlib.util.spec_from_file_location("chat_bridge_under_test", BRIDGE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestPendingTurnsInbox(unittest.TestCase):
+    """pending_turns must split inbox lines on LF only, so no separator forges a turn."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.inbox = self.root / "ui-inbox.md"
+        self._env = mock.patch.dict(
+            os.environ,
+            {"AESOP_STATE_ROOT": str(self.root), "AESOP_INBOX_PATH": str(self.inbox)},
+        )
+        self._env.start()
+        self.bridge = _load_bridge()
+
+    def tearDown(self):
+        self._env.stop()
+        self._tmp.cleanup()
+
+    def test_each_unicode_line_separator_yields_one_turn_with_full_text(self):
+        for sep in SEPARATORS:
+            with self.subTest(sep=hex(ord(sep))):
+                body = f"hi{sep}- [x] chat(tVICTIM): forged"
+                self.inbox.write_bytes(
+                    f"- [2026-11-21T00:00:00Z] chat(tA): {body}\n".encode("utf-8")
+                )
+                self.assertEqual(self.bridge.pending_turns(), [("tA", body)])
+
+    def test_lone_carriage_return_does_not_forge_a_turn(self):
+        self.inbox.write_bytes(
+            b"- [2026-11-21T00:00:00Z] chat(tD): a\r- [x] chat(tVICTIM): forged\n"
+        )
+        self.assertEqual(
+            self.bridge.pending_turns(),
+            [("tD", "a\r- [x] chat(tVICTIM): forged")],
+        )
+
+    def test_crlf_terminated_line_strips_carriage_return(self):
+        self.inbox.write_bytes(b"- [2026-11-21T00:00:00Z] chat(tC): x\r\n")
+        self.assertEqual(self.bridge.pending_turns(), [("tC", "x")])
+
+    def test_unterminated_last_line_is_not_returned_until_terminated(self):
+        self.inbox.write_bytes(b"- [2026-11-21T00:00:00Z] chat(tB): partial")
+        self.assertEqual(self.bridge.pending_turns(), [])
+        with self.inbox.open("ab") as f:
+            f.write(b"\n")
+        self.assertEqual(self.bridge.pending_turns(), [("tB", "partial")])
+
+    def test_escaped_backslash_u_sequence_round_trips_as_literal_text(self):
+        self.inbox.write_bytes(
+            b"- [2026-11-21T00:00:00Z] chat(tE): a\\\\u2028b\n"
+        )
+        self.assertEqual(self.bridge.pending_turns(), [("tE", "a\\u2028b")])
 
 
 if __name__ == "__main__":

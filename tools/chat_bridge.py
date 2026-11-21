@@ -8,7 +8,7 @@ Usage:
 
 Transport (matches chat/backends/orchestrator_source.mjs):
     inbox line  `- [ISO-ts] chat(<turn_id>): <escaped text>` in <state root>/ui-inbox.md
-                (backslash, CR, LF escaped as \\\\, \\r, \\n);
+                (backslash, CR, LF and the Unicode line breaks escaped as \\\\, \\r, \\n, \\uXXXX);
     reply file  <state root>/chat/<turn_id>.jsonl, one JSON object per line
                 {turn_id, seq, chunk, final}; `final: true` ends the turn.
 
@@ -37,6 +37,7 @@ from pathlib import Path
 NO_LISTENER = "no orchestrator listening"
 LINE_RE = re.compile(r"^- \[[^\]]*\] chat\(([A-Za-z0-9_-]+)\): (.*)$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+UNESCAPE_RE = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.DOTALL)
 
 
 def state_root() -> Path:
@@ -55,18 +56,16 @@ def reply_path(turn_id: str) -> Path:
     return state_root() / "chat" / f"{turn_id}.jsonl"
 
 
+def _unescape_one(m) -> str:
+    tok = m.group(1)
+    if len(tok) == 5 and tok[0] == "u":
+        return chr(int(tok[1:], 16))
+    return {"n": "\n", "r": "\r", "\\": "\\"}.get(tok, "\\" + tok)
+
+
 def unescape(text: str) -> str:
-    out, i = [], 0
-    while i < len(text):
-        c = text[i]
-        if c == "\\" and i + 1 < len(text):
-            nxt = text[i + 1]
-            out.append({"n": "\n", "r": "\r", "\\": "\\"}.get(nxt, "\\" + nxt))
-            i += 2
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
+    """Inverts escape_inbox_text: one left-to-right pass, so an escaped backslash never starts an escape."""
+    return UNESCAPE_RE.sub(_unescape_one, text)
 
 
 def read_records(turn_id: str) -> list:
@@ -95,7 +94,13 @@ def pending_turns() -> list:
     if not p.exists():
         return []
     turns = []
-    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+    # Split on LF only. str.splitlines() also breaks on U+2028/U+2029, \x0b, \x0c, \x1c-\x1e and
+    # \x85, which let a pasted separator forge a turn. The final element has no terminating LF
+    # yet (a partial append), so it is ignored until it is complete.
+    raw = p.read_bytes().decode("utf-8", errors="replace")
+    for line in raw.split("\n")[:-1]:
+        if line.endswith("\r"):
+            line = line[:-1]
         m = LINE_RE.match(line)
         if m and not any(r.get("final") for r in read_records(m.group(1))):
             turns.append((m.group(1), unescape(m.group(2))))

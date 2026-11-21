@@ -34,9 +34,20 @@ export function resolveStateRoot(env = process.env) {
   return join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'state');
 }
 
-/** Escapes a turn to one inbox line: backslash, CR and LF become literal escapes. */
+/**
+ * Code points a line splitter may treat as a break (LF, CR, the Unicode line/paragraph separators,
+ * \x0b, \x0c, \x1c-\x1e, \x85). Each is escaped so one turn is always one inbox line.
+ */
+const LINE_BREAK_RE = /[\r\n\u000b\u000c\u001c-\u001e\u0085\u2028\u2029]/g;
+
+/**
+ * Escapes a turn to one inbox line. Backslash is doubled first, so every escape this function
+ * emits is unambiguous and the mapping stays injective; the bridge's unescape inverts it.
+ */
 export function escapeInboxText(text) {
-  return String(text).replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(LINE_BREAK_RE, (c) => (c === '\r' ? '\\r' : c === '\n' ? '\\n' : `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`));
 }
 
 function parseTimeout(value, fallback) {
