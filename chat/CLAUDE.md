@@ -72,6 +72,10 @@ node --test tests/stdio-cli-wiring.test.mjs tests/stdio-pipe.test.mjs tests/stdi
 
 Anti-vacuity: a test is only accepted when breaking the production code in `chat/` turns it red. The streaming mutant (buffer every chunk before emitting) is the reference check.
 
+## Default backend (Ollama)
+
+With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the harness. If the config (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`) declares no `providers`, a built-in `ollama` provider (`http://127.0.0.1:11434/v1`, models `any`, local, 300 s idle timeout) is added and `ollama/qwen3-coder:30b` is selected. `AESOP_CHAT_BACKEND=pipe` restores the raw pipe backend. Each plain turn sends the prior completed turns (newest 20 messages or 24000 chars, `boundContext`); failed turns are not remembered. An unreachable provider shows `error: <p>: connect: cannot reach <p> at <origin> - is it running?` (also once at startup for the built-in default); non-2xx replies include the provider's own error message. `/models` also lists the ids a provider serves when its `models` is `any`. Tests: `tests/chat-ollama-default.test.mjs`.
+
 ## Spec
 
 `chat/SPEC.md` is the durable improvement spec (R1..R24). `chat/SPEC.original.md` is its frozen original and never changes. `tests/chat-spec.test.mjs` has one `R<n>:` test per requirement.

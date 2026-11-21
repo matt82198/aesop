@@ -18,13 +18,13 @@
  * @module chat/cli
  */
 
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
-import { authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, resolveSelection } from './harness.mjs';
+import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
 const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness']);
@@ -204,8 +204,17 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   // AESOP_CHAT_BACKEND=harness selects the model-agnostic provider registry (chat/harness.mjs).
   const backendValue = env.AESOP_CHAT_BACKEND;
   const badBackend = backendValue !== undefined && backendValue !== '' && !BACKEND_VALUES.has(backendValue);
-  const harness = backendValue === 'harness';
-  const registry = harness ? loadRegistry(env.AESOP_CHAT_CONFIG) : null;
+  // Default backend: the model harness (local Ollama unless the config declares providers). An injected
+  // source, or an explicit AESOP_CHAT_BACKEND=pipe|orchestrator, keeps the old behaviour.
+  const implicitHarness = !source && (backendValue === undefined || backendValue === '');
+  const harness = backendValue === 'harness' || implicitHarness;
+  let configPath = env.AESOP_CHAT_CONFIG;
+  if (!configPath && implicitHarness) {
+    const local = join(process.cwd(), 'aesop.config.json');
+    if (existsSync(local)) configPath = local;
+  }
+  const registry = harness ? loadRegistry(configPath) : null;
+  const defaulted = implicitHarness ? applyDefaultProvider(registry) : false;
   const stateFile = selectionFile(env);
   const selection = registry ? (loadSelection(stateFile, registry) ?? registry.defaultSelection) : null;
   const status = { cwd: process.cwd() };
@@ -261,6 +270,16 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       usage: (u) => session.setUsage(u),
     });
     for (const text of registry.notices) session.state.transcript.push({ role: 'system', text });
+    if (defaulted) {
+      // Startup reachability probe (GET /models on the loopback default). Unreachable is a visible line;
+      // the session stays usable and never falls back to echo.
+      const entry = registry.providers.get('ollama');
+      probeProvider(entry, env, 1500).then((status) => {
+        if (status === 'reachable') return;
+        notify('error: ollama: connect: cannot reach ollama at http://127.0.0.1:11434 — is it running?');
+        session.emit();
+      }).catch(() => {});
+    }
     if (!selection) session.state.transcript.push({ role: 'system', text: 'no provider configured (see /help)' });
   }
 

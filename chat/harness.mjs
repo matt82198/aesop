@@ -198,6 +198,27 @@ export function resolveSelection(registry, arg) {
   return { provider, model };
 }
 
+/** Default local provider used when the config declares no providers: Ollama's OpenAI-compatible API. */
+export const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434/v1';
+export const DEFAULT_OLLAMA_MODEL = 'qwen3-coder:30b';
+
+/**
+ * Adds the built-in `ollama` provider (loopback, any model) when the registry has no providers, and
+ * makes ollama/qwen3-coder:30b the selection. A registry with its own providers is left untouched.
+ * @param {ReturnType<typeof loadRegistry>} registry
+ * @returns {boolean} true when the default was added
+ */
+export function applyDefaultProvider(registry) {
+  if (registry.providers.size > 0) return false;
+  registry.providers.set('ollama', {
+    id: 'ollama',
+    raw: { type: 'openai', base_url: DEFAULT_OLLAMA_URL, models: 'any', is_local: true, timeout_ms: 300000 },
+    refused: null,
+  });
+  if (!registry.defaultSelection) registry.defaultSelection = { provider: 'ollama', model: DEFAULT_OLLAMA_MODEL };
+  return true;
+}
+
 /**
  * Pure provider-config check shared with the Python seam (tests/fixtures/provider-config-cases.json).
  * Runs the same gate as the registry: the base_url, the type and every listed model.
@@ -328,12 +349,56 @@ const DEFAULT_TIMEOUT_MS = 60000;
  * @param {number} status
  * @returns {TurnFailure}
  */
-function statusFailure(status) {
-  if (status === 401 || status === 403) return new TurnFailure('auth', `HTTP ${status}`);
-  if (status === 429) return new TurnFailure('rate-limit', 'HTTP 429');
-  if (status >= 500) return new TurnFailure('server', `HTTP ${status}`);
+function statusFailure(status, detail = '') {
+  const tail = detail ? `: ${detail}` : '';
+  if (status === 401 || status === 403) return new TurnFailure('auth', `HTTP ${status}${tail}`);
+  if (status === 429) return new TurnFailure('rate-limit', `HTTP 429${tail}`);
+  if (status >= 500) return new TurnFailure('server', `HTTP ${status}${tail}`);
   if (status >= 300 && status < 400) return new TurnFailure('bad-response', `redirect ${status} not followed`);
-  return new TurnFailure('bad-response', `HTTP ${status}`);
+  return new TurnFailure('bad-response', `HTTP ${status}${tail}`);
+}
+
+function originOf(base) {
+  try { return new URL(base).origin; } catch { return base; }
+}
+
+/**
+ * Extracts the provider's own error text from an error body ({error:{message}} or {error:"..."}), one line.
+ * @param {string} body
+ * @returns {string}
+ */
+function providerMessage(body) {
+  try {
+    const obj = JSON.parse(body);
+    const e = obj?.error;
+    const msg = typeof e === 'string' ? e : e?.message;
+    if (typeof msg === 'string') return msg.replace(/\s+/g, ' ').trim().slice(0, 300);
+  } catch { /* not JSON */ }
+  return '';
+}
+
+/** Max prior messages and characters sent as conversation context on each turn. */
+export const CONTEXT_MAX_MESSAGES = 20;
+export const CONTEXT_MAX_CHARS = 24000;
+
+/**
+ * Bounds a conversation to the newest messages that fit both limits. Never splits a message and
+ * always starts on a user message.
+ * @param {{role: string, content: string}[]} convo oldest first
+ * @param {number} [maxMessages]
+ * @param {number} [maxChars]
+ * @returns {{role: string, content: string}[]}
+ */
+export function boundContext(convo, maxMessages = CONTEXT_MAX_MESSAGES, maxChars = CONTEXT_MAX_CHARS) {
+  const out = [];
+  let chars = 0;
+  for (let i = convo.length - 1; i >= 0 && out.length < maxMessages; i -= 1) {
+    chars += convo[i].content.length;
+    if (chars > maxChars && out.length > 0) break;
+    out.unshift(convo[i]);
+  }
+  while (out.length > 0 && out[0].role !== 'user') out.shift();
+  return out;
 }
 
 /**
@@ -429,9 +494,9 @@ export function harnessSource(registry, getSelection, env = process.env, options
 
   // One request to one candidate. Returns {ok, yielded, failure, usage}; yields each text delta as it arrives.
   // An abort on `signal` destroys the request, so the server sees the connection close (H-R21).
-  async function* streamOnce(entry, model, line, signal) {
+  async function* streamOnce(entry, model, line, signal, prior = []) {
     const id = entry.id;
-    const outcome = { ok: false, yielded: 0, failure: null, usage: null };
+    const outcome = { ok: false, yielded: 0, failure: null, usage: null, text: '' };
     const reportOwn = (u) => { outcome.usage = u; };
     try {
       assertProviderAllowed({ ...entry.raw, id }, model);
@@ -447,7 +512,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
       return outcome;
     }
     const base = String(entry.raw.base_url).replace(/\/+$/, '');
-    const body = JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: String(line) }] });
+    const body = JSON.stringify({ model, stream: true, messages: [...prior, { role: 'user', content: String(line) }] });
     const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), accept: 'text/event-stream' };
     if (keyed && env[keyName]) headers.authorization = `Bearer ${env[keyName]}`;
     const timeoutMs = Number(entry.raw.timeout_ms) > 0 ? Number(entry.raw.timeout_ms) : DEFAULT_TIMEOUT_MS;
@@ -469,7 +534,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
     try {
       res = await new Promise((resolve, reject) => {
         req = http.request(`${base}/chat/completions`, { method: 'POST', headers }, resolve);
-        req.on('error', (err) => reject(timedOut ? timeoutFailure() : new TurnFailure('connect', err.code ?? 'error')));
+        req.on('error', (err) => reject(timedOut ? timeoutFailure() : new TurnFailure('connect', `cannot reach ${id} at ${originOf(base)} — is it running? (${err.code ?? 'error'})`)));
         arm();
         req.end(body);
       });
@@ -479,9 +544,12 @@ export function harnessSource(registry, getSelection, env = process.env, options
       return outcome;
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      res.resume();
+      let errBody = '';
+      try {
+        for await (const chunk of res) { if (errBody.length < 4096) errBody += chunk.toString('utf8'); }
+      } catch { /* a cut error body only loses the detail */ }
       clearTimeout(timer);
-      outcome.failure = statusFailure(res.statusCode);
+      outcome.failure = statusFailure(res.statusCode, res.statusCode >= 300 && res.statusCode < 400 ? '' : providerMessage(errBody));
       return outcome;
     }
     const noteFirst = () => {
@@ -512,6 +580,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
         if (typeof text === 'string' && text !== '') {
           noteFirst();
           outcome.yielded += 1;
+          outcome.text += text;
           yield text;
         }
       } else {
@@ -526,6 +595,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
             if (delta !== '') {
               noteFirst();
               outcome.yielded += 1;
+              outcome.text += delta;
               yield delta;
             }
             nl = pending.indexOf('\n');
@@ -539,6 +609,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
             if (delta !== DONE && delta !== '') {
               noteFirst();
               outcome.yielded += 1;
+              outcome.text += delta;
               yield delta;
             }
           }
@@ -556,6 +627,8 @@ export function harnessSource(registry, getSelection, env = process.env, options
     return outcome;
   }
 
+  // Conversation context (chat task only): completed turns, newest bounded on send.
+  const convo = [];
   return async function* harnessTurn(line, opts = {}) {
     const sel = getSelection();
     if (!sel.provider) throw new Error('no provider configured (see /help)');
@@ -584,9 +657,11 @@ export function harnessSource(registry, getSelection, env = process.env, options
         notify(`error: ${cand.provider}: refused: unknown provider`);
         return;
       }
-      const outcome = yield* streamOnce(entry, cand.model, line, signal);
+      const prior = task === 'chat' ? boundContext(convo) : [];
+      const outcome = yield* streamOnce(entry, cand.model, line, signal, prior);
       if (outcome.ok) {
         recordSuccess(cand.provider);
+        if (task === 'chat' && outcome.text !== '') convo.push({ role: 'user', content: String(line) }, { role: 'assistant', content: outcome.text });
         if (outcome.usage) reportUsage({ provider: cand.provider, ...usageOf(cand.provider, outcome.usage) });
         return;
       }
@@ -729,6 +804,29 @@ export function authLines(registry, env = process.env) {
  * @param {(entry: object, env: object) => Promise<string>} [probe]
  * @returns {Promise<string[]>}
  */
+export function fetchModelIds(entry, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const base = String(entry.raw.base_url ?? '').replace(/\/+$/, '');
+    let req;
+    try {
+      req = http.get(`${base}/models`, (res) => {
+        let body = '';
+        res.on('data', (c) => { if (body.length < 1e6) body += c; });
+        res.on('end', () => {
+          try {
+            const obj = JSON.parse(body);
+            const list = Array.isArray(obj?.data) ? obj.data : Array.isArray(obj?.models) ? obj.models : [];
+            resolve(list.map((m) => String(m?.id ?? m?.name ?? '')).filter(Boolean));
+          } catch { resolve([]); }
+        });
+        res.on('error', () => resolve([]));
+      });
+    } catch { resolve([]); return; }
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve([]); });
+    req.on('error', () => resolve([]));
+  });
+}
+
 export async function listModelLines(registry, env = process.env, probe = probeProvider) {
   const lines = [];
   for (const [name, target] of registry.aliases) lines.push(`alias ${name} -> ${target}`);
@@ -740,6 +838,10 @@ export async function listModelLines(registry, env = process.env, probe = probeP
     else if (typeof keyName === 'string' && keyName !== '' && !env[keyName]) status = 'no key';
     else status = await probe(entry, env);
     lines.push(`provider ${entry.id}: ${status}; models: ${models || 'none'}`);
+    if (status === 'reachable' && entry.raw.models === 'any') {
+      const ids = await fetchModelIds(entry);
+      if (ids.length > 0) lines.push(`  ${entry.id} serves: ${ids.join(', ')}`);
+    }
   }
   return lines;
 }

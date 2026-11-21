@@ -73,6 +73,7 @@ async function runChatTty(keys, { cwd, env = {}, shimPath }) {
       cwd,
       env: {
         ...process.env,
+        AESOP_CHAT_BACKEND: 'pipe',
         ...env,
         NODE_OPTIONS: `--require "${shimPath}"`,
       },
