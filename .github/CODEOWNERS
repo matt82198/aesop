@@ -39,6 +39,7 @@ daemons/ @matt82198
 
 # Lane contract and ratchet baselines
 LANE-CONTRACT.md @matt82198
+contract/ @matt82198
 .portability-baseline.json @matt82198
 .pyflakes-baseline.json @matt82198
 .stateapi-baseline.json @matt82198
