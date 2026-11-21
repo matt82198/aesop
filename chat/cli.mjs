@@ -205,7 +205,8 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
 
     const submit = (line) => {
       let notice = null;
-      if (line.trim() !== '') {
+      // Consecutive duplicates store one entry, matching the reducer.
+      if (line.trim() !== '' && history[history.length - 1] !== line) {
         history.push(line);
         const failure = saveHistory(historyFile, history);
         if (failure) notice = `history not saved: ${failure}`;
@@ -252,7 +253,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     };
 
     const handleKey = (str, key) => {
-      const result = applyKey(input, toKey(str, key));
+      const result = applyKey(input, { ...toKey(str, key), now: Date.now() });
       input = result.state;
       const effect = result.effect;
       if (effect && effect.type === 'quit') {
