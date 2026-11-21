@@ -167,7 +167,9 @@ class ShadowAdjudicationBackend:
         self,
         backend: "OrchestratorBackend",
         model: str = "gpt-4o-mini",
+        adjudication_rubric: str = "",
     ):
+        self.adjudication_rubric = adjudication_rubric
         self.backend = backend
         self.model = model
         self.tokens_spent = 0
@@ -175,6 +177,8 @@ class ShadowAdjudicationBackend:
 
     def decide_call(self, prompt: str, *, schema=None) -> str:
         """Call the backend and record telemetry."""
+        if self.adjudication_rubric:
+            prompt = self.adjudication_rubric.rstrip() + "\n\n" + prompt
         response_text = self.backend.decide_call(prompt, schema=schema)
 
         # Try to extract served model from the response if it's JSON.
@@ -795,6 +799,10 @@ def main():
         help="Path to aesop.config.json for seats.orchestrator (default: ./aesop.config.json)",
     )
     parser.add_argument(
+        "--operational-triage", action="store_true",
+        help="Evaluate the operational contract rubric with the live shadow seat",
+    )
+    parser.add_argument(
         "--enriched",
         action="store_true",
         default=False,
@@ -819,6 +827,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.operational_triage and (args.offline or not args.live):
+        parser.error("--operational-triage requires a live shadow seat")
 
     # Validate corpus path.
     corpus_path = Path(args.corpus)
@@ -887,7 +897,11 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        backend = ShadowAdjudicationBackend(real_backend, model=args.model)
+        rubric = ""
+        if args.operational_triage:
+            rubric_path = DRIVER_DIR / "decisions" / "operational-triage.md"
+            rubric = rubric_path.read_text(encoding="utf-8")
+        backend = ShadowAdjudicationBackend(real_backend, model=args.model, adjudication_rubric=rubric)
     else:
         print("Error: specify --offline or --live", file=sys.stderr)
         sys.exit(1)
@@ -970,6 +984,9 @@ def main():
     repeat_suffix = f"_repeat{args.repeat}" if args.repeat > 1 else ""
     enriched_suffix = "_enriched" if args.enriched else ""
     full_tag = model_tag + repeat_suffix + enriched_suffix
+    if args.operational_triage:
+        full_tag += "_operational_triage"
+        stats["operational_triage"] = True
 
     # Date: use 2026-07-24 for repeated runs (increment 2.6), else 2026-07-23
     date_tag = "2026-07-24" if args.repeat > 1 else "2026-07-23"
