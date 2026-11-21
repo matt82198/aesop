@@ -23,7 +23,7 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
-import { applyKey, createInputState } from './input.mjs';
+import { PASTE_IDLE_MS, applyKey, createInputState } from './input.mjs';
 import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
@@ -290,9 +290,17 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     // The terminal is restored exactly once, whichever exit path runs first: finish (/exit, ctrl-c
     // twice, ctrl-d), a process 'exit' (written synchronously), or SIGTERM / SIGHUP / SIGINT. Later calls are no-ops.
     let restored = false;
+    let pasteFlushTimer = null;
+    const clearPasteFlush = () => {
+      if (pasteFlushTimer !== null) {
+        clearTimeout(pasteFlushTimer);
+        pasteFlushTimer = null;
+      }
+    };
     const restoreTerminal = () => {
       if (restored) return;
       restored = true;
+      clearPasteFlush();
       stdin.removeListener('keypress', onKeypress);
       if (typeof stdout.removeListener === 'function') stdout.removeListener('resize', onResize);
       process.removeListener('exit', onProcessExit);
@@ -403,16 +411,32 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         return;
       }
       if (effect && effect.type === 'hint') {
+        clearPasteFlush();
         session.setHint(effect.text);
-      } else if (effect && effect.type === 'submit') {
+        session.setInput(input);
+        return;
+      }
+      if (effect && effect.type === 'submit') {
+        clearPasteFlush();
         session.setHint(null);
         session.setInput(input);
         submit(effect.line);
         return;
-      } else if (session.state.hint) {
+      }
+      if (session.state.hint) {
         // Any key other than ctrl-c retires the quit hint.
         session.setHint(null);
       }
+      if (input.pasting) {
+        clearPasteFlush();
+        pasteFlushTimer = setTimeout(() => {
+          pasteFlushTimer = null;
+          if (!restored) session.setInput(input);
+        }, PASTE_IDLE_MS);
+        pasteFlushTimer.unref?.();
+        return;
+      }
+      clearPasteFlush();
       session.setInput(input);
     };
 
