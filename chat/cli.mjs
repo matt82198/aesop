@@ -18,7 +18,7 @@
  * @module chat/cli
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
@@ -34,14 +34,25 @@ function loadHistory(file) {
     return [];
   }
 }
-// Best-effort append: history is a convenience, so a write failure never ends the session.
+// Atomic save: the whole history is written to a temp file beside the target, then renamed over it,
+// so a failed write never leaves the existing file truncated or half-written. A failure never ends
+// the session; it returns a short reason (the error code) that the caller shows in the chat, or
+// null on success.
 function saveHistory(file, history) {
-  if (!file) return;
+  if (!file) return null;
+  const tmp = `${file}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(history.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
-  } catch {
-    // Ignored on purpose: the line was still submitted.
+    writeFileSync(tmp, `${JSON.stringify(history.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
+    renameSync(tmp, file);
+    return null;
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // Nothing more to clean up; the save already failed.
+    }
+    return (err && err.code) || 'unknown error';
   }
 }
 import { resolveColor, resolveUnicode } from './render.mjs';
@@ -193,14 +204,21 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     };
 
     const submit = (line) => {
+      let notice = null;
       if (line.trim() !== '') {
         history.push(line);
-        saveHistory(historyFile, history);
+        const failure = saveHistory(historyFile, history);
+        if (failure) notice = `history not saved: ${failure}`;
       }
       chain = chain.then(async () => {
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
         const chunks = line.startsWith('/') ? undefined : source(line);
         await session.submit(line, chunks);
+        // A failed history save is shown as one visible status line; the session keeps running.
+        if (notice) {
+          session.state.transcript.push({ role: 'system', text: notice });
+          session.emit();
+        }
         if (session.state.exit) finish(0);
       }).catch((err) => {
         // A backend that throws synchronously is rendered, never left as an unhandled rejection;

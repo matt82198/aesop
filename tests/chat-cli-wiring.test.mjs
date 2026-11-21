@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PassThrough, Writable } from 'node:stream';
 
 // S1 spec for the `aesop chat` wiring in bin/cli.js. These tests spawn the real CLI, which is
 // the only file in the chat suite allowed to do so. Every spawn uses a fresh temp cwd that
@@ -331,4 +332,156 @@ test('bin_cli_has_one_chat_entry_decider_before_the_scaffold_path', async () => 
     scaffoldAt > callAt && callAt >= 0,
     `the shouldEnterChat call (offset ${callAt}) must come before the scaffold path (offset ${scaffoldAt}); a second chat-entry block after the scaffold is dead code`,
   );
+});
+
+// ---------------------------------------------------------------------------------------------
+// History save: a failed write is shown in the chat and keeps the session running; the write is
+// atomic (temp file, then rename) so a failed write never corrupts the existing history file.
+// Drives the real runChat in-process with a fake TTY. AESOP_CHAT_HISTORY always points at a temp
+// dir, so the real home is never touched.
+// ---------------------------------------------------------------------------------------------
+
+function fakeChatTTY() {
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  stdin.setRawMode = () => {};
+  const out = [];
+  const stdout = new Writable({
+    write(chunk, _enc, cb) {
+      out.push(Buffer.from(chunk).toString('utf8'));
+      cb();
+    },
+  });
+  stdout.isTTY = true;
+  stdout.columns = 80;
+  stdout.rows = 24;
+  const stderr = new Writable({
+    write(_chunk, _enc, cb) {
+      cb();
+    },
+  });
+  return { stdin, stdout, stderr, text: () => out.join('') };
+}
+
+async function loadChatCliModule() {
+  return import(pathToFileURL(join(repoRoot, 'chat', 'cli.mjs')).href);
+}
+
+async function loadEchoBackend() {
+  return import(pathToFileURL(join(repoRoot, 'tests', 'helpers', 'chat-echo-source.mjs')).href);
+}
+
+async function waitUntil(predicate, ms = 3000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > ms) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
+function resolvesWithin(promise, ms = 5000) {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`runChat did not exit within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+
+// Starts an interactive chat with the given history file and submits one line.
+async function startChatAndSubmit(historyFile, line) {
+  const { runChat } = await loadChatCliModule();
+  const { echoSource } = await loadEchoBackend();
+  const io = fakeChatTTY();
+  const done = runChat({
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    env: { AESOP_CHAT_HISTORY: historyFile },
+    source: echoSource,
+  });
+  io.stdin.write(line);
+  io.stdin.write('\r');
+  return { io, done };
+}
+
+test('chat_history_write_failure_shows_status_line_and_keeps_running', async () => {
+  const dir = freshTempDir();
+  try {
+    // A directory at the history path: loading finds no file, and the save cannot replace a directory.
+    const historyFile = join(dir, 'history-path-is-a-directory.json');
+    mkdirSync(historyFile);
+    const { io, done } = await startChatAndSubmit(historyFile, 'hello there');
+    try {
+      const shown = await waitUntil(() => /history not saved: \S+/.test(io.text()));
+      assert.ok(shown, `a failed history save must show "history not saved: <reason>" in the chat; last output: ${io.text().slice(-300)}`);
+      // The session keeps running after the failure: the next submit still reaches the backend and renders.
+      io.stdin.write('still alive');
+      io.stdin.write('\r');
+      const replied = await waitUntil(() => io.text().includes('still'));
+      assert.ok(replied, 'the chat must keep accepting and answering input after a failed history save');
+    } finally {
+      io.stdin.write('\x03\x03');
+    }
+    assert.equal(await resolvesWithin(done), 0, 'ctrl-c twice must still exit 0 after a failed history save');
+  } finally {
+    safeRm(dir);
+  }
+});
+
+test('chat_history_failed_write_leaves_existing_file_untouched', async () => {
+  const dir = freshTempDir();
+  try {
+    const historyFile = join(dir, 'chat-history.json');
+    const original = `${JSON.stringify(['earlier line'], null, 2)}\n`;
+    writeFileSync(historyFile, original, 'utf8');
+    // The save writes its temp file at `<file>.<pid>.tmp` first. A directory there makes that
+    // write fail, so the rename never runs and the existing history file must stay byte-identical.
+    mkdirSync(`${historyFile}.${process.pid}.tmp`);
+    const { io, done } = await startChatAndSubmit(historyFile, 'fresh line');
+    try {
+      const shown = await waitUntil(() => /history not saved: \S+/.test(io.text()));
+      assert.ok(shown, 'the failed save must be reported in the chat');
+    } finally {
+      io.stdin.write('\x03\x03');
+    }
+    await resolvesWithin(done);
+    assert.equal(
+      readFileSync(historyFile, 'utf8'),
+      original,
+      'a failed history write must never corrupt or partially replace the existing history file',
+    );
+  } finally {
+    safeRm(dir);
+  }
+});
+
+test('chat_history_happy_path_appends_and_caps_at_500_with_no_notice', async () => {
+  const dir = freshTempDir();
+  try {
+    const historyFile = join(dir, 'chat-history.json');
+    const seeded = Array.from({ length: 600 }, (_, i) => `line-${i}`);
+    writeFileSync(historyFile, `${JSON.stringify(seeded, null, 2)}\n`, 'utf8');
+    const { io, done } = await startChatAndSubmit(historyFile, 'fresh line');
+    const saved = await waitUntil(() => {
+      try {
+        return JSON.parse(readFileSync(historyFile, 'utf8')).at(-1) === 'fresh line';
+      } catch {
+        return false;
+      }
+    });
+    try {
+      assert.ok(saved, 'a successful submit must append the line to the history file');
+      const entries = JSON.parse(readFileSync(historyFile, 'utf8'));
+      assert.equal(entries.length, 500, 'history must stay capped at 500 lines');
+      assert.equal(entries[0], 'line-101', 'the oldest lines are the ones dropped by the cap');
+      assert.equal(entries.at(-1), 'fresh line');
+      assert.ok(!/history not saved/.test(io.text()), 'a successful save must show no status line');
+    } finally {
+      io.stdin.write('\x03\x03');
+    }
+    await resolvesWithin(done);
+  } finally {
+    safeRm(dir);
+  }
 });
