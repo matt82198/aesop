@@ -487,6 +487,122 @@ test('ctrl-c cancels the active stream and preserves a queued turn', async () =>
   }
 });
 
+test('cold-load /exit aborts stalled request immediately and repeated ctrl-c never traps session', async () => {
+  const { runChat } = await import(pathToFileURL(join(root, 'chat/cli.mjs')).href);
+
+  // 1. /exit during a stalled cold-load (headers not even sent yet) aborts socket and exits <500ms.
+  let openRes;
+  let seenPost;
+  const postArrived = new Promise((resolve) => { seenPost = resolve; });
+  const server = await startFake((_req, _body, res) => {
+    openRes = res;
+    seenPost();
+    // Simulate a 2+ minute cold model load: hold response open with zero bytes written.
+  });
+  try {
+    const dir = tmp();
+    const stdin = Object.assign(new EventEmitter(), { isTTY: true, setRawMode() {}, resume() {}, pause() {} });
+    const writes = [];
+    const stdout = Object.assign(new EventEmitter(), { isTTY: true, columns: 100, rows: 30, write(s) { writes.push(String(s)); return true; } });
+    const cfgPath = cfgFile({ providers: { local: prov(server.url, { timeout_ms: 120000 }) }, default: 'local/m' });
+    const done = runChat({
+      argv: [],
+      stdin,
+      stdout,
+      stderr: { write: () => true },
+      env: {
+        LANG: 'en_US.UTF-8',
+        NO_COLOR: '1',
+        AESOP_CHAT_BACKEND: 'harness',
+        AESOP_CHAT_CONFIG: cfgPath,
+        AESOP_CHAT_HISTORY: join(dir, 'h.json'),
+        AESOP_STATE_ROOT: join(dir, 'state'),
+      },
+    });
+    const press = (str, key) => stdin.emit('keypress', str, key);
+    const sendLine = (line) => {
+      for (const ch of line) press(ch, undefined);
+      press('\r', { name: 'return', ctrl: false, meta: false, sequence: '\r' });
+    };
+
+    sendLine('wake cold model');
+    await Promise.race([postArrived, sleep(2000)]);
+    assert.equal(server.posts().length, 1, 'cold-load request reached server');
+
+    sendLine('/exit');
+    const outcome = await Promise.race([
+      done.then((code) => ({ exited: true, code })),
+      sleep(500).then(() => ({ exited: false, code: null })),
+    ]);
+    assert.equal(outcome.exited, true, '/exit must abort cold-load turn and exit immediately without queuing behind it');
+    assert.equal(outcome.code, 0);
+    assert.ok(server.closed.length >= 1, 'cold-load HTTP connection must be aborted on /exit');
+  } finally {
+    openRes?.end();
+    await server.close();
+  }
+
+  // 2. If turnAbort is already aborted on a slow-unwinding stream, subsequent ctrl-c twice exits instead of trapping.
+  let openRes2;
+  let seenPost2;
+  const postArrived2 = new Promise((r) => { seenPost2 = r; });
+  const server2 = await startFake((_req, _body, res) => {
+    openRes2 = res;
+    seenPost2();
+  });
+  const realDestroy = http.ClientRequest.prototype.destroy;
+  try {
+    const dir2 = tmp();
+    const stdin2 = Object.assign(new EventEmitter(), { isTTY: true, setRawMode() {}, resume() {}, pause() {} });
+    const stdout2 = Object.assign(new EventEmitter(), { isTTY: true, columns: 80, rows: 24, write() { return true; } });
+    const cfgPath2 = cfgFile({ providers: { local: prov(server2.url, { timeout_ms: 120000 }) }, default: 'local/m' });
+    const done2 = runChat({
+      argv: [],
+      stdin: stdin2,
+      stdout: stdout2,
+      stderr: { write: () => true },
+      env: {
+        LANG: 'en_US.UTF-8',
+        NO_COLOR: '1',
+        AESOP_CHAT_BACKEND: 'harness',
+        AESOP_CHAT_CONFIG: cfgPath2,
+        AESOP_CHAT_HISTORY: join(dir2, 'h.json'),
+        AESOP_STATE_ROOT: join(dir2, 'state'),
+      },
+    });
+    for (const ch of 'stuck') stdin2.emit('keypress', ch, undefined);
+    stdin2.emit('keypress', '\r', { name: 'return', ctrl: false, meta: false, sequence: '\r' });
+    await Promise.race([postArrived2, sleep(2000)]);
+    http.ClientRequest.prototype.destroy = function noopDestroy() { return this; };
+    const ctrlC2 = () => stdin2.emit('keypress', '\x03', { name: 'c', ctrl: true, meta: false, sequence: '\x03' });
+    ctrlC2();
+    ctrlC2();
+    ctrlC2();
+    const quit2 = await Promise.race([
+      done2.then((code) => ({ exited: true, code })),
+      sleep(500).then(() => ({ exited: false, code: null })),
+    ]);
+    assert.equal(quit2.exited, true, 'repeated ctrl-c must still quit when an aborted stream fails to unwind');
+    assert.equal(quit2.code, 0);
+  } finally {
+    http.ClientRequest.prototype.destroy = realDestroy;
+    openRes2?.end();
+    await server2.close();
+  }
+
+  // 3. --help documents /models.
+  const helpOut = [];
+  const helpCode = await runChat({
+    argv: ['--help'],
+    stdin: { isTTY: false },
+    stdout: { isTTY: false, write: (s) => helpOut.push(String(s)) },
+    stderr: { write: () => true },
+    env: {},
+  });
+  assert.equal(helpCode, 0);
+  assert.match(helpOut.join(''), /\/models\b/, 'aesop chat --help must list /models');
+});
+
 test('H-R22: tokens from usage or chars/4 estimate marked ~; local cost 0', async () => {
   let withUsage = true;
   const A = await startFake((q, b, res) => sse(res, ['abcdefgh'], withUsage ? { usage: { prompt_tokens: 11, completion_tokens: 7 } } : {}));
