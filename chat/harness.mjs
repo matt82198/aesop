@@ -37,7 +37,7 @@ const CLAUDE_MODEL_TOKEN = /(?:^|[\s/:._-])(?:claude|anthropic)(?=$|[\s/:._-])/i
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const DONE = Symbol('done');
 // Keys a provider entry may carry; any other key gets a NOTICE by name (spec H-R7, H-R24).
-const PROVIDER_KEYS = new Set(['type', 'base_url', 'api_key_env', 'models', 'headers', 'timeout_ms', 'is_local', 'cost_per_mtok', 'allow_insecure']);
+const PROVIDER_KEYS = new Set(['type', 'base_url', 'api_key_env', 'models', 'headers', 'timeout_ms', 'is_local', 'cost_per_mtok', 'allow_insecure', 'num_ctx_max', 'model_max_ctx']);
 const MAX_ALIAS_HOPS = 3;
 
 /**
@@ -268,6 +268,9 @@ function parseStreamLine(line, onUsage) {
     throw new TurnFailure('bad-response', 'malformed stream frame');
   }
   if (obj && typeof obj.usage === 'object' && obj.usage !== null && onUsage) onUsage(obj.usage);
+  if (obj && obj.done === true && typeof obj.prompt_eval_count === 'number' && onUsage) {
+    onUsage({ prompt_tokens: obj.prompt_eval_count, completion_tokens: Number(obj.eval_count) || 0 });
+  }
   const content = obj?.choices?.[0]?.delta?.content ?? obj?.message?.content ?? obj?.response;
   return typeof content === 'string' ? content : '';
 }
@@ -379,6 +382,34 @@ function providerMessage(body) {
     if (typeof msg === 'string') return msg.replace(/\s+/g, ' ').trim().slice(0, 300);
   } catch { /* not JSON */ }
   return '';
+}
+
+/** Ollama context sizing: chars-per-token estimate, reply reserve, floor, default cap. */
+export const CHARS_PER_TOKEN = 3.5;
+export const OLLAMA_REPLY_RESERVE = 1024;
+export const OLLAMA_NUM_CTX_FLOOR = 4096;
+export const OLLAMA_NUM_CTX_MAX = 32768;
+
+/** True for the Ollama provider (id or type `ollama`), which is sent to the native /api/chat. */
+function isOllama(entry) {
+  return entry.id === 'ollama' || entry.raw.type === 'ollama';
+}
+
+/**
+ * Sizes Ollama's context window for one request. Ollama's /v1 route ignores num_ctx and runs at its
+ * 4096 default, silently cutting the start of long input, so the native route gets an explicit window.
+ * @param {{role: string, content: string}[]} messages
+ * @param {{num_ctx_max?: number, model_max_ctx?: number}} raw provider config
+ * @returns {{numCtx: number, promptTokens: number, truncates: boolean}}
+ */
+export function sizeOllamaContext(messages, raw = {}) {
+  const chars = messages.reduce((n, m) => n + String(m.content).length, 0);
+  const promptTokens = Math.ceil(chars / CHARS_PER_TOKEN);
+  let cap = Number(raw.num_ctx_max) > 0 ? Math.floor(Number(raw.num_ctx_max)) : OLLAMA_NUM_CTX_MAX;
+  if (Number(raw.model_max_ctx) > 0) cap = Math.min(cap, Math.floor(Number(raw.model_max_ctx)));
+  const want = Math.ceil((promptTokens + OLLAMA_REPLY_RESERVE) / 1024) * 1024;
+  const numCtx = Math.min(Math.max(want, OLLAMA_NUM_CTX_FLOOR), cap);
+  return { numCtx, promptTokens, truncates: promptTokens > cap };
 }
 
 /** Max prior messages and characters sent as conversation context on each turn. */
@@ -516,8 +547,17 @@ export function harnessSource(registry, getSelection, env = process.env, options
       return outcome;
     }
     const base = String(entry.raw.base_url).replace(/\/+$/, '');
-    const body = JSON.stringify({ model, stream: true, messages: [...prior, { role: 'user', content: String(line) }] });
-    const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), accept: 'text/event-stream' };
+    const messages = [...prior, { role: 'user', content: String(line) }];
+    const native = isOllama(entry);
+    let payload = { model, stream: true, messages };
+    if (native) {
+      const sized = sizeOllamaContext(messages, entry.raw);
+      payload = { model, stream: true, messages, options: { num_ctx: sized.numCtx } };
+      if (sized.truncates) notify(`warning: input ~${sized.promptTokens} tokens exceeds the model window ${sized.numCtx}; the start will be cut`);
+    }
+    const body = JSON.stringify(payload);
+    const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), accept: native ? 'application/x-ndjson' : 'text/event-stream' };
+    const endpoint = native ? base.replace(/\/v1$/, '') + '/api/chat' : base + '/chat/completions';
     if (keyed && env[keyName]) headers.authorization = `Bearer ${env[keyName]}`;
     const timeoutMs = Number(entry.raw.timeout_ms) > 0 ? Number(entry.raw.timeout_ms) : DEFAULT_TIMEOUT_MS;
     const started = clockNow();
@@ -537,7 +577,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
     let res;
     try {
       res = await new Promise((resolve, reject) => {
-        req = http.request(`${base}/chat/completions`, { method: 'POST', headers }, resolve);
+        req = http.request(endpoint, { method: 'POST', headers }, resolve);
         req.on('error', (err) => reject(timedOut ? timeoutFailure() : new TurnFailure('connect', `cannot reach ${id} at ${originOf(base)} — is it running? (${err.code ?? 'error'})`)));
         arm();
         req.end(body);
