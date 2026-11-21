@@ -149,6 +149,40 @@ else
   fail "$bad4b/40 barrier-released reclaim trials did not produce exactly one acquirer"
 fi
 
+echo "=== Test 4c: fresh acquirer arriving inside the forced reclaim gap -> exactly one acquirer ==="
+# AESOP_LOCK_TEST_PAUSE_AFTER_MV (inert unless set) makes the reclaimer sleep right after it
+# removed the stale lock from the lock path. Driver A reclaims with a 3s pause; once the lock
+# path is observed absent, driver B (no pause) starts a fresh acquire inside that gap. Exactly
+# one of A/B may acquire (RC 0 or 2); the other must report RC=1.
+ROOT="$TMP_DIR/t4c"; mkdir -p "$ROOT"
+LOCK="$ROOT/lock"; mkdir "$LOCK"
+echo "$(dead_pid)" > "$LOCK/pid"
+echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
+( AESOP_LOCK_TEST_PAUSE_AFTER_MV=3 bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/a.out" 2>/dev/null ) &
+gap_seen=0
+for _ in $(seq 1 200); do
+  if [ ! -e "$LOCK" ]; then gap_seen=1; break; fi
+  sleep 0.02
+done
+( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/b.out" 2>/dev/null ) &
+wait
+acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/a.out" "$ROOT/b.out" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$gap_seen" = "1" ] && [ "$acquirers" = "1" ]; then
+  pass "fresh acquirer during the forced reclaim gap: exactly one acquirer"
+else
+  fail "forced reclaim gap: gap_seen=$gap_seen acquirers=$acquirers (expected gap_seen=1 acquirers=1)"; cat "$ROOT/a.out" "$ROOT/b.out" 2>/dev/null
+fi
+
+echo "=== Test 4d: write_lock_owner failure fails closed (lock released, non-zero) ==="
+ROOT="$TMP_DIR/t4d"; mkdir -p "$ROOT"
+LOCK="$ROOT/lock"
+out=$(bash -c 'source "$1"; write_lock_owner() { return 1; }; acquire_lock "$2" 300; echo "RC=$?"' _ "$RW" "$LOCK" 2>/dev/null)
+if [ "$out" = "RC=1" ] && [ ! -e "$LOCK" ]; then
+  pass "owner-write failure: acquire returned 1 and left no lock behind"
+else
+  fail "owner-write failure: out='$out' lock_exists=$([ -e "$LOCK" ] && echo yes || echo no)"
+fi
+
 echo "=== Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ==="
 # Stale watchdog heartbeat + stub daemon. SELFHEAL.log records every spawn attempt
 # synchronously ("RESTART watchdog: spawned"), so the log is the evidence.
