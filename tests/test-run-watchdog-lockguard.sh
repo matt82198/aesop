@@ -180,13 +180,13 @@ ROOT="$TMP_DIR/t4c"; mkdir -p "$ROOT"
 LOCK="$ROOT/lock"; mkdir "$LOCK"
 echo "$(dead_pid)" > "$LOCK/pid"
 echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
-( AESOP_LOCK_TEST_PAUSE_AFTER_MV=3 bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/a.out" 2>/dev/null ) &
+( AESOP_LOCK_TEST_PAUSE_AFTER_MV=3 bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT" > "$ROOT/a.out" 2> "$ROOT/a.err" ) &
 gap_seen=0
 for _ in $(seq 1 200); do
   if [ ! -e "$LOCK" ]; then gap_seen=1; break; fi
   sleep 0.02
 done
-( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/b.out" 2>/dev/null ) &
+( bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT" > "$ROOT/b.out" 2> "$ROOT/b.err" ) &
 wait
 acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/a.out" "$ROOT/b.out" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$gap_seen" = "1" ] && [ "$acquirers" = "1" ]; then

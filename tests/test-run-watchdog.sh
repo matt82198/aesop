@@ -41,43 +41,40 @@ fi
 COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
 echo $((COUNT + 1)) > "$COUNTER_FILE"
 echo "[mock-cycle] Counter incremented to $((COUNT + 1))"
-sleep 0.1
 EOFMOCK
 chmod +x "${MOCK_CYCLE}"
 echo "Mock cycle script created at: ${MOCK_CYCLE}"
 
 echo "=== Test 1: Concurrent --once invocations (should lock second one out) ==="
-echo "Starting two --once instances simultaneously..."
-
-# Capture outputs and exit codes
 OUT1=$(mktemp)
 OUT2=$(mktemp)
-EXIT1=""
-EXIT2=""
+: > "$CYCLE_COUNTER"
 
-# Start first instance in background
-AESOP_ROOT="${AESOP_ROOT}" \
-  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
-  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT1" 2>&1 &
-PID1=$!
-
-# Start second instance immediately (should be blocked by lock)
-AESOP_ROOT="${AESOP_ROOT}" \
-  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
-  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT2" 2>&1 &
-PID2=$!
-
-# Wait for both to complete
-wait $PID1
-EXIT1=$?
-wait $PID2
-EXIT2=$?
+# Keep both fresh acquisitions concurrent. Each contender signals its decision
+# on entering the cycle or exiting the watchdog. Even two winners can finish,
+# and each leaves a separate line of evidence in the counter.
+run_contender() {
+  local mine="$TMP_DIR/$1.decided" peer="$TMP_DIR/$2.decided" rc=0
+  AESOP_ROOT="$TMP_DIR" DECIDED="$mine" PEER="$peer" \
+    AESOP_WATCHDOG_CYCLE_CMD='
+      echo cycle >> "$AESOP_ROOT/cycle-counter"
+      : > "$DECIDED"
+      while [ ! -e "$PEER" ]; do
+        if (( SECONDS >= 30 )); then echo "Timed out waiting for peer"; exit 1; fi
+        sleep 0.02
+      done' \
+    bash "$REPO_ROOT/daemons/run-watchdog.sh" --once > "$3" 2>&1 || rc=$?
+  : > "$mine"
+  return "$rc"
+}
+run_contender a b "$OUT1" & PID1=$!
+run_contender b a "$OUT2" & PID2=$!
+EXIT1=0; wait "$PID1" || EXIT1=$?
+EXIT2=0; wait "$PID2" || EXIT2=$?
 
 # Check results
-CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
+CYCLE_RUN_COUNT=$(wc -l < "$CYCLE_COUNTER")
 
-echo "Process 1 (PID=$PID1) exit code: $EXIT1"
-echo "Process 2 (PID=$PID2) exit code: $EXIT2"
 echo "Cycle run count: $CYCLE_RUN_COUNT"
 echo ""
 echo "Process 1 output:"
@@ -87,20 +84,15 @@ echo "Process 2 output:"
 cat "$OUT2"
 
 # Assertions
-if [ "$CYCLE_RUN_COUNT" != "1" ]; then
+if [ "$CYCLE_RUN_COUNT" -ne 1 ]; then
   echo "FAIL: Expected cycle to run exactly once, but it ran $CYCLE_RUN_COUNT times"
   exit 1
 fi
 echo "PASS: Cycle ran exactly once"
 
-# One should succeed, one should be blocked (exit code 1 or success but with lock message)
-if ! grep -q "already running\|lock held\|not starting" "$OUT2" 2>/dev/null; then
-  echo "WARNING: Second process didn't show lock-held message, but this is OK if it also exited cleanly"
-fi
-
-# One process should indicate it acquired the lock, other should indicate it was held
-if grep -q "already running\|lock held" "$OUT1" && grep -q "already running\|lock held" "$OUT2"; then
-  echo "WARNING: Both processes show lock message — should only be one"
+if [ "$EXIT1" != 0 ] || [ "$EXIT2" != 0 ] || [ "$(grep -l 'already running' "$OUT1" "$OUT2" | wc -l)" -ne 1 ]; then
+  echo "FAIL: Expected both watchdogs to exit cleanly and one to report the live holder (exits $EXIT1, $EXIT2)"
+  exit 1
 fi
 
 echo ""
@@ -117,8 +109,11 @@ OLD_LOCK="${TEST_STATE_DIR}/.watchdog-lock"
 mkdir -p "$OLD_LOCK"
 # Write stale timestamp (500 seconds ago) into the file that acquire_lock checks
 echo $(($(date +%s) - 500)) > "$OLD_LOCK/timestamp"
-# Also write a fake PID for completeness
-echo "9999" > "$OLD_LOCK/pid"
+# The lock contract protects a live PID even when its timestamp is stale.
+( exit 0 ) &
+DEAD_PID=$!
+wait "$DEAD_PID"
+echo "$DEAD_PID" > "$OLD_LOCK/pid"
 
 echo "Created stale lock at: $OLD_LOCK"
 ls -la "$OLD_LOCK"

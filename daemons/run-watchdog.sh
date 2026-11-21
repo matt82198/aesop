@@ -55,7 +55,8 @@ acquire_lock() {
 
   mkdir -p "$(dirname "$lock_dir")" 2>/dev/null || true
 
-  if command -v flock >/dev/null 2>&1 && { exec {fd}>"$lock_dir.flk"; } 2>/dev/null; then
+  if command -v flock >/dev/null 2>&1; then
+    { exec {fd}>"$lock_dir.flk"; } 2>/dev/null || return 1
     # Kernel-managed mutex: waits (bounded) for the previous occupant to leave the section and
     # is released by the kernel if the occupant dies. Closed before returning so no child
     # spawned later inherits it.
@@ -68,13 +69,13 @@ acquire_lock() {
     return "$rc"
   fi
 
-  # Fallback (no flock(1)): mkdir mutex with a BOUNDED SPIN. A loser waits for the occupant to
-  # finish and then judges the lock itself; returning "held" at once let both contenders fail
-  # or both succeed depending on where the occupant was.
-  while ! mkdir "$guard" 2>/dev/null; do
+  # uutils mkdir can report success on a racing EEXIST (uutils/coreutils#13970).
+  # Without flock, take the guard using the actual mkdir system call.
+  local python
+  python=$(command -v python3 || command -v python) || return 1
+  while ! "$python" -c 'import os, sys; os.mkdir(sys.argv[1])' "$guard" 2>/dev/null; do
     if [ -n "$(find "$guard" -maxdepth 0 -mmin +$((guard_stale_secs / 60)) 2>/dev/null)" ]; then
       rmdir "$guard" 2>/dev/null || true
-      continue
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge "$guard_wait_tries" ]; then return 1; fi
