@@ -23,7 +23,7 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
-import { PASTE_IDLE_MS, applyKey, createInputState } from './input.mjs';
+import { PASTE_IDLE_MS, applyKey, createInputState, parseSlash } from './input.mjs';
 import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
@@ -113,6 +113,7 @@ const HELP_TEXT = [
   'Slash commands:',
   '  /help                  list these commands',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
+  '  /models                list configured providers and models',
   '  /auth                  show credential status (no network call)',
   '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
@@ -241,6 +242,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       detect: () => detectLines(registry, env),
     }
     : {};
+  let restored = false;
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
@@ -249,6 +251,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     status,
     hooks,
     onFrame: (frame) => {
+      if (restored) return;
       const rows = physicalRows(drawnPlain, stdout.columns || 80);
       const up = rows > 1 ? CURSOR_UP(rows - 1) : '';
       drawnPlain = frame.split('\n').map((l) => l.replace(SGR_PATTERN, ''));
@@ -275,7 +278,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       // the session stays usable and never falls back to echo.
       const entry = registry.providers.get('ollama');
       probeProvider(entry, env, 1500).then((status) => {
-        if (status === 'reachable') return;
+        if (restored || status === 'reachable') return;
         notify('error: ollama: connect: cannot reach ollama at http://127.0.0.1:11434 — is it running?');
         session.emit();
       }).catch(() => {});
@@ -289,7 +292,6 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
 
     // The terminal is restored exactly once, whichever exit path runs first: finish (/exit, ctrl-c
     // twice, ctrl-d), a process 'exit' (written synchronously), or SIGTERM / SIGHUP / SIGINT. Later calls are no-ops.
-    let restored = false;
     let pasteFlushTimer = null;
     const clearPasteFlush = () => {
       if (pasteFlushTimer !== null) {
@@ -341,6 +343,18 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     // the request (H-R21); the pipe backend keeps the hint-then-quit behaviour.
     let turnAbort = null;
     const submit = (line) => {
+      const slash = harness && matchRoute(registry, line) ? null : parseSlash(line);
+      if (
+        slash &&
+        !slash.error &&
+        (slash.command === 'exit' || slash.command === 'quit') &&
+        (turnAbort || session.state.mode === 'streaming')
+      ) {
+        if (turnAbort) turnAbort.abort();
+        session.state.exit = true;
+        finish(0);
+        return;
+      }
       let notice = null;
       // Consecutive duplicates store one entry, matching the reducer.
       if (line.trim() !== '') {
@@ -382,7 +396,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const onKeypress = (str, key) => {
       const before = input;
       try {
-        if (turnAbort && session.state.mode === 'streaming' && key && key.ctrl && key.name === 'c') {
+        if (turnAbort && !turnAbort.signal.aborted && session.state.mode === 'streaming' && key && key.ctrl && key.name === 'c') {
           // Ctrl-c during a streamed harness reply aborts that request; the turn shows "cancelled".
           turnAbort.abort();
           return;

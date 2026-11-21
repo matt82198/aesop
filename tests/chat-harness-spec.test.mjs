@@ -536,6 +536,8 @@ test('cold-load /exit aborts stalled request immediately and repeated ctrl-c nev
     ]);
     assert.equal(outcome.exited, true, '/exit must abort cold-load turn and exit immediately without queuing behind it');
     assert.equal(outcome.code, 0);
+    const closeDeadline = Date.now() + 1000;
+    while (server.closed.length === 0 && Date.now() < closeDeadline) await sleep(10);
     assert.ok(server.closed.length >= 1, 'cold-load HTTP connection must be aborted on /exit');
   } finally {
     openRes?.end();
