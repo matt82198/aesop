@@ -219,3 +219,28 @@ test('one-shot: no history file and no files written into cwd', async () => {
     rmSync(home, { recursive: true, force: true });
   });
 });
+
+// P0 wrong data (f-db2dd2fa): an oversized prompt on the native Ollama route must warn on stderr
+// (the harness notify hook), and the warning must not change the exit code.
+test('ollama oversized input: warning on stderr, exit 0, answer still on stdout', async () => {
+  const frame = (o) => `${JSON.stringify(o)}\n`;
+  const handler = (req, body, res) => {
+    res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    res.write(frame({ message: { role: 'assistant', content: 'man' }, done: false }));
+    res.write(frame({ message: { role: 'assistant', content: 'go' }, done: false }));
+    res.end(frame({ message: { role: 'assistant', content: '' }, done: true, prompt_eval_count: 7, eval_count: 2 }));
+  };
+  const fake = await startFake(handler);
+  const dir = tmp();
+  try {
+    const provider = { type: 'ollama', base_url: `${fake.url}/v1`, models: 'any', is_local: true, timeout_ms: 5000, num_ctx_max: 8192 };
+    const config = writeConfig(dir, { ollama: provider }, { default: 'ollama/m1' });
+    const r = await ask(['summarize the input'], { cwd: dir, config, stdin: 'x'.repeat(70000) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stdout, 'mango\n');
+    assert.match(r.stderr, /^warning: input ~\d+ tokens exceeds the model window 8192; the start will be cut$/m);
+  } finally {
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

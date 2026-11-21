@@ -126,7 +126,12 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const failures = [];
-  const notify = (text) => failures.push(text);
+  // Warnings (e.g. the Ollama context-window notice) are diagnostics: stderr now, exit code unchanged.
+  // Only error/stream lines feed the failure classification below.
+  const notify = (text) => {
+    if (/^warning: /.test(text)) stderr.write(`${text}\n`);
+    else failures.push(text);
+  };
   const source = harnessSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
 
   let text = '';
