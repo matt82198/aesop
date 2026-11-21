@@ -27,7 +27,6 @@ Exit codes: 0 = cycle ran (including IN-FLIGHT and nothing-to-do); 2 = bad confi
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import fnmatch
 import json
 import os
@@ -35,6 +34,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 DEFAULT_PATTERNS = ("codex/*", "agy/*")
 DEFAULT_REPOS = ("~/.claude", "~/scripts", "~/conductor3")
@@ -58,8 +58,7 @@ class ConfigError(Exception):
     """aesop.config.json peer_push section is unreadable or malformed."""
 
 
-@dataclasses.dataclass(frozen=True)
-class Candidate:
+class Candidate(NamedTuple):
     """A pattern-matching worktree branch and what the sweep knows about it."""
 
     repo: str

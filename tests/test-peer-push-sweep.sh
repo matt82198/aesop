@@ -214,5 +214,9 @@ check "T10 run-watchdog wires run_peer_push_sweep into --once and daemon cycles"
 check "T10 sweep never passes --force, -f or --no-verify" \
   not grep -Eq -- "[\"'](--force|-f|--no-verify)[\"']" "$SWEEP"
 
+echo "=== T11: module imports cleanly via importlib spec loading (regression: dataclass crashed under spec load) ==="
+check "T11 sweep module imports via spec_from_file_location" \
+  "$PY" -c "import importlib.util,sys; s=importlib.util.spec_from_file_location('m', sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)" "$SWEEP"
+
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
