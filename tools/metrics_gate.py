@@ -38,6 +38,7 @@ Used in CI as a PR gate:
 import sys
 import subprocess
 import re
+import fnmatch
 from pathlib import Path
 from typing import List, Tuple
 
@@ -80,6 +81,24 @@ class MetricsGate:
     ENTRY_TS_PATTERN = re.compile(
         r"^\s*-\s+(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?Z)(?=\s|$)"
     )
+
+    # Checkpoint journals are records of what happened, not adopter-facing claims.
+    # Exempt ONLY these names at the REPO ROOT (fnmatch on the full repo-relative
+    # path, so docs/STATE.md or any nested copy stays gated). Every other *.md,
+    # including docs/**, README and CHANGELOG, remains fully gated. The skip is
+    # always printed so the exemption is never silent.
+    CHECKPOINT_FILES = (
+        "STATE.md",
+        "BUILDLOG.md",
+        "INBOX.md",
+        "STATE-ARCHIVE-*.md",
+        "BUILDLOG.archive*.md",
+    )
+
+    @classmethod
+    def is_checkpoint_file(cls, path: str) -> bool:
+        """True if path is a root-level checkpoint journal (no directory part)."""
+        return "/" not in path and any(fnmatch.fnmatchcase(path, g) for g in cls.CHECKPOINT_FILES)
 
     def __init__(self, diff_range: str = "origin/main...HEAD"):
         """Initialize with a git diff range.
@@ -226,7 +245,12 @@ class MetricsGate:
 
         # Group lines by file for context
         lines_by_file = {}
+        skipped = []
         for file, content in diff_lines:
+            if self.is_checkpoint_file(file):
+                if file not in skipped:
+                    skipped.append(file)
+                continue
             if file not in lines_by_file:
                 lines_by_file[file] = []
             lines_by_file[file].append(content)
@@ -267,6 +291,9 @@ class MetricsGate:
                             f"{file}: unverified metric '{claim}' — add "
                             f"<!-- metrics-verified: <source> --> on same or adjacent line"
                         )
+
+        if skipped:
+            print(f"metrics-gate: skipped {len(skipped)} checkpoint file(s): {', '.join(skipped)}")
 
         exit_code = 1 if failures else 0
         return exit_code, failures

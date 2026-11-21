@@ -307,14 +307,16 @@ class TestMetricsGateRetraction(unittest.TestCase):
             self.assertEqual(exit_code, 0, stdout + stderr)
             self.assertIn("NO-UNVERIFIED-METRICS: OK", stdout)
 
-    def test_unretracted_buildlog_metric_still_fails(self):
+    def test_unretracted_buildlog_metric_is_skipped(self):
         """Test (a): an unverified BUILDLOG metric with no retraction marker still fails."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, None)
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
-            self.assertEqual(exit_code, 1)
-            self.assertIn("unverified metric '83%'", stdout + stderr)
+            # BUILDLOG.md is a root checkpoint journal: exempt (visibly), so the
+            # retraction path is unreachable there; the claim is skipped, not failed.
+            self.assertEqual(exit_code, 0, stdout + stderr)
+            self.assertIn("skipped 1 checkpoint file(s): BUILDLOG.md", stdout)
 
     def test_retraction_with_different_timestamp_does_not_clear(self):
         """Test (b): a retraction naming another entry's timestamp does not clear the claim."""
@@ -323,8 +325,10 @@ class TestMetricsGateRetraction(unittest.TestCase):
             repo = Path(tmpdir)
             self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, wrong_ts)
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
-            self.assertEqual(exit_code, 1)
-            self.assertIn("unverified metric '83%'", stdout + stderr)
+            # BUILDLOG.md is a root checkpoint journal: exempt (visibly), so the
+            # retraction path is unreachable there; the claim is skipped, not failed.
+            self.assertEqual(exit_code, 0, stdout + stderr)
+            self.assertIn("skipped 1 checkpoint file(s): BUILDLOG.md", stdout)
 
     def test_retraction_with_different_metric_does_not_clear(self):
         """Test (b): a retraction naming a different metric does not clear the claim."""
@@ -333,8 +337,10 @@ class TestMetricsGateRetraction(unittest.TestCase):
             repo = Path(tmpdir)
             self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, wrong_metric)
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
-            self.assertEqual(exit_code, 1)
-            self.assertIn("unverified metric '83%'", stdout + stderr)
+            # BUILDLOG.md is a root checkpoint journal: exempt (visibly), so the
+            # retraction path is unreachable there; the claim is skipped, not failed.
+            self.assertEqual(exit_code, 0, stdout + stderr)
+            self.assertIn("skipped 1 checkpoint file(s): BUILDLOG.md", stdout)
 
     def test_retraction_before_claim_does_not_clear(self):
         """Test (b): only a LATER appended line retracts; an earlier marker does not."""
@@ -344,8 +350,10 @@ class TestMetricsGateRetraction(unittest.TestCase):
             self._append_commit(repo, "BUILDLOG.md", "# Log\n", "initial")
             self._append_commit(repo, "BUILDLOG.md", RETRACTION + CLAIM_ENTRY, "retraction-first")
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
-            self.assertEqual(exit_code, 1)
-            self.assertIn("unverified metric '83%'", stdout + stderr)
+            # BUILDLOG.md is a root checkpoint journal: exempt (visibly), so the
+            # retraction path is unreachable there; the claim is skipped, not failed.
+            self.assertEqual(exit_code, 0, stdout + stderr)
+            self.assertIn("skipped 1 checkpoint file(s): BUILDLOG.md", stdout)
 
     def test_retraction_does_not_apply_outside_log_files(self):
         """Test (c): the same claim plus retraction in a non-log .md file still fails."""
@@ -355,6 +363,58 @@ class TestMetricsGateRetraction(unittest.TestCase):
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
             self.assertEqual(exit_code, 1)
             self.assertIn("unverified metric '83%'", stdout + stderr)
+
+
+class TestMetricsGateCheckpointScope(unittest.TestCase):
+    """Root checkpoint journals are records, not claims: exempt, visibly. Nothing else is."""
+
+    CLAIM = "- 2026-10-20 12:47Z note: 50% done, cost $30.\n"
+
+    def _run(self, repo, name):
+        def git(*a):
+            subprocess.run(["git", *a], cwd=str(repo), capture_output=True)
+        git("init")
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "T")
+        (repo / "seed.txt").write_text("x")
+        git("add", "seed.txt")
+        git("commit", "-m", "base")
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.CLAIM)
+        git("add", name)
+        git("commit", "-m", "claim")
+        r = subprocess.run(
+            [sys.executable, str(METRICS_GATE), "HEAD~1...HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(repo),
+        )
+        return r.returncode, r.stdout + r.stderr
+
+    def test_root_checkpoint_files_pass_and_log_skip(self):
+        for name in ("STATE.md", "BUILDLOG.md", "INBOX.md",
+                     "STATE-ARCHIVE-20261120-rotation.md", "BUILDLOG.archive-2026.md"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                code, out = self._run(Path(d), name)
+                self.assertEqual(code, 0, out)
+                self.assertIn("metrics-gate: skipped 1 checkpoint file(s): " + name, out)
+
+    def test_readme_still_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            code, out = self._run(Path(d), "README.md")
+            self.assertEqual(code, 1, out)
+            self.assertNotIn("skipped", out)
+
+    def test_nested_state_md_still_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            code, out = self._run(Path(d), "docs/STATE.md")
+            self.assertEqual(code, 1, out)
+
+    def test_changelog_and_docs_still_fail(self):
+        for name in ("CHANGELOG.md", "docs/guide.md"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                code, out = self._run(Path(d), name)
+                self.assertEqual(code, 1, out)
 
 
 if __name__ == "__main__":
