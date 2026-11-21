@@ -639,6 +639,27 @@ def take_snapshot(root: Path) -> dict:
 
 MEMORY_LEDGER_RELPATH = Path("state") / "memory-write-ledger.jsonl"
 
+_UUID_HEX_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# Narrow allowlist for Claude Code's runtime cloud-synced skill cache
+# (~/.claude/skills/synced/, gitignored in ~/.claude/.gitignore). Matches ONLY
+# .bucket-<org_uuid>_<user_uuid> markers and files under <org_uuid>_<user_uuid>/
+# (rejecting any '..' traversal segment). User skills (~/.claude/skills/<name>/*)
+# and non-UUID paths under ~/.claude/skills/synced/ stay fail-closed.
+SYNCED_SKILLS_ALLOWLIST_RE = re.compile(
+    rf"\.claude/skills/synced/(?:\.bucket-{_UUID_HEX_RE}_{_UUID_HEX_RE}"
+    rf"|{_UUID_HEX_RE}_{_UUID_HEX_RE}/(?!.*\.\.(?:/|$)).+)"
+)
+
+
+def _synced_skills_allowlist_detail(rel: str):
+    """Return logged detail when `rel` is in Claude Code's synced-skills cache, else None."""
+    if SYNCED_SKILLS_ALLOWLIST_RE.fullmatch(rel):
+        return (
+            "allowlisted runtime skill-sync cache "
+            "(Claude Code ~/.claude/skills/synced/<org_uuid>_<user_uuid>, gitignored)"
+        )
+    return None
+
 
 def _load_memory_ledger(root: Path) -> set:
     """Read <root>/.claude/state/memory-write-ledger.jsonl into a set of
@@ -722,9 +743,12 @@ def diff_snapshots(before: dict, after: dict, attributor=None, ledger=None,
                 if rels is None:
                     rels = [SENSITIVE_RELPATHS.get(name, name)]
                 for full in rels:
+                    synced_detail = _synced_skills_allowlist_detail(full)
                     if _memory_ledger_excuses(full, memory_ledger, after.get("claude_root")):
                         cls, detail = "memory-ledger", (
                             "recorded in memory-write-ledger.jsonl (path and sha256 match)")
+                    elif synced_detail is not None:
+                        cls, detail = "synced-skills-allowlist", synced_detail
                     else:
                         cls, detail = classify("profile", full)
                     if ledger is not None:
@@ -995,7 +1019,7 @@ def main(argv=None):
         before, after, attributor=build_attributor(before, after), ledger=ledger,
         memory_ledger=_load_memory_ledger(root))
     for path, cls, detail in ledger:
-        if cls in ("git-deploy", "live-writer", "memory-ledger"):
+        if cls in ("git-deploy", "live-writer", "memory-ledger", "synced-skills-allowlist"):
             print(f"[test_isolation_tripwire] INFO: {path} {detail}, not a test",
                   file=sys.stderr)
     if ledger:
