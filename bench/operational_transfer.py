@@ -17,7 +17,9 @@ MODEL = "qwen2.5-coder:14b"
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--v1", action="store_true", help="Replay the first rubric and its three original cases")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--v1", action="store_true", help="Replay the first rubric and its three original cases")
+    mode.add_argument("--compact", action="store_true", help="Compare baseline, revised and compact rules on regression and holdout cases")
     args = parser.parse_args()
     cases = json.loads((HERE / "fixtures" / "operational-transfer.json").read_text(encoding="utf-8"))
     rubric_path = ROOT / "driver/decisions/operational-triage.md"
@@ -25,16 +27,24 @@ def main():
         cases = cases[:3]
         rubric_path = HERE / "fixtures/operational-triage-v1.md"
     rubric = rubric_path.read_text(encoding="utf-8")
+    rules = {"baseline": "", "candidate": rubric}
+    if args.compact:
+        cases.extend(json.loads((HERE / "fixtures/operational-transfer-holdout.json").read_text(encoding="utf-8")))
+        rules["compact"] = (HERE / "fixtures/operational-triage-compact.md").read_text(encoding="utf-8")
     for index, case in enumerate(cases):
         item = CorpusItem(case["id"], case["finding_text"], case["source_lens"], "", "", "")
         pack = build_finding_context_pack(item, str(ROOT), str(ROOT))
         arms = ("baseline", "candidate") if index % 2 == 0 else ("candidate", "baseline")
+        if args.compact:
+            ordered = tuple(rules)
+            start = index % len(ordered)
+            arms = ordered[start:] + ordered[:start]
         for arm in arms:
             seat = OpenAICompatibleOrchestratorBackend(
                 model=MODEL, base_url="http://127.0.0.1:11434/v1", is_local=True, timeout_s=240,
             )
             backend = ShadowAdjudicationBackend(
-                seat, model=MODEL, adjudication_rubric=rubric if arm == "candidate" else "",
+                seat, model=MODEL, adjudication_rubric=rules[arm],
             )
             driver = OrchestratorDriver(backend, schema_dir=str(ROOT / "driver"), max_retries=0)
             decision = driver.decide("adjudicate_finding", pack)

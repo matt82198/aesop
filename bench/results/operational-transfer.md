@@ -28,6 +28,12 @@ Round one used 1,890 baseline tokens and 2,179 candidate tokens. Round two used 
 
 ## Replay
 
+### Compaction trial protocol
+
+Freeze the compact text and six extra cases in Git before inference. Replay the five earlier cases as regressions. Score the six extra cases separately, with an unassisted arm, the revised rule, and the compact rule. Rotate request order and use the same model, evidence, schema, and retry budget. Accept compaction for further shadow use only if it preserves every case the revised rule gets right and uses fewer metered tokens overall. A claim of new transfer also requires a correct decision on a fresh case missed by baseline. No merge follows automatically.
+
+The six cases come from the newest three previously unused fixes and three previously unused features in the base commit's non-merge history matching heartbeat, timing, diagnostics, observability or telemetry in tools, daemons or monitor. Case authors saw the commit dispositions. The heartbeat cases overlap in subject matter. Treat case totals as descriptive.
+
 With the local Ollama model available, run `python -B bench/operational_transfer.py --v1` for the first round and `python -B bench/operational_transfer.py` for the revision. The raw decisions include citations, schema status and metered tokens. [Round one](operational-transfer-v1.jsonl) and [round two](operational-transfer-v2.jsonl).
 
 On the existing full shadow corpus, the optional `--operational-triage` switch on `tools/shadow_adjudication.py --live` prepends the revised rule and gives the output a distinct suffix. Production adjudication retains its existing configuration.
