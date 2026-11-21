@@ -25,6 +25,7 @@ import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { PASTE_IDLE_MS, applyKey, createInputState } from './input.mjs';
 import { driverSource } from './driver_source.mjs';
+import { applyFeedEvent, feedPath, lastJobs, tailFeed } from './activity_feed.mjs';
 import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
@@ -117,6 +118,7 @@ const HELP_TEXT = [
   '  /auth                  show credential status (no network call)',
   '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
+  '  /feed on|off|<N>       show background `aesop ask` jobs (N: replay the last N jobs)',
   '  /exit, /quit           leave chat (ctrl-c twice also quits)',
   '',
   'Keys: enter submits; end a line with a backslash then enter to continue it;',
@@ -292,6 +294,32 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     let input = { ...createInputState(), history, historyIndex: history.length };
     let chain = Promise.resolve();
 
+    // Activity feed: background `aesop ask` jobs appended by other processes (chat/activity_feed.mjs).
+    // Tailing starts at the current end of the file. Entries are display-only transcript rows
+    // (role 'feed'); they never reach backend.source, so they are never part of the model context.
+    const feedFile = feedPath(env);
+    const feedJobs = new Map();
+    let feedOn = true;
+    const feedEvent = (ev) => {
+      if (!feedOn) return;
+      if (applyFeedEvent(feedJobs, session.state.transcript, ev)) session.emit();
+    };
+    let feedTail = tailFeed({ file: feedFile, onEvent: feedEvent });
+    const stopFeed = () => { if (feedTail) { feedTail.stop(); feedTail = null; } };
+    const feedCommand = (arg) => {
+      const sys = (text) => session.state.transcript.push({ role: 'system', text });
+      if (arg === 'off') { feedOn = false; sys('activity feed off (/feed on to resume)'); }
+      else if (arg === 'on') { feedOn = true; sys('activity feed on'); }
+      else if (/^\d+$/.test(arg ?? '')) {
+        const events = lastJobs(feedFile, Number(arg));
+        const shown = new Map();
+        for (const ev of events) applyFeedEvent(shown, session.state.transcript, ev);
+        for (const [id, entry] of shown) feedJobs.set(id, entry);
+        if (shown.size === 0) sys('activity feed: no jobs recorded');
+      } else sys(`activity feed is ${feedOn ? 'on' : 'off'}; usage: /feed on|off|<N>`);
+      session.emit();
+    };
+
     // The terminal is restored exactly once, whichever exit path runs first: finish (/exit, ctrl-c
     // twice, ctrl-d), a process 'exit' (written synchronously), or SIGTERM / SIGHUP / SIGINT. Later calls are no-ops.
     let restored = false;
@@ -307,6 +335,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       restored = true;
       // The driver backend owns a child process; end it on every exit path. Other backends have no close.
       try { backend.source.close?.(); } catch { /* best effort: never changes the exit code */ }
+      stopFeed();
       clearPasteFlush();
       stdin.removeListener('keypress', onKeypress);
       if (typeof stdout.removeListener === 'function') stdout.removeListener('resize', onResize);
@@ -356,6 +385,10 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         if (failure) notice = `history not saved: ${failure}`;
       }
       chain = chain.then(async () => {
+        if (/^\/feed(\s|$)/.test(line.trim())) {
+          feedCommand(line.trim().split(/\s+/)[1]);
+          return;
+        }
         // Only the turn at the front of the queue owns Ctrl-C.
         turnAbort = harness ? new AbortController() : null;
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
