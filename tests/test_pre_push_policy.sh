@@ -2742,7 +2742,7 @@ fi
 ZERO40="0000000000000000000000000000000000000000"
 
 # setup_metrics_repo <dir>: origin/main carries tools/metrics_gate.py plus two commits
-# (base, release). The local branch feature/test adds STATE.md with an unverified 80%.
+# (base, release). The local branch feature/test adds CHANGELOG.md (STATE.md is a checkpoint journal exempt from the gate) with an unverified 80%.
 # Sets MG_BASE_SHA, MG_RELEASE_SHA, MG_FEATURE_SHA. Working tree ends on feature/test.
 setup_metrics_repo() {
   local mg="$1"
@@ -2765,7 +2765,7 @@ setup_metrics_repo() {
   git -C "$mg" remote add origin "$mg.origin"
   git -C "$mg" push -q origin main
   git -C "$mg" checkout -q -b feature/test
-  printf '# State\n\nCost fell 80%% this wave.\n' > "$mg/STATE.md"
+  printf '# Changelog\n\nCost fell 80%% this wave.\n' > "$mg/CHANGELOG.md"
   git -C "$mg" add -A
   git -C "$mg" commit -q -m unverified-metric
   MG_FEATURE_SHA=$(git -C "$mg" rev-parse HEAD)
