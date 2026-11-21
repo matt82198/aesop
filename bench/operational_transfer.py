@@ -20,6 +20,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--v1", action="store_true", help="Replay the first rubric and its three original cases")
     mode.add_argument("--compact", action="store_true", help="Compare baseline, revised and compact rules on regression and holdout cases")
+    mode.add_argument("--baseline-model", metavar="OLLAMA_TAG", help="Run one unassisted local model on the full tier comparison corpus")
     args = parser.parse_args()
     cases = json.loads((HERE / "fixtures" / "operational-transfer.json").read_text(encoding="utf-8"))
     rubric_path = ROOT / "driver/decisions/operational-triage.md"
@@ -28,9 +29,13 @@ def main():
         rubric_path = HERE / "fixtures/operational-triage-v1.md"
     rubric = rubric_path.read_text(encoding="utf-8")
     rules = {"baseline": "", "candidate": rubric}
-    if args.compact:
+    if args.compact or args.baseline_model:
         cases.extend(json.loads((HERE / "fixtures/operational-transfer-holdout.json").read_text(encoding="utf-8")))
+    if args.compact:
         rules["compact"] = (HERE / "fixtures/operational-triage-compact.md").read_text(encoding="utf-8")
+    model = args.baseline_model or MODEL
+    if args.baseline_model:
+        cases.extend(json.loads((HERE / "fixtures/operational-tier-corpus.json").read_text(encoding="utf-8")))
     for index, case in enumerate(cases):
         item = CorpusItem(case["id"], case["finding_text"], case["source_lens"], "", "", "")
         pack = build_finding_context_pack(item, str(ROOT), str(ROOT))
@@ -39,20 +44,22 @@ def main():
             ordered = tuple(rules)
             start = index % len(ordered)
             arms = ordered[start:] + ordered[:start]
+        if args.baseline_model:
+            arms = ("baseline",)
         for arm in arms:
             seat = OpenAICompatibleOrchestratorBackend(
-                model=MODEL, base_url="http://127.0.0.1:11434/v1", is_local=True, timeout_s=240,
+                model=model, base_url="http://127.0.0.1:11434/v1", is_local=True, timeout_s=240,
             )
             backend = ShadowAdjudicationBackend(
-                seat, model=MODEL, adjudication_rubric=rules[arm],
+                seat, model=model, adjudication_rubric=rules[arm],
             )
             driver = OrchestratorDriver(backend, schema_dir=str(ROOT / "driver"), max_retries=0)
             decision = driver.decide("adjudicate_finding", pack)
             print(json.dumps({
-                "case": item.id, "arm": arm, "model": MODEL, "decision": decision,
+                "case": item.id, "arm": arm, "model": model, "decision": decision,
                 "expected": case["expected"], "tokens": seat.get_tokens_spent(),
             }), flush=True)
-            if decision["verdict"] == "DECISION_FAILED":
+            if decision["verdict"] == "DECISION_FAILED" and not args.baseline_model:
                 raise SystemExit("A call failed. Resolve the infrastructure error before scoring.")
 
 
