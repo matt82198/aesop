@@ -34,9 +34,37 @@ const ASSISTANT_PREFIX = 'aesop > ';
 const SYSTEM_PREFIX = '  * ';
 export const INPUT_PREFIX = '> ';
 
+// Terminal columns one code point occupies: CJK, fullwidth and emoji blocks take two, combining marks zero.
+function codePointWidth(cp) {
+  if (cp >= 0x300 && cp <= 0x36f) return 0;
+  const wide =
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe30 && cp <= 0xfe4f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f64f) ||
+    (cp >= 0x1f900 && cp <= 0x1f9ff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd);
+  return wide ? 2 : 1;
+}
+
 /**
- * Wraps `text` to `width` visible characters. Existing newlines are kept; words longer than
- * the width are hard-broken. Always returns at least one line.
+ * Visible width of a string in terminal columns (wide characters count two).
+ * @param {string} s
+ * @returns {number}
+ */
+export function displayWidth(s) {
+  let w = 0;
+  for (const ch of String(s)) w += codePointWidth(ch.codePointAt(0));
+  return w;
+}
+
+/**
+ * Wraps `text` to `width` display columns. Existing newlines are kept; words longer than
+ * the width are hard-broken on character boundaries. Always returns at least one line.
  * @param {string} text
  * @param {number} width visible columns available (>= 1)
  * @returns {string[]}
@@ -45,22 +73,44 @@ export function wrapText(text, width) {
   const out = [];
   for (const para of String(text).split('\n')) {
     let cur = '';
+    let curW = 0;
     for (let word of para.split(' ')) {
-      while (word.length > width) {
+      let wordW = displayWidth(word);
+      while (wordW > width) {
         if (cur !== '') {
           out.push(cur);
           cur = '';
+          curW = 0;
         }
-        out.push(word.slice(0, width));
-        word = word.slice(width);
+        const chars = [...word];
+        let piece = '';
+        let pieceW = 0;
+        let i = 0;
+        for (; i < chars.length; i++) {
+          const cw = codePointWidth(chars[i].codePointAt(0));
+          if (pieceW + cw > width) break;
+          piece += chars[i];
+          pieceW += cw;
+        }
+        if (i === 0) {
+          // A single character wider than the column: emit it whole rather than loop forever.
+          piece = chars[0];
+          i = 1;
+        }
+        out.push(piece);
+        word = chars.slice(i).join('');
+        wordW = displayWidth(word);
       }
       if (cur === '') {
         cur = word;
-      } else if (cur.length + 1 + word.length <= width) {
+        curW = wordW;
+      } else if (curW + 1 + wordW <= width) {
         cur += ` ${word}`;
+        curW += 1 + wordW;
       } else {
         out.push(cur);
         cur = word;
+        curW = wordW;
       }
     }
     out.push(cur);
@@ -145,7 +195,9 @@ function transcriptLines(transcript, columns, color, unicode) {
       const border = `    ${unicode ? '│' : '|'} `;
       lines.push(...block(border, border, msg.text, columns, painter('yellow', color)));
     } else {
-      lines.push(...block(SYSTEM_PREFIX, ' '.repeat(SYSTEM_PREFIX.length), msg.text, columns, painter('dim', color)));
+      // Errors stand out in red so a failed turn is never mistaken for normal output.
+      const style = /^(stream error:|error:)/.test(msg.text) ? 'red' : 'dim';
+      lines.push(...block(SYSTEM_PREFIX, ' '.repeat(SYSTEM_PREFIX.length), msg.text, columns, painter(style, color)));
     }
   }
   return lines;
@@ -169,7 +221,7 @@ export function renderFrame(state, opts = {}) {
   const status = state.status ?? {};
   const divider = (unicode ? '─' : '-').repeat(columns);
 
-  const banner = block('', '', `aesop ${VERSION} - chat`, columns, painter('bold', color));
+  const banner = block('', '', `aesop ${VERSION} - chat (type /help for commands)`, columns, painter('bold', color));
 
   const spinner = spinnerGlyph(status.spinnerTick ?? 0);
   const transcript = (state.transcript ?? []).map((msg) =>
@@ -199,6 +251,13 @@ export function renderFrame(state, opts = {}) {
   const room = rows - header.length - footer.length;
   // Oldest transcript lines go first. With no room left for the transcript, the banner goes too,
   // so the frame never exceeds rows and the input line (the last footer line) always stays.
-  if (room > 0) return [...header, ...body.slice(Math.max(0, body.length - room)), ...footer].join('\n');
+  if (room > 0) {
+    if (body.length <= room) return [...header, ...body, ...footer].join('\n');
+    // One row of the room goes to the marker that says how much transcript is hidden above.
+    const kept = room - 1;
+    const hidden = body.length - kept;
+    const marker = painter('dim', color)(`(${hidden} earlier lines hidden)`.slice(0, columns));
+    return [...header, marker, ...body.slice(body.length - kept), ...footer].join('\n');
+  }
   return [...header, ...footer].slice(-rows).join('\n');
 }

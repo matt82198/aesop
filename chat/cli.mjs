@@ -34,16 +34,18 @@ function loadHistory(file) {
     return [];
   }
 }
-// Atomic save: the whole history is written to a temp file beside the target, then renamed over it,
-// so a failed write never leaves the existing file truncated or half-written. A failure never ends
-// the session; it returns a short reason (the error code) that the caller shows in the chat, or
-// null on success.
-function saveHistory(file, history) {
+// Atomic save: the line is merged into the file as it is now on disk (re-read here, so a second
+// instance's lines survive), written to a temp file beside the target, then renamed over it. A failed
+// write never leaves the existing file truncated or half-written. A failure never ends the session;
+// it returns a short reason (the error code) that the caller shows in the chat, or null on success.
+function saveHistory(file, line) {
   if (!file) return null;
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(tmp, `${JSON.stringify(history.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
+    const merged = loadHistory(file);
+    if (merged[merged.length - 1] !== line) merged.push(line);
+    writeFileSync(tmp, `${JSON.stringify(merged.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
     renameSync(tmp, file);
     return null;
   } catch (err) {
@@ -206,9 +208,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const submit = (line) => {
       let notice = null;
       // Consecutive duplicates store one entry, matching the reducer.
-      if (line.trim() !== '' && history[history.length - 1] !== line) {
-        history.push(line);
-        const failure = saveHistory(historyFile, history);
+      if (line.trim() !== '') {
+        if (history[history.length - 1] !== line) history.push(line);
+        const failure = saveHistory(historyFile, line);
         if (failure) notice = `history not saved: ${failure}`;
       }
       chain = chain.then(async () => {
@@ -267,6 +269,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         session.setInput(input);
         submit(effect.line);
         return;
+      } else if (session.state.hint) {
+        // Any key other than ctrl-c retires the quit hint.
+        session.setHint(null);
       }
       session.setInput(input);
     };

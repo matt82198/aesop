@@ -26,6 +26,10 @@ const HELP_LINES = [
   '  /auth                  show credential status (no network call)',
   '  /clear                 clear the transcript',
   '  /exit, /quit           leave chat (ctrl-c twice also quits)',
+  'Keys:',
+  '  enter submits; end a line with a backslash then enter to continue it',
+  '  up/down walk history; ctrl-u clears the line; ctrl-d on an empty line exits',
+  '  ctrl-c once shows a hint, twice quits; paste keeps its newlines',
 ];
 
 const DEFAULT_STATUS = {
