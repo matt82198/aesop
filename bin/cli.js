@@ -150,7 +150,9 @@ const isChatDispatch = args[0] === 'chat';
 const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !interactiveSession);
 // Auth and model verbs (auth/cli.mjs). Their arguments pass through untouched; they never scaffold.
 const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
-const isNamespaceDispatch = isPipeDispatch || isChatDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+// One-shot offload to a local model: `aesop ask` (chat/ask.mjs). Its flags pass through untouched.
+const isAskDispatch = args[0] === 'ask';
+const isNamespaceDispatch = isPipeDispatch || isChatDispatch || isAuthDispatch || isAskDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 // Auth/model verbs: AUTH_CLI answers `auth ...` and `model ...` with the inherited stdio.
 const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
 /**
@@ -225,6 +227,28 @@ if (isPipeDispatch) {
     console.error(`Error: stdio pipeline was terminated by ${result.signal || 'an unknown signal'} without producing an exit code.`);
   }
   process.exit(exitCodeFromSpawnResult(result));
+}
+
+// One-shot ask: dynamic-imports chat/ask.mjs and returns its code through process.exitCode (0 ok, 2 usage,
+// 3 unreachable, 4 provider error, 5 timeout, 6 boundary refused). Works with no TTY; stdout is the answer only.
+if (isAskDispatch) {
+  const askCli = path.join(__dirname, '..', 'chat', 'ask.mjs');
+  import(require('url').pathToFileURL(askCli).href)
+    .then((mod) => mod.runAsk({
+      argv: args.slice(1),
+      stdin: process.stdin,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env,
+    }))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      console.error(`Error: ask failed: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    });
+  return;
 }
 
 // Interactive chat: dynamic-imports chat/cli.mjs (ESM, so import() from this CommonJS file) and
@@ -744,6 +768,8 @@ Commands (Node.js):
   pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format.
                           Bare aesop without a TTY on stdin/stdout is this filter; with a TTY, bare aesop scaffolds
                           (or opens chat with --chat-default or AESOP_DEFAULT=chat).
+  ask                     One-shot prompt to a local open-weight model, no TTY needed (chat/CLAUDE.md):
+                          aesop ask [--model p/m] [--system t] [--json] [--timeout s] "<prompt>"; piped stdin is appended
   chat                    Interactive chat TUI on a terminal (chat/CLAUDE.md); --chat-default or AESOP_DEFAULT=chat makes bare aesop open it
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
