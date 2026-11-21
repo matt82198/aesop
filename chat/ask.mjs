@@ -6,11 +6,12 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { driverSource } from './driver_source.mjs';
+import { callerLabel, createFeedWriter } from './activity_feed.mjs';
 import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistry, ProviderRefused, resolveSelection } from './harness.mjs';
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
 
-const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--json] [--timeout <s>] "<prompt>"';
+const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--timeout <s>] "<prompt>"';
 const DEFAULT_TIMEOUT_S = 300;
 
 /**
@@ -25,12 +26,13 @@ export function parseAskArgs(argv) {
     const a = argv[i];
     if (a === '--') { words.push(...argv.slice(i + 1)); break; }
     if (a === '--json') out.json = true;
-    else if (a === '--model' || a === '--system' || a === '--timeout') {
+    else if (a === '--model' || a === '--system' || a === '--from' || a === '--timeout') {
       const v = argv[i + 1];
       if (v === undefined) return { ...out, error: `${a} needs a value` };
       i += 1;
       if (a === '--model') out.model = v;
       else if (a === '--system') out.system = v;
+      else if (a === '--from') out.from = v;
       else {
         const n = Number(v);
         if (!Number.isFinite(n) || n <= 0) return { ...out, error: '--timeout needs a positive number of seconds' };
@@ -59,6 +61,27 @@ function codeForClass(cls) {
   return EXIT.PROVIDER;
 }
 
+/** Feed lifecycle shared by the streaming ask and early exits. Diagnostics stay on the feed. */
+function askActivityFeed(args, env, stderr, started) {
+  let writer;
+  const start = ({ provider, model }, stdin = '') => {
+    if (writer) return;
+    writer = createFeedWriter({ env, stderr });
+    writer.start({ from: callerLabel(args.from, env), model: [provider, model].filter(Boolean).join('/'), prompt: args.prompt, stdin });
+  };
+  return {
+    start,
+    chunk(text) { writer?.chunk(text); },
+    end(code, fields) {
+      if (code === EXIT.USAGE) return;
+      start(fields);
+      const status = { [EXIT.OK]: 'ok', [EXIT.TIMEOUT]: 'timeout', [EXIT.REFUSED]: 'refused' }[code] ?? 'error';
+      if (fields.error) writer.error(fields.error);
+      writer.end({ status, exit: code, elapsed_ms: Date.now() - started, error: fields.error });
+    },
+  };
+}
+
 /**
  * Runs one ask. Never prompts, never needs a TTY.
  * @param {{argv: string[], stdin?: NodeJS.ReadableStream, stdout: {write: Function}, stderr: {write: Function}, env?: Record<string,string|undefined>, cwd?: string}} io
@@ -67,7 +90,9 @@ function codeForClass(cls) {
 export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, cwd = process.cwd() }) {
   const started = Date.now();
   const args = parseAskArgs(argv);
+  const activity = askActivityFeed(args, env, stderr, started);
   const finish = (code, fields) => {
+    activity.end(code, fields);
     if (args.json) {
       const obj = { ok: code === EXIT.OK, provider: fields.provider ?? null, model: fields.model ?? null, text: fields.text ?? '', elapsed_ms: Date.now() - started };
       if (fields.error) obj.error = fields.error;
@@ -132,6 +157,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   if (context.trim() !== '') line = `${line}\n\n--- context (stdin) ---\n${context}`;
   if (args.system) line = `${args.system}\n\n${line}`;
 
+  activity.start({ provider, model }, context);
   const timeoutMs = Math.round(args.timeoutS * 1000);
   const controller = new AbortController();
   let timedOut = false;
@@ -149,6 +175,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   try {
     for await (const chunk of source(line, { signal: controller.signal })) {
       text += chunk;
+      activity.chunk(chunk);
       if (!args.json) stdout.write(chunk);
     }
   } catch (err) {
