@@ -235,7 +235,9 @@ class TestScopedFallbackFailsClosed(unittest.TestCase):
                                                   repo=repo)
         self.assertIsNotNone(shard_map)
         argv = emit_receipt.DEFAULT_REGISTRY["py-shard-0"].cmd(repo)
-        _shard_id, _total, timing_file, _emit = ci_shard_runner._parse_args(argv[2:])
+        _shard_id, _total, timing_file, _emit, hang_dump = ci_shard_runner._parse_args(argv[2:])
+        self.assertEqual(hang_dump, 540,
+                         "registry shard argv sets no --hang-dump-seconds, so the runner default (540) applies")
         self.assertIsNotNone(timing_file, "registry shard argv must pass the CI timing file (round-robin otherwise)")
         runner_timing = ci_shard_runner.load_timing_data(str(repo / timing_file))
         self.assertTrue(runner_timing)
