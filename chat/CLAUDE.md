@@ -65,3 +65,7 @@ node --test tests/stdio-cli-wiring.test.mjs tests/stdio-pipe.test.mjs tests/stdi
 ```
 
 Anti-vacuity: a test is only accepted when breaking the production code in `chat/` turns it red. The streaming mutant (buffer every chunk before emitting) is the reference check.
+
+## Spec
+
+`chat/SPEC.md` is the durable improvement spec (R1..R24). `chat/SPEC.original.md` is its frozen original and never changes. `tests/chat-spec.test.mjs` has one `R<n>:` test per requirement.

@@ -39,9 +39,10 @@ export function createInputState() {
   };
 }
 
-// Key time in ms: key.now when the caller supplies it (tests inject it), otherwise the wall clock.
+// Key time in ms: key.now, supplied by the caller (cli.mjs stamps each key with the wall clock).
+// The reducer itself never reads a clock (R3); without a stamp every key is at time 0.
 function keyTime(key) {
-  return typeof key.now === 'number' ? key.now : Date.now();
+  return typeof key.now === 'number' ? key.now : 0;
 }
 
 // A lone TAB is accepted (expanded to spaces by the printable branch); every other control byte is not.
@@ -71,7 +72,8 @@ function onEnter(s) {
   if (buf.trim() === '') {
     return { state: withBuffer(s, '', 0), effect: null };
   }
-  const history = [...s.history, buf].slice(-HISTORY_LIMIT);
+  // Consecutive duplicates store one entry.
+  const history = s.history[s.history.length - 1] === buf ? s.history : [...s.history, buf].slice(-HISTORY_LIMIT);
   const state = { ...withBuffer(s, '', 0), history, historyIndex: history.length, draft: '' };
   return { state, effect: { type: 'submit', line: buf } };
 }
@@ -126,7 +128,7 @@ export function applyKey(state, key = {}) {
   if (name === 'escape') return { state: { ...state, ctrlCPending: false, pasting: false }, effect: null };
 
   const now = keyTime(key);
-  let s = { ...state, ctrlCPending: false };
+  let s = { ...state, ctrlCPending: false, lastWasCR: false };
   // A paste left open with no key for PASTE_IDLE_MS is stuck: drop paste mode before handling this key.
   if (s.pasting && now - s.pasteLastAt >= PASTE_IDLE_MS) s = { ...s, pasting: false };
   if (s.pasting) s = { ...s, pasteLastAt: now };
@@ -137,8 +139,10 @@ export function applyKey(state, key = {}) {
   // that a later plain Enter submits.
   if (name === 'paste-start') return { state: { ...s, pasting: true, pasteLastAt: now }, effect: null };
   if (name === 'paste-end') return { state: { ...s, pasting: false }, effect: null };
+  // CRLF pastes report \r (return) then \n (enter) for one line break: the \n after a \r is skipped.
   if (s.pasting && (name === 'return' || name === 'enter')) {
-    return { state: insertText(s, '\n'), effect: null };
+    if (name === 'enter' && key.sequence === '\n' && state.lastWasCR) return { state: s, effect: null };
+    return { state: { ...insertText(s, '\n'), lastWasCR: key.sequence === '\r' }, effect: null };
   }
 
   // EOF convention: ctrl-d quits only on an empty line; otherwise it forward-deletes like the delete key.
@@ -157,9 +161,21 @@ export function applyKey(state, key = {}) {
   if (name === 'home' || (key.ctrl && name === 'a')) return { state: withBuffer(s, buf, 0), effect: null };
   if (name === 'end' || (key.ctrl && name === 'e')) return { state: withBuffer(s, buf, buf.length), effect: null };
   if (key.ctrl && name === 'u') return { state: withBuffer(s, '', 0), effect: null };
+  if (key.ctrl && name === 'k') return { state: withBuffer(s, buf.slice(0, cursor), cursor), effect: null };
+  if (key.ctrl && name === 'w') {
+    let i = cursor;
+    while (i > 0 && /\s/.test(buf[i - 1])) i--;
+    while (i > 0 && !/\s/.test(buf[i - 1])) i--;
+    return { state: withBuffer(s, buf.slice(0, i) + buf.slice(cursor), i), effect: null };
+  }
   if (name === 'up') return { state: historyUp(s), effect: null };
   if (name === 'down') return { state: historyDown(s), effect: null };
 
+  // TAB on a lone slash prefix that matches exactly one command completes it.
+  if (name === 'tab' && buf.startsWith('/') && !/\s/.test(buf) && cursor === buf.length) {
+    const matches = SLASH_COMMANDS.filter((c) => c.startsWith(buf.slice(1)));
+    if (matches.length === 1) return { state: withBuffer(s, `/${matches[0]}`, matches[0].length + 1), effect: null };
+  }
   if (!key.ctrl && !key.meta && typeof key.sequence === 'string' && key.sequence.length > 0 && isPrintable(key.sequence)) {
     const text = key.sequence === '\t' ? tabSpaces(buf, cursor) : key.sequence;
     return { state: insertText(s, text), effect: null };
