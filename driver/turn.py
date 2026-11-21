@@ -261,6 +261,36 @@ def _hello() -> dict:
     return {"type": "hello", "protocol": PROTOCOL_VERSION, "engine": "driver.turn"}
 
 
+def _run_collected(entry, model, messages, timeout_s, token, json_mode, stdout, stderr) -> int:
+    """Default and --json modes: the same streamed route, printed once at the end.
+
+    Warnings (the over-window notice) are diagnostics on stderr; the exit code
+    is unchanged by them. A failure line is the `error` of the JSON object and
+    is also written to stderr.
+    """
+    def note(text):
+        if text.startswith(("warning: ", "growing ")):
+            stderr.write(text + "\n")
+
+    result = _stream_one(entry, model, messages, timeout_s=timeout_s, token=token, on_delta=None, notify=note)
+    if json_mode:
+        obj = {
+            "ok": result.ok,
+            "provider": result.provider,
+            "model": result.model,
+            "text": result.text,
+            "elapsed_ms": result.elapsed_ms,
+        }
+        if not result.ok:
+            obj["error"] = result.error or "unknown error"
+        stdout.write(json.dumps(obj) + "\n")
+    elif result.ok:
+        stdout.write(result.text + "\n")
+    if not result.ok:
+        stderr.write((result.error or "unknown error") + "\n")
+    return result.exit_code
+
+
 def _run_frames(entry, model, messages, timeout_s, token, stdout) -> int:
     writer = FrameWriter(_binary(stdout))
     writer.control(_hello())
@@ -456,12 +486,16 @@ def main(argv=None, *, stdin=None, stdout=None, stderr=None, transport=None, can
 
     context = _read_context(stdin)
     messages = _build_messages(prompt, context, args.system)
-    if streaming:
+    if streaming or transport is None:
+        # Every real turn takes the streamed route, so Ollama gets its native route and a sized window
+        # in every mode (finding f-db2dd2fa). Only an injected transport keeps the P1 one-shot path.
         token = cancel if cancel is not None else CancelToken()
         entry = _provider_entry(provider)
         if args.frames:
             return _run_frames(entry, provider.model, messages, timeout_s, token, stdout)
-        return _run_plain_stream(entry, provider.model, messages, timeout_s, token, stdout, stderr)
+        if args.stream:
+            return _run_plain_stream(entry, provider.model, messages, timeout_s, token, stdout, stderr)
+        return _run_collected(entry, provider.model, messages, timeout_s, token, args.json, stdout, stderr)
 
     result = run_turn(provider, messages, transport=transport, timeout_s=timeout_s)
     _emit(result, args.json, stdout, stderr)

@@ -46,6 +46,7 @@ from turn_backend import (  # noqa: E402
     EXIT_UNREACHABLE,
     refusal_reason,
 )
+from turn_context import DEFAULT_SIZER, is_ollama  # noqa: E402
 
 # Exit code for a cancelled one-shot turn (128 + SIGINT), outside the aesop ask table.
 EXIT_CANCELLED = 130
@@ -427,8 +428,13 @@ def _positive_number(value):
     return None
 
 
-def build_request(entry: dict, model: str, messages: list, env) -> dict:
+def build_request(entry: dict, model: str, messages: list, env, *, sizer=None, notify=None) -> dict:
     """Build the endpoint, headers, body and idle timeout for one request.
+
+    A provider with id or type `ollama` goes to the native `/api/chat` route
+    with `options.num_ctx` from `sizer` (turn_context.ContextSizer); its
+    growth notice and over-window warning go to `notify` before anything is
+    sent. Every other provider gets the OpenAI `/chat/completions` request.
 
     Raises TurnFailure('no-key') when the provider names a key variable that is
     unset and the provider is not local.
@@ -439,17 +445,24 @@ def build_request(entry: dict, model: str, messages: list, env) -> dict:
     if keyed and not env.get(key_name) and raw.get("is_local") is not True:
         raise TurnFailure("no-key", f"env {key_name} is unset")
     base = str(raw.get("base_url") or "").rstrip("/")
+    native = is_ollama(entry)
     payload = {"model": model, "stream": True, "messages": messages}
+    if native:
+        plan = (sizer or DEFAULT_SIZER).plan(entry["id"], base, model, messages, raw)
+        payload["options"] = {"num_ctx": plan.num_ctx}
+        for note in plan.notes:
+            if notify:
+                notify(note)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     headers = {
         "content-type": "application/json",
         "content-length": str(len(body)),
-        "accept": "text/event-stream",
+        "accept": "application/x-ndjson" if native else "text/event-stream",
     }
     if keyed and env.get(key_name):
         headers["authorization"] = f"Bearer {env[key_name]}"
     return {
-        "endpoint": base + "/chat/completions",
+        "endpoint": (re.sub(r"/v1$", "", base) + "/api/chat") if native else (base + "/chat/completions"),
         "headers": headers,
         "body": body,
         "base": base,
@@ -458,7 +471,7 @@ def build_request(entry: dict, model: str, messages: list, env) -> dict:
 
 
 def stream_once(entry: dict, model: str, messages: list, *, env=None, cancel=None,
-                on_delta=None, on_first=None, connect=None) -> Outcome:
+                on_delta=None, on_first=None, connect=None, sizer=None, notify=None) -> Outcome:
     """One request to one provider entry `{"id", "raw"}`. The boundary gate runs first."""
     env = os.environ if env is None else env
     raw = entry["raw"]
@@ -466,7 +479,7 @@ def stream_once(entry: dict, model: str, messages: list, *, env=None, cancel=Non
     if reason:
         return Outcome(failure=TurnFailure("refused", reason))
     try:
-        request = build_request(entry, model, messages, env)
+        request = build_request(entry, model, messages, env, sizer=sizer, notify=notify)
     except TurnFailure as failure:
         return Outcome(failure=failure)
     return stream_request(
@@ -488,17 +501,21 @@ def exit_code_for(cls: str) -> int:
 
 
 def run_stream_turn(entry: dict, model: str, messages: list, *, env=None, cancel=None,
-                    on_delta=None, notify=None, connect=None) -> StreamResult:
+                    on_delta=None, notify=None, connect=None, sizer=None) -> StreamResult:
     """Run one streamed turn against one provider and report it like the harness does.
 
     System lines go to `notify`: `error: <provider>: <class>: <reason>`,
-    `stream interrupted from <provider>` (a failure after the first delta) and
-    `cancelled: <provider> request aborted`.
+    `stream interrupted from <provider>` (a failure after the first delta),
+    `cancelled: <provider> request aborted`, and for Ollama the window growth
+    notice and the over-window warning (turn_context).
     """
     started = time.monotonic()
     notify = notify or (lambda text: None)
     provider_id = entry["id"]
-    outcome = stream_once(entry, model, messages, env=env, cancel=cancel, on_delta=on_delta, connect=connect)
+    outcome = stream_once(
+        entry, model, messages, env=env, cancel=cancel, on_delta=on_delta, connect=connect,
+        sizer=sizer, notify=notify,
+    )
 
     def result(ok, exit_code, error=None, cancelled=False):
         return StreamResult(

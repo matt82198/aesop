@@ -8,6 +8,7 @@ The driver is the one turn engine (spec H-R26 in `docs/specs/chat-model-harness.
 
 - `turn_backend.py` (P1): `run_turn`, one non-streamed turn over `openai_compatible_driver`; `refusal_reason`; the exit-code constants.
 - `turn_stream.py` (P2): `stream_request`, `stream_once`, `run_stream_turn`, `CancelToken`, `TurnFailure`. One streamed request to one provider entry `{"id", "raw"}` (the chat registry shape).
+- `turn_context.py` (P3): `size_ollama_context`, `ContextSizer` (sticky window), `is_ollama`.
 - `turn_frames.py` (P2): `FrameWriter`, `encode_frame`, `encode_end`, `decode_stream` for the AESOP-PIPE/1 grammar that `stdio/frames.mjs` decodes.
 - `turn.py`: the CLI.
 
@@ -73,6 +74,15 @@ The session is ONE frames stream; every control frame of a turn carries its `id`
 - A key is read only from the env var named by `api_key_env`; a keyed provider with the variable unset and `is_local` not true is `no-key` and sends nothing.
 - A parent that must stop the child at once uses `proc_util.kill_process_tree`; the provider then sees the connection close.
 
+## Ollama context window (P3, `turn_context.py`, finding f-db2dd2fa)
+
+Ollama's `/v1` route ignores `num_ctx` and runs at 4096 tokens, silently cutting the START of long input. So a provider with id or type `ollama` is sent to the native `POST {base_url minus /v1}/api/chat` (NDJSON, same deltas; the final frame's `prompt_eval_count` and `eval_count` become usage) with `options.num_ctx`. Every mode takes this route: the default mode and `--json` use the streamed path too, and only an injected test transport keeps the P1 `/v1` call.
+
+- Window: the smallest bucket of 8192 / 16384 / 32768 (override `num_ctx_buckets`), filtered to `num_ctx_max` (default 32768) and `model_max_ctx`, that holds the prompt estimate (UTF-16 length / 3.5, rounded up) plus a 1024 reply reserve. If no bucket fits the filter, the cap itself is used; if none is large enough, the largest is used.
+- Sticky: Ollama reloads the model when `num_ctx` changes, so per process and per (provider, base_url, model) the window never shrinks. A growth shows `growing model window to N (Ollama reloads the model; this can take ~20 s)`. A one-shot turn is one process, so it gets bucketing only; a `--serve` session gets the sticky behaviour.
+- Over the window: when the prompt alone exceeds the window, `warning: input ~N tokens exceeds the model window M; the start will be cut` is shown before the reply (a `notify` event in frames mode, stderr in the other modes). The exit code does not change.
+- Shared fixture: `tests/fixtures/num-ctx-cases.json` is run by `tests/test_turn_context.py` (this module) and by `tests/chat-num-ctx-fixture.test.mjs` (`sizeOllamaContext` and the sticky logic in `chat/harness.mjs`), so the two cannot drift.
+
 ## Tests
 
-`tests/test_turn_backend.py`, `tests/test_turn_cli.py` (P1), `tests/test_turn_stream.py`, `tests/test_turn_serve.py` (P2). The fake provider is `tests/turn_fake_server.py` on 127.0.0.1; nothing touches a real network.
+`tests/test_turn_backend.py`, `tests/test_turn_cli.py` (P1), `tests/test_turn_stream.py`, `tests/test_turn_serve.py` (P2), `tests/test_turn_context.py` (P3). The fake provider is `tests/turn_fake_server.py` on 127.0.0.1; nothing touches a real network.
