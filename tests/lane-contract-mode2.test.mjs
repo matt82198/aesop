@@ -15,7 +15,7 @@ const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contractPath = path.join(repoRoot, 'LANE-CONTRACT.md');
 const SECTION_6_HEADING = '## 6. Boundaries';
 const S4_MARK = 'S4 SHIP:';
-const S5_MARK = 'S5 REVIEW:';
+const SECTION_6_CONTINUED_HEADING = '## 6. Boundaries (continued)';
 const MODE2_LIST_RE = /Mode 2 - repos WITHOUT CI \(([^)]*)\)/;
 const ARMING_EQUALS_MERGING = 'arming equals merging';
 
@@ -23,14 +23,18 @@ function contractText() {
   return fs.readFileSync(contractPath, 'utf8');
 }
 
-// Returns section 6 text: from its heading to the next heading of level 1-3.
+// Returns section 6 text: from its heading to the next heading of level 1-3, plus the
+// "6. Boundaries (continued)" section the step split moved into contract/judgement.md.
 function section6() {
   const text = contractText();
-  const start = text.indexOf(SECTION_6_HEADING);
-  assert.notEqual(start, -1, `LANE-CONTRACT.md must keep the "${SECTION_6_HEADING}" heading`);
-  const rest = text.slice(start + SECTION_6_HEADING.length);
-  const next = rest.search(/\n#{1,3} /);
-  return next === -1 ? rest : rest.slice(0, next);
+  const own = (heading) => {
+    const start = text.indexOf(heading);
+    assert.notEqual(start, -1, `LANE-CONTRACT.md must keep the "${heading}" heading`);
+    const rest = text.slice(start + heading.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  };
+  return own(SECTION_6_HEADING) + own(SECTION_6_CONTINUED_HEADING);
 }
 
 // Returns the S4 SHIP stage bullet block: from its "S4 SHIP:" line up to the "S5 REVIEW:" bullet.
@@ -38,9 +42,10 @@ function s4Block() {
   const text = contractText();
   const start = text.indexOf(S4_MARK);
   assert.notEqual(start, -1, `LANE-CONTRACT.md must keep the "${S4_MARK}" stage bullet`);
-  const end = text.indexOf(S5_MARK, start);
-  assert.notEqual(end, -1, `LANE-CONTRACT.md must keep the "${S5_MARK}" stage bullet after S4`);
-  return text.slice(start, end);
+  // The step split moved the S5 bullet into contract/review.md; S4 ends at the next list item.
+  const rest = text.slice(start + S4_MARK.length);
+  const next = rest.search(/\n(?:\d+\. |\s*- |#)/);
+  return text.slice(start, next === -1 ? text.length : start + S4_MARK.length + next);
 }
 
 function parseRepoList(source, where) {
