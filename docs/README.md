@@ -108,5 +108,6 @@ Older pages that no folder page replaces yet. Check their claims against the cod
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | How to set up, what a pull request must pass, and what the maintainer looks at. |
 | [SECURITY.md](../SECURITY.md) | How to report a vulnerability. |
 | [Releasing](./RELEASING.md) | How a release is cut and published. |
+| [Overhaul: model-agnostic harness](./overhaul-model-agnostic.md) | Why aesop is becoming a model-agnostic harness, and its current status. |
 | [CHANGELOG.md](../CHANGELOG.md) | The per-release change list. |
 | [Archive](./archive/README.md) | Retired pages, kept for history. |

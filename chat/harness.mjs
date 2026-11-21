@@ -37,7 +37,7 @@ const CLAUDE_MODEL_TOKEN = /(?:^|[\s/:._-])(?:claude|anthropic)(?=$|[\s/:._-])/i
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const DONE = Symbol('done');
 // Keys a provider entry may carry; any other key gets a NOTICE by name (spec H-R7, H-R24).
-const PROVIDER_KEYS = new Set(['type', 'base_url', 'api_key_env', 'models', 'headers', 'timeout_ms', 'is_local', 'cost_per_mtok', 'allow_insecure', 'num_ctx_max', 'model_max_ctx']);
+const PROVIDER_KEYS = new Set(['type', 'base_url', 'api_key_env', 'models', 'headers', 'timeout_ms', 'is_local', 'cost_per_mtok', 'allow_insecure', 'num_ctx_max', 'model_max_ctx', 'num_ctx_buckets']);
 const MAX_ALIAS_HOPS = 3;
 
 /**
@@ -389,6 +389,10 @@ export const CHARS_PER_TOKEN = 3.5;
 export const OLLAMA_REPLY_RESERVE = 1024;
 export const OLLAMA_NUM_CTX_FLOOR = 4096;
 export const OLLAMA_NUM_CTX_MAX = 32768;
+export const OLLAMA_NUM_CTX_BUCKETS = [8192, 16384, 32768];
+
+/** Last num_ctx sent per (provider, base_url, model) in this process; it only grows so Ollama stops reloading. */
+const lastNumCtx = new Map();
 
 /** True for the Ollama provider (id or type `ollama`), which is sent to the native /api/chat. */
 function isOllama(entry) {
@@ -399,17 +403,26 @@ function isOllama(entry) {
  * Sizes Ollama's context window for one request. Ollama's /v1 route ignores num_ctx and runs at its
  * 4096 default, silently cutting the start of long input, so the native route gets an explicit window.
  * @param {{role: string, content: string}[]} messages
- * @param {{num_ctx_max?: number, model_max_ctx?: number}} raw provider config
- * @returns {{numCtx: number, promptTokens: number, truncates: boolean}}
+ * Ollama reloads the model (13-23 s) whenever num_ctx changes, so the size is a bucket (default
+ * 8192/16384/32768, override with providers.<id>.num_ctx_buckets): the smallest bucket, filtered to
+ * num_ctx_max and model_max_ctx, that fits the estimate plus the reply reserve.
+ * @param {{role: string, content: string}[]} messages
+ * @param {{num_ctx_max?: number, model_max_ctx?: number, num_ctx_buckets?: number[]}} raw provider config
+ * @returns {{numCtx: number, promptTokens: number, truncates: boolean, cap: number}}
  */
 export function sizeOllamaContext(messages, raw = {}) {
   const chars = messages.reduce((n, m) => n + String(m.content).length, 0);
   const promptTokens = Math.ceil(chars / CHARS_PER_TOKEN);
   let cap = Number(raw.num_ctx_max) > 0 ? Math.floor(Number(raw.num_ctx_max)) : OLLAMA_NUM_CTX_MAX;
   if (Number(raw.model_max_ctx) > 0) cap = Math.min(cap, Math.floor(Number(raw.model_max_ctx)));
-  const want = Math.ceil((promptTokens + OLLAMA_REPLY_RESERVE) / 1024) * 1024;
-  const numCtx = Math.min(Math.max(want, OLLAMA_NUM_CTX_FLOOR), cap);
-  return { numCtx, promptTokens, truncates: promptTokens > cap };
+  const custom = Array.isArray(raw.num_ctx_buckets)
+    ? raw.num_ctx_buckets.map(Number).filter((n) => Number.isFinite(n) && n > 0).map(Math.floor) : [];
+  const source = custom.length ? custom : OLLAMA_NUM_CTX_BUCKETS;
+  let buckets = [...new Set(source)].filter((n) => n <= cap).sort((x, y) => x - y);
+  if (!buckets.length) buckets = [cap];
+  const need = promptTokens + OLLAMA_REPLY_RESERVE;
+  const numCtx = buckets.find((n) => n >= need) ?? buckets[buckets.length - 1];
+  return { numCtx, promptTokens, truncates: promptTokens > numCtx, cap };
 }
 
 /** Max prior messages and characters sent as conversation context on each turn. */
@@ -552,6 +565,11 @@ export function harnessSource(registry, getSelection, env = process.env, options
     let payload = { model, stream: true, messages };
     if (native) {
       const sized = sizeOllamaContext(messages, entry.raw);
+      const key = `${id}|${base}|${model}`;
+      const last = lastNumCtx.get(key);
+      if (last !== undefined && sized.numCtx < last && last <= sized.cap) sized.numCtx = last;
+      else if (last !== undefined && sized.numCtx > last) notify(`growing model window to ${sized.numCtx} (Ollama reloads the model; this can take ~20 s)`);
+      lastNumCtx.set(key, sized.numCtx);
       payload = { model, stream: true, messages, options: { num_ctx: sized.numCtx } };
       if (sized.truncates) notify(`warning: input ~${sized.promptTokens} tokens exceeds the model window ${sized.numCtx}; the start will be cut`);
     }

@@ -182,6 +182,35 @@ export function resolveUnicode({ env = {}, unicode } = {}) {
   return true;
 }
 
+// Background `aesop ask` job from the activity feed: dim header, prompt, collapsed stdin preview,
+// the streamed answer, then a status line. Display-only; never part of any model context.
+const FEED_PREVIEW_LINES = 3;
+function feedLines(msg, columns, color, unicode) {
+  const dim = painter('dim', color);
+  const pad = '  ';
+  const out = [];
+  out.push(...block('', '', `${unicode ? '⇢' : '->'} ${msg.from} ${unicode ? '→' : '=>'} ${msg.model || '?'}`, columns, dim));
+  out.push(...block(`${pad}? `, `${pad}  `, msg.prompt, columns, dim));
+  const preview = String(msg.preview ?? '').split('\n').filter((l, i, a) => !(i === a.length - 1 && l === ''));
+  if (preview.length > 0 && preview[0] !== '') {
+    const bar = unicode ? '│' : '|';
+    for (const l of preview.slice(0, FEED_PREVIEW_LINES)) out.push(...block(`${pad}${bar} `, `${pad}${bar} `, l, columns, dim));
+    const more = preview.length - FEED_PREVIEW_LINES;
+    const tail = `${msg.previewBytes ?? 0} bytes piped${more > 0 ? `, ${more} more line${more === 1 ? '' : 's'} hidden` : ''}`;
+    out.push(...block(`${pad}${bar} `, `${pad}${bar} `, `(${tail})`, columns, dim));
+  }
+  if (msg.text) out.push(...block(pad, pad, msg.text.replace(/\n+$/, ''), columns, painter('green', color)));
+  let status;
+  if (msg.status === null || msg.status === undefined) status = '...';
+  else {
+    const secs = typeof msg.elapsedMs === 'number' ? ` ${(msg.elapsedMs / 1000).toFixed(1)}s` : '';
+    status = msg.status === 'ok' ? `done${secs}` : `${msg.status}${msg.error ? `: ${msg.error}` : ''}${secs}`;
+  }
+  const bad = msg.status && msg.status !== 'ok';
+  out.push(...block(pad, pad, status, columns, painter(bad ? 'red' : 'dim', color)));
+  return out;
+}
+
 function transcriptLines(transcript, columns, color, unicode) {
   const lines = [];
   for (const msg of transcript) {
@@ -191,6 +220,8 @@ function transcriptLines(transcript, columns, color, unicode) {
       let text = msg.text ?? '';
       if (msg.streaming) text = `${text}${text ? ' ' : ''}${msg.spinnerGlyph ?? ''}`;
       lines.push(...block(ASSISTANT_PREFIX, ' '.repeat(ASSISTANT_PREFIX.length), text, columns, painter('green', color)));
+    } else if (msg.role === 'feed') {
+      lines.push(...feedLines(msg, columns, color, unicode));
     } else if (msg.role === 'tool') {
       const border = `    ${unicode ? '│' : '|'} `;
       lines.push(...block(border, border, msg.text, columns, painter('yellow', color)));
