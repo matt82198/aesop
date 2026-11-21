@@ -42,6 +42,8 @@ Node stdlib only, ESM `.mjs`. No `package.json` inside `chat/`. The TTY decision
 - `2` — usage error, or stdin/stdout is not a terminal. In that case stdout stays empty and stderr gets exactly one line naming `aesop pipe`.
 - `143` (SIGTERM), `129` (SIGHUP), `130` (SIGINT) — the signal exits; the terminal is restored first. The PASTE_OFF write is best-effort and never changes the exit code, even when it throws.
 
+**Harness backend (`AESOP_CHAT_BACKEND=harness`, `chat/harness.mjs`)**: providers come from the `providers` block of the file named by `AESOP_CHAT_CONFIG`. `assertProviderAllowed(provider, model)` is the single gate, run at load and again at request time. It refuses Anthropic or claude.ai hosts, command-style types (`cli`, `exec`, `claude`, `anthropic`), `claude*` or `anthropic/*` model ids (except type `orchestrator`), non-http(s) URLs, and non-loopback http without `allow_insecure`. A refused provider stays visible as a `refused:` line and is never sent a request. `harnessSource` streams OpenAI-compatible SSE over `node:http` and never follows redirects. H-R1 to H-R5 are green; the Python seam (H-R26) is not wired.
+
 **Wiring in bin/cli.js**: `aesop chat`; bare `aesop` on a TTY enters chat when `--chat-default` or `AESOP_DEFAULT=chat` is set. A bare `aesop` on a non-TTY stays the pipe filter.
 
 ## Invariants

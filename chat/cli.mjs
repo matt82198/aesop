@@ -24,6 +24,7 @@ import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
+import { harnessSource, loadRegistry } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 function loadHistory(file) {
   if (!file) return [];
@@ -134,7 +135,7 @@ export async function runChat({
   stdout = process.stdout,
   stderr = process.stderr,
   env = process.env,
-  source = pipeSource,
+  source,
 } = {}) {
   if (argv.includes('--help') || argv.includes('-h')) {
     stdout.write(`${HELP_TEXT}\n`);
@@ -171,12 +172,19 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   // Plain text of the lines the last frame drew. After a resize the terminal reflows those lines
   // at the new width, so the next frame moves back over the physical rows they now occupy.
   let drawnPlain = [];
+  // AESOP_CHAT_BACKEND=harness selects the model-agnostic provider registry (chat/harness.mjs).
+  const harness = env.AESOP_CHAT_BACKEND === 'harness';
+  const registry = harness ? loadRegistry(env.AESOP_CHAT_CONFIG) : null;
+  const selection = registry ? registry.defaultSelection : null;
+  const status = { cwd: process.cwd() };
+  if (harness) Object.assign(status, { provider: selection ? selection.provider : null, model: selection ? selection.model : null });
+  const backend = { source: source ?? pipeSource };
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
     color: resolveColor({ env, argv, isTTY: true }),
     unicode: resolveUnicode({ env }),
-    status: { cwd: process.cwd() },
+    status,
     onFrame: (frame) => {
       const rows = physicalRows(drawnPlain, stdout.columns || 80);
       const up = rows > 1 ? CURSOR_UP(rows - 1) : '';
@@ -184,6 +192,11 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       stdout.write(`\r${up}${CLEAR_TO_END}${frame}`);
     },
   });
+  if (harness) {
+    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env);
+    for (const text of registry.notices) session.state.transcript.push({ role: 'system', text });
+    if (!selection) session.state.transcript.push({ role: 'system', text: 'no provider configured (see /help)' });
+  }
 
   return new Promise((resolve) => {
     let input = { ...createInputState(), history, historyIndex: history.length };
@@ -241,7 +254,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       }
       chain = chain.then(async () => {
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
-        const chunks = line.startsWith('/') ? undefined : source(line);
+        const chunks = line.startsWith('/') ? undefined : backend.source(line);
         await session.submit(line, chunks);
         // A failed history save is shown as one visible status line; the session keeps running.
         if (notice) {
