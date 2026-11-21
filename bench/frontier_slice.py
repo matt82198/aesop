@@ -234,6 +234,8 @@ class UnknownModelPricingError(ValueError):
 
 def _price_for(model: str) -> Tuple[float, float]:
     """Return (input, output) USD per MTok for model, or raise UnknownModelPricingError."""
+    if model.startswith("ollama/"):
+        return (0.0, 0.0)
     rates = MODEL_PRICING_USD_PER_MTOK.get(model)
     if rates is None:
         raise UnknownModelPricingError(
@@ -264,6 +266,8 @@ def run_live_frontier_benchmark(
     tasks: List[FrontierTask],
     model: str = DEFAULT_MODEL,
     confirm_spend: bool = False,
+    base_url: Optional[str] = None,
+    transport=None,
 ) -> Tuple[List[FrontierScore], float]:
     """Run frontier tasks against Claude API.
 
@@ -288,8 +292,9 @@ def run_live_frontier_benchmark(
 
     # Check API key up front (fail-closed) before creating client. A refused
     # run is NOT a 0% measurement: main() must not write results for it.
+    is_ollama = model.startswith("ollama/")
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not is_ollama and not api_key:
         print("ERROR: ANTHROPIC_API_KEY not set - live run refused, no results written", file=sys.stderr)
         _live_skipped = True
         return ([], 0.0)
@@ -324,14 +329,24 @@ def run_live_frontier_benchmark(
         _live_skipped = True
         return ([], 0.0)
 
-    # Import Claude client
-    try:
-        import anthropic
-    except ImportError:
-        print("ERROR: anthropic not installed. Install with: pip install anthropic", file=sys.stderr)
-        sys.exit(1)
+    client = None
+    ollama_transport = transport
+    ollama_url = base_url or os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+    if is_ollama:
+        if ollama_transport is None:
+            driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
+            if driver_dir not in sys.path:
+                sys.path.insert(0, driver_dir)
+            from openai_transport import default_openai_transport
 
-    client = anthropic.Anthropic(api_key=api_key)
+            ollama_transport = default_openai_transport
+    else:
+        try:
+            import anthropic
+        except ImportError:
+            print("ERROR: anthropic not installed. Install with: pip install anthropic", file=sys.stderr)
+            sys.exit(1)
+        client = anthropic.Anthropic(api_key=api_key)
 
     global _error_tasks
     scores = []
@@ -343,14 +358,31 @@ def run_live_frontier_benchmark(
 
         response_text = None
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=512,
-                messages=[
-                    {"role": "user", "content": task.prompt}
-                ],
-            )
-            response_text = response.content[0].text if response.content else ""
+            if is_ollama:
+                resp = ollama_transport(
+                    {
+                        "model": model[len("ollama/"):],
+                        "temperature": 0,
+                        "max_tokens": 512,
+                        "messages": [{"role": "user", "content": task.prompt}],
+                    },
+                    timeout_s=180.0,
+                    base_url=ollama_url,
+                    api_key=str("ollama"),
+                )
+                choices = resp.get("choices") or ()
+                response_text = (
+                    ((choices[0].get("message") or {}).get("content")) if choices else ""
+                ) or ""
+            else:
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=512,
+                    messages=[
+                        {"role": "user", "content": task.prompt}
+                    ],
+                )
+                response_text = response.content[0].text if response.content else ""
             print("OK")
         except Exception as e:
             # API error: record as status "error", do NOT score
@@ -439,6 +471,11 @@ def main():
         help="Confirm spending tokens on live run (required for --mode live)",
     )
     parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Optional base URL for ollama/<model> runs (default: http://127.0.0.1:11434/v1)",
+    )
+    parser.add_argument(
         "--tasks",
         default="bench/tasks_frontier.jsonl",
         help="Path to tasks file",
@@ -503,7 +540,12 @@ def main():
     else:
         print(f"Running LIVE frontier benchmark against {args.model}...\n")
         try:
-            scores, accuracy = run_live_frontier_benchmark(tasks, model=args.model, confirm_spend=args.confirm_spend)
+            scores, accuracy = run_live_frontier_benchmark(
+                tasks,
+                model=args.model,
+                confirm_spend=args.confirm_spend,
+                base_url=args.base_url,
+            )
         except UnknownModelPricingError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2

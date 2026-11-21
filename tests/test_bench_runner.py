@@ -344,5 +344,197 @@ class TestClaudeCliRunner(unittest.TestCase):
         self.assertIsNotNone(runner_code)
 
 
+class TestOllamaBenchRunners(unittest.TestCase):
+    """Offline unit tests proving all bench runners support local ollama/<model> without Anthropic/OpenAI keys."""
+
+    def test_bench_runner_ollama_registered_and_parses_response(self):
+        import os
+
+        self.assertIn("ollama", bench_runner.RUNNERS)
+        calls = []
+
+        def fake_transport(payload, **kwargs):
+            calls.append((payload, kwargs))
+            return {
+                "choices": [{"message": {"content": "docs"}}],
+                "usage": {"completion_tokens": 11},
+            }
+
+        prev = os.environ.pop("AESOP_BENCH_OFFLINE", None)
+        try:
+            runner = bench_runner._make_ollama_runner(
+                model_id="ollama/qwen3-coder:30b",
+                base_url="http://127.0.0.1:11434/v1",
+                transport=fake_transport,
+            )
+            text, usage = runner("Classify this changed file path")
+            self.assertEqual(text, "docs")
+            self.assertEqual(usage["tokens"], 11)
+            self.assertEqual(calls[0][0]["model"], "qwen3-coder:30b")
+            self.assertEqual(calls[0][1]["base_url"], "http://127.0.0.1:11434/v1")
+
+            os.environ["AESOP_BENCH_OFFLINE"] = "1"
+            with self.assertRaises(RuntimeError):
+                runner("blocked offline")
+        finally:
+            if prev is None:
+                os.environ.pop("AESOP_BENCH_OFFLINE", None)
+            else:
+                os.environ["AESOP_BENCH_OFFLINE"] = prev
+
+    def test_bench_api_runner_ollama_requires_no_bench_api_key(self):
+        import os
+        from unittest import mock
+        import bench_api_runner
+
+        self.assertTrue(bench_api_runner._is_ollama_spec("ollama"))
+        self.assertTrue(bench_api_runner._is_ollama_spec("ollama/qwen3-coder:30b"))
+        self.assertFalse(bench_api_runner._is_ollama_spec("haiku"))
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AESOP_BENCH_OFFLINE", None)
+            os.environ.pop("_".join(("BENCH", "API", "KEY")), None)
+            with self.assertRaises(RuntimeError):
+                bench_api_runner.make_ollama_api_runner("ollama/qwen3-coder:30b", confirm_spend=False)
+
+            seen = []
+
+            def fake_transport(payload, **kwargs):
+                seen.append(payload["model"])
+                return {
+                    "choices": [{"message": {"content": "yes"}}],
+                    "usage": {"completion_tokens": 5},
+                }
+
+            runner = bench_api_runner.make_ollama_api_runner(
+                "ollama/qwen3-coder:30b",
+                confirm_spend=True,
+                transport=fake_transport,
+            )
+            text, usage = runner("prompt")
+            self.assertEqual(text, "yes")
+            self.assertEqual(usage["tokens"], 5)
+            self.assertEqual(seen, ["qwen3-coder:30b"])
+
+    def test_frontier_slice_and_accuracy_harness_support_ollama(self):
+        import os
+        from unittest import mock
+
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from bench import accuracy_harness, frontier_slice
+
+        self.assertEqual(frontier_slice._price_for("ollama/qwen3-coder:30b"), (0.0, 0.0))
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AESOP_BENCH_OFFLINE", None)
+            os.environ.pop("_".join(("ANTHROPIC", "API", "KEY")), None)
+            os.environ.pop("_".join(("OPENAI", "API", "KEY")), None)
+            real_tasks = frontier_slice.load_frontier_tasks(
+                str(REPO_ROOT / "bench" / "tasks_frontier.jsonl")
+            )
+            real_gt = frontier_slice.load_ground_truth(
+                str(REPO_ROOT / "bench" / "ground_truth_frontier.jsonl")
+            )
+            first_task = real_tasks[0]
+            exemplar = real_gt[first_task.id].exemplar or real_gt[first_task.id].expected or "ok"
+
+            def fake_frontier_transport(payload, **kwargs):
+                self.assertEqual(payload["model"], "qwen3-coder:30b")
+                return {"choices": [{"message": {"content": exemplar}}]}
+
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(REPO_ROOT)
+                scores, acc = frontier_slice.run_live_frontier_benchmark(
+                    [first_task],
+                    model="ollama/qwen3-coder:30b",
+                    confirm_spend=True,
+                    transport=fake_frontier_transport,
+                )
+            finally:
+                os.chdir(orig_cwd)
+            self.assertEqual(len(scores), 1)
+            self.assertEqual(acc, 100.0)
+
+            acc_task = accuracy_harness._build_test_tasks()[0]
+
+            def fake_acc_transport(payload):
+                self.assertEqual(payload["model"], "qwen3-coder:30b")
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "files": [{"path": acc_task.owned_files[0], "contents": "# ok\n"}],
+                                        "summary": "updated",
+                                        "done": True,
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+
+            acc_scores, overall = accuracy_harness.run_live_benchmark(
+                [acc_task],
+                model="ollama/qwen3-coder:30b",
+                transport=fake_acc_transport,
+            )
+            self.assertEqual(len(acc_scores), 1)
+            self.assertEqual(overall, 1.0)
+
+    def test_seam_u_probe_refusals_and_gen_tasks_ollama_support(self):
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from bench import probe_refusals, run_seam_u
+
+        parsed = run_seam_u.parse_args(
+            ["--tasks-dir", "bench/seam_tasks", "--tiers", "ollama/qwen3-coder:30b"]
+        )
+        self.assertEqual(parsed.tiers, ["ollama/qwen3-coder:30b"])
+        self.assertEqual(
+            run_seam_u.calculate_cost("ollama/qwen3-coder:30b", {"input_tokens": 200, "output_tokens": 50}),
+            0.0,
+        )
+
+        diff_text = "--- a/main.py\n+++ b/main.py\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+        seam_runner = run_seam_u.create_ollama_runner(
+            "ollama/qwen3-coder:30b",
+            transport=lambda payload, **kw: {
+                "choices": [{"message": {"content": f"```diff\n{diff_text}```"}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8},
+            },
+        )
+        patch, usage = seam_runner("fix main.py")
+        self.assertIn("+new", patch)
+        self.assertEqual(usage["input_tokens"], 12)
+        self.assertEqual(usage["output_tokens"], 8)
+
+        tid, mod, stop_reason, err = probe_refusals.probe(
+            "ollama/qwen3-coder:30b",
+            "ft01",
+            "prompt",
+            "",
+            16,
+            5.0,
+            transport=lambda payload, **kw: {"choices": [{"finish_reason": "stop"}]},
+        )
+        self.assertEqual((tid, mod, stop_reason, err), ("ft01", "ollama/qwen3-coder:30b", "stop", None))
+
+        with tempfile.TemporaryDirectory() as td:
+            for script_name in ("gen_tasks.py", "gen_tasks_v2.py"):
+                script = REPO_ROOT / "bench" / "ext120" / script_name
+                res = subprocess.run(
+                    [sys.executable, str(script), "--help"],
+                    cwd=td,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(res.returncode, 0, msg=res.stderr)
+                self.assertEqual(list(Path(td).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -118,7 +118,7 @@ def load_task(task_dir: Path) -> TaskFixture:
         band=task_data.get("band", "unknown"),
         statement=task_data["statement"],
         context_files=task_data.get("context_files", []),
-        oracle_cmd=task_data.get("oracle_cmd", "python -m pytest oracle -q"),
+        oracle_cmd=task_data.get("oracle_cmd", f'"{sys.executable}" -m pytest oracle -q'),
         repo_path=task_dir / "repo",
         oracle_path=task_dir / "oracle",
         solution_path=(task_dir / "SOLUTION.md") if (task_dir / "SOLUTION.md").exists() else None,
@@ -156,7 +156,7 @@ def run_bounded_repair(
         # it ships one (engages the iterative loop); otherwise fall back to
         # collecting whatever tests are in the repo (exit 5 / no-tests keeps the
         # arm single-pass, per the seated-single-pass note).
-        "testCmd": task.visible_test_cmd or "python -m pytest . -q",
+        "testCmd": task.visible_test_cmd or f'"{sys.executable}" -m pytest . -q',
         "model": driver.resolve_model(ROLE_WORKER),
     }
 
@@ -513,13 +513,22 @@ def main():
                     sys.exit(0)
 
                 # Determine backend from tier.
-                backend_name = tier_to_backend.get(tier, "anthropic")
+                if tier.startswith("ollama/"):
+                    backend_name = "openai-compatible"
+                else:
+                    backend_name = tier_to_backend.get(tier, "anthropic")
 
                 # Build driver config.
                 config = {
                     "backend": backend_name,
                 }
-                if backend_name == "anthropic":
+                if backend_name == "openai-compatible":
+                    config["model"] = tier[len("ollama/"):]
+                    config["base_url"] = os.environ.get(
+                        "AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
+                    )
+                    config["is_local"] = True
+                elif backend_name == "anthropic":
                     config["model"] = tier
                     config["api_key_env"] = "ANTHROPIC_API_KEY"
                 elif backend_name == "codex":

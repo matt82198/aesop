@@ -796,7 +796,9 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     tiers = []
     for item in parsed.tiers:
         tiers.extend(t.strip() for t in item.split(",") if t.strip())
-    unknown = [t for t in tiers if t not in DEFAULT_TIERS]
+    unknown = [
+        t for t in tiers if t not in DEFAULT_TIERS and not t.startswith("ollama/")
+    ]
     if unknown:
         parser.error(
             f"unknown tier(s): {', '.join(unknown)} "
@@ -1099,6 +1101,67 @@ def create_openai_runner(
     return runner
 
 
+def create_ollama_runner(
+    model: str,
+    probe: bool = False,
+    base_url: Optional[str] = None,
+    transport=None,
+) -> Callable[[str], Tuple[str, Dict[str, Any]]]:
+    """Create a local open-weight Ollama runner (supports tool_calls and diff text)."""
+    effective_model = model[len("ollama/"):] if model.startswith("ollama/") else model
+    resolved_url = base_url or os.environ.get(
+        "AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
+    )
+    max_tokens = 64 if probe else 1500
+
+    def runner(prompt: str) -> Tuple[str, Dict[str, Any]]:
+        call_transport = transport
+        if call_transport is None:
+            driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
+            if driver_dir not in sys.path:
+                sys.path.insert(0, driver_dir)
+            from openai_transport import default_openai_transport
+
+            call_transport = default_openai_transport
+
+        payload = {
+            "model": effective_model,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        start = time.time()
+        data = call_transport(
+            payload,
+            timeout_s=180.0,
+            base_url=resolved_url,
+            api_key=str("ollama"),
+        )
+        elapsed_ms = (time.time() - start) * 1000.0
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("Empty choices")
+        message = choices[0].get("message") or {}
+        patch = ""
+        tool_calls = message.get("tool_calls") or []
+        if tool_calls:
+            raw_args = (tool_calls[0].get("function") or {}).get("arguments", "{}")
+            args_obj = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            patch = str(args_obj.get("patch", ""))
+        if not patch and message.get("content"):
+            patch = extract_diff(str(message["content"]))
+        if not patch:
+            raise RuntimeError("Empty patch in Ollama response")
+        usage = {
+            "input_tokens": (data.get("usage") or {}).get("prompt_tokens", 0),
+            "output_tokens": (data.get("usage") or {}).get("completion_tokens", 0),
+            "latency_ms": elapsed_ms,
+        }
+        return (patch, usage)
+
+    return runner
+
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
@@ -1133,7 +1196,9 @@ def main():
     # Validate API keys for all tiers (before any transport call)
     transports_needed = set()
     for tier in args.tiers:
-        if "gpt" in tier.lower() or "openai" in tier.lower():
+        if tier.startswith("ollama/"):
+            continue
+        elif "gpt" in tier.lower() or "openai" in tier.lower():
             transports_needed.add("openai")
         else:
             transports_needed.add("anthropic-http")
@@ -1232,12 +1297,18 @@ def run_single_task(
         "tier": tier,
         "repeat": repeat,
         "arm": "U",
-        "transport": "anthropic-http" if "gpt" not in tier else "openai",
+        "transport": (
+            "ollama"
+            if tier.startswith("ollama/")
+            else ("openai" if "gpt" in tier else "anthropic-http")
+        ),
     }
 
     try:
         # Determine transport and create runner
-        if "gpt" in tier.lower():
+        if tier.startswith("ollama/"):
+            runner = create_ollama_runner(tier, probe=probe)
+        elif "gpt" in tier.lower():
             api_key = os.environ.get("OPENAI_API_KEY")
             if not api_key:
                 result["status"] = "error"
@@ -1340,6 +1411,8 @@ def calculate_cost(tier: str, usage: Dict[str, Any]) -> Optional[float]:
     Returns:
         Cost in USD, or None if model tier not found in pricing table
     """
+    if tier.startswith("ollama/"):
+        return 0.0
     price_pair = MODEL_PRICING_USD_PER_MTOK.get(tier)
     if price_pair is None:
         # Unknown model — mark as such rather than silently returning 0.0

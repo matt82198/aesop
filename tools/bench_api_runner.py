@@ -155,21 +155,74 @@ def make_api_runner(model_id: str, api_key: str, confirm_spend: bool = False):
     return runner
 
 
+def make_ollama_api_runner(
+    model_id: str,
+    base_url: str = "http://127.0.0.1:11434/v1",
+    confirm_spend: bool = False,
+    transport=None,
+):
+    """Create a local open-weight Ollama / OpenAI-compatible HTTP runner."""
+    if os.environ.get("AESOP_BENCH_OFFLINE") == "1":
+        raise RuntimeError("AESOP_BENCH_OFFLINE=1: live API bench disabled, no client constructed")
+    if not confirm_spend:
+        raise RuntimeError("live API bench requires --confirm-spend; no client constructed")
+    effective_model = model_id[len("ollama/"):] if model_id.startswith("ollama/") else model_id
+    if transport is None:
+        driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
+        if driver_dir not in sys.path:
+            sys.path.insert(0, driver_dir)
+        from openai_transport import default_openai_transport
+
+        transport = default_openai_transport
+
+    def runner(prompt: str) -> Tuple[str, Dict]:
+        import time as time_module
+
+        start = time_module.time()
+        resp = transport(
+            {
+                "model": effective_model,
+                "temperature": 0,
+                "max_tokens": 256,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout_s=180.0,
+            base_url=base_url,
+            api_key=str("ollama"),
+        )
+        elapsed_ms = (time_module.time() - start) * 1000.0
+        choices = resp.get("choices") or ()
+        text = ((choices[0].get("message") or {}).get("content")) if choices else ""
+        out_tok = (resp.get("usage") or {}).get("completion_tokens", 0)
+        return (text or "", {"tokens": out_tok, "latency_ms": elapsed_ms})
+
+    return runner
+
+
+def _is_ollama_spec(alias: str) -> bool:
+    return alias == "ollama" or alias.startswith("ollama/")
+
+
 def run_variant(
     variant: str,  # "v2" or "v3"
-    model_alias: str,  # "haiku", "sonnet", "opus"
+    model_alias: str,  # "haiku", "sonnet", "opus", or "ollama[/<model>]"
     api_key: str,
     confirm_spend: bool = False,
+    base_url: str = "http://127.0.0.1:11434/v1",
 ) -> Tuple[List[dict], float, dict]:
     """Run one variant x model combo. Return (results, accuracy, cost_summary)."""
     tasks_file, gt_file, display_name = VARIANTS[variant]
-    model_id = MODEL_IDS[model_alias]
+    if _is_ollama_spec(model_alias):
+        model_id = "qwen3-coder:30b" if model_alias == "ollama" else model_alias[len("ollama/"):]
+        runner = make_ollama_api_runner(model_id, base_url=base_url, confirm_spend=confirm_spend)
+    else:
+        model_id = MODEL_IDS[model_alias]
+        runner = make_api_runner(model_id, api_key, confirm_spend=confirm_spend)
 
     print(f"\n[{variant.upper()}] Running {model_alias} ({model_id})...")
 
     tasks = load_tasks(tasks_file)
     ground_truth = load_ground_truth(gt_file)
-    runner = make_api_runner(model_id, api_key, confirm_spend=confirm_spend)
 
     results, accuracy = run_bench(tasks, ground_truth, runner)
     summary = build_summary(model_alias, results, accuracy)
@@ -201,7 +254,8 @@ Runs via direct HTTP API, not CLI.
 |--------|-------|----------|-----------|--------------|
 """
 
-    for alias in ("haiku", "sonnet", "opus"):
+    ordered_aliases = list(dict.fromkeys(["haiku", "sonnet", "opus", *models_summaries.keys()]))
+    for alias in ordered_aliases:
         if alias not in models_summaries:
             continue
         s = models_summaries[alias]
@@ -209,15 +263,15 @@ Runs via direct HTTP API, not CLI.
         acc_str = f"{s['accuracy']:.0%}"
         avg_tok = s.get("avg_tokens", 0)
         tot_tok = s.get("total_tokens", 0)
-        md += f"| {alias.capitalize():<6} | {score_str:<5} | {acc_str:<8} | {avg_tok or '-':<9} | {tot_tok or '-':<12} |\n"
+        md += f"| {alias:<6} | {score_str:<5} | {acc_str:<8} | {avg_tok or '-':<9} | {tot_tok or '-':<12} |\n"
 
     md += f"\n## Cost axis\n\nTotal tokens across all {n_tasks} tasks:\n"
-    for alias in ("haiku", "sonnet", "opus"):
+    for alias in ordered_aliases:
         if alias not in models_summaries:
             continue
         s = models_summaries[alias]
         tot_tok = s.get("total_tokens", 0)
-        md += f"- **{alias.capitalize()}**: {tot_tok} tokens\n"
+        md += f"- **{alias}**: {tot_tok} tokens\n"
 
     md += f"\n## Notes\n- Runs via Anthropic API (BENCH_API_KEY), not CLI\n- Transport: anthropic-http\n"
 
@@ -247,6 +301,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Required to make paid API calls (without it, exits 2 before any paid call)",
     )
+    parser.add_argument(
+        "--base-url",
+        default=os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
+        help="OpenAI-compatible base URL for ollama[/<model>] runs",
+    )
     args = parser.parse_args(argv)
 
     # Expand 'all' to v2 and v3
@@ -256,13 +315,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         variants = [args.variants]
 
     # Parse models (comma-separated)
-    models = [m.strip() for m in args.models.split(",")]
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
 
     if not args.confirm_spend:
         print("Use --confirm-spend to actually run (without it, exits 2 before any paid call).")
         return 2
 
-    api_key = get_api_key()
+    api_key = "" if all(_is_ollama_spec(m) for m in models) else get_api_key()
 
     timestamp = datetime.now().strftime("%Y-%m-%d")
     results_by_variant: Dict[str, Dict[str, dict]] = {}
@@ -289,7 +348,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         for model_alias in models:
             try:
                 results, accuracy, summary = run_variant(
-                    variant, model_alias, api_key, confirm_spend=args.confirm_spend
+                    variant,
+                    model_alias,
+                    api_key,
+                    confirm_spend=args.confirm_spend,
+                    base_url=args.base_url,
                 )
                 results_by_variant[variant][model_alias] = summary
 

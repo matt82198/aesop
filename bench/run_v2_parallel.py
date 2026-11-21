@@ -294,6 +294,8 @@ def invoke_openai_model(
     timeout_s: float = 60.0,
     tools: Optional[List[Dict]] = None,
     tool_choice: Optional[Dict] = None,
+    base_url: str = "https://api.openai.com/v1",
+    is_local: bool = False,
 ) -> Tuple[str, int, int, float]:
     """Invoke OpenAI model via default_openai_transport.
 
@@ -342,7 +344,12 @@ def invoke_openai_model(
                 "function": {"name": tool_choice["name"]}
             }
 
-    response = default_openai_transport(payload, timeout_s=timeout_s)
+    response = default_openai_transport(
+        payload,
+        timeout_s=timeout_s,
+        base_url=base_url,
+        api_key=str("ollama") if is_local else None,
+    )
 
     if not response.get("choices"):
         raise RuntimeError(f"OpenAI API returned no choices: {response}")
@@ -375,10 +382,13 @@ def invoke_openai_model(
     tokens_in = usage.get("prompt_tokens", 0)
     tokens_out = usage.get("completion_tokens", 0)
 
-    # Pricing for gpt-4o-mini (2026-07-26 rates)
-    rate_input = 0.15  # per million
-    rate_output = 0.60  # per million
-    cost = (tokens_in / 1_000_000) * rate_input + (tokens_out / 1_000_000) * rate_output
+    if is_local:
+        cost = 0.0
+    else:
+        # Pricing for gpt-4o-mini (2026-07-26 rates)
+        rate_input = 0.15  # per million
+        rate_output = 0.60  # per million
+        cost = (tokens_in / 1_000_000) * rate_input + (tokens_out / 1_000_000) * rate_output
 
     return response_text, tokens_in, tokens_out, cost
 
@@ -502,8 +512,10 @@ def run_single_task(
                 tools=tools,
                 tool_choice=tool_choice
             )
-        elif tier == "gpt-4o-mini":
-            # v5: OpenAI now uses tool mode too (function calling)
+        elif tier == "gpt-4o-mini" or tier.startswith("ollama/"):
+            is_ollama = tier.startswith("ollama/")
+            effective_model = tier[len("ollama/"):] if is_ollama else tier
+            # v5: OpenAI / Ollama uses tool mode too (function calling)
             # max_tokens: enum tool mode needs less (bare token), string mode needs >=1024 for verbose regex-graded answers
             if use_tool_mode and schema_type == "string":
                 openai_max_tokens = 2048  # Generous for full explanation + reasoning
@@ -513,12 +525,15 @@ def run_single_task(
                 openai_max_tokens = 512  # Regex mode (prose)
 
             response_text, tokens_in, tokens_out, cost = invoke_openai_model(
-                tier, request_prompt,
+                effective_model, request_prompt,
                 max_tokens=openai_max_tokens,
+                timeout_s=180.0 if is_ollama else 60.0,
                 tools=tools,
-                tool_choice=tool_choice
+                tool_choice=tool_choice,
+                base_url=os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1") if is_ollama else "https://api.openai.com/v1",
+                is_local=is_ollama,
             )
-            transport = "openai"
+            transport = "ollama" if is_ollama else "openai"
         else:
             raise ValueError(f"Unknown tier: {tier}")
     except Exception as e:

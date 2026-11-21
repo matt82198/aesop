@@ -446,8 +446,62 @@ def _make_claude_runner(model_alias: str) -> ModelRunner:
     return runner
 
 
+DEFAULT_OLLAMA_MODEL = "qwen3-coder:30b"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
+
+
+def _make_ollama_runner(
+    model_id: str = DEFAULT_OLLAMA_MODEL,
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+    transport: Optional[Callable[..., dict]] = None,
+) -> ModelRunner:
+    """Create a local open-weight Ollama / OpenAI-compatible runner (stdlib-only)."""
+    effective_model = (
+        model_id[len("ollama/"):] if model_id.startswith("ollama/") else model_id
+    )
+
+    def runner(prompt: str) -> tuple:
+        if _offline_seam_set():
+            raise RuntimeError(OFFLINE_REFUSAL)
+        call_transport = transport
+        if call_transport is None:
+            driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
+            if driver_dir not in sys.path:
+                sys.path.insert(0, driver_dir)
+            from openai_transport import default_openai_transport
+
+            call_transport = default_openai_transport
+        payload = {
+            "model": effective_model,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        start = time.time()
+        resp = call_transport(
+            payload,
+            timeout_s=180.0,
+            base_url=base_url,
+            api_key=str("ollama"),
+        )
+        elapsed_ms = (time.time() - start) * 1000.0
+        choices = resp.get("choices") or ()
+        if not choices or not isinstance(choices[0], dict):
+            raise RuntimeError(f"ollama runner received no choices: {resp}")
+        text = ((choices[0].get("message") or {}).get("content")) or ""
+        usage_obj = resp.get("usage") or {}
+        out_tok = usage_obj.get("completion_tokens")
+        return (text, {"tokens": out_tok, "latency_ms": elapsed_ms})
+
+    runner.is_cli = True  # blocked under AESOP_BENCH_OFFLINE=1
+    return runner
+
+
 RUNNERS: Dict[str, ModelRunner] = {
     "mock": mock_runner,
+    "ollama": _make_ollama_runner(
+        model_id=os.environ.get("AESOP_BENCH_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
+        base_url=os.environ.get("AESOP_OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
+    ),
 }
 
 # Register claude runners if claude CLI is available
@@ -539,9 +593,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--tasks", default=None, help="Override path to tasks.jsonl")
     parser.add_argument("--ground-truth", default=None, help="Override path to ground_truth.jsonl")
+    parser.add_argument("--model", default=None, help="Optional model ID override for --runner ollama")
+    parser.add_argument("--base-url", default=None, help="Optional base URL override for --runner ollama")
     args = parser.parse_args(argv)
 
     runner = RUNNERS[args.runner]
+    if args.runner == "ollama" and (args.model or args.base_url):
+        runner = _make_ollama_runner(
+            model_id=args.model or os.environ.get("AESOP_BENCH_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
+            base_url=args.base_url or os.environ.get("AESOP_OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
+        )
     if getattr(runner, "is_cli", False) and _offline_seam_set():
         print(OFFLINE_REFUSAL, file=sys.stderr)
         return 2

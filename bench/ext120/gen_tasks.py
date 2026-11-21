@@ -371,13 +371,20 @@ The cron entry 0 9 15 * 5 runs at 09:00 when (day-of-month = 15) OR (day-of-week
     "counter_example": "FIRES_4\n\nIf we only counted Fridays (Oct 4, 11, 18, 25) and forgot that the 15th also triggers the job, we'd miss one firing."
 })
 
-# Write files
-with open('tasks_ft121-130.jsonl', 'w', encoding='utf-8') as f:
-    for task in tasks:
-        f.write(json.dumps(task) + '\n')
+def _write_generated_files() -> None:
+    with open('tasks_ft121-130.jsonl', 'w', encoding='utf-8') as f:
+        for task in tasks:
+            f.write(json.dumps(task) + '\n')
 
-with open('gt_ft121-130.jsonl', 'w', encoding='utf-8') as f:
-    for gt in ground_truths:
-        f.write(json.dumps(gt) + '\n')
+    with open('gt_ft121-130.jsonl', 'w', encoding='utf-8') as f:
+        for gt in ground_truths:
+            f.write(json.dumps(gt) + '\n')
 
-print(f"Created {len(tasks)} tasks and {len(ground_truths)} ground truths")
+    print(f"Created {len(tasks)} tasks and {len(ground_truths)} ground truths")
+
+
+if __name__ == "__main__":
+    if "--help" in __import__("sys").argv or "-h" in __import__("sys").argv:
+        print("Usage: python bench/ext120/gen_tasks.py")
+    else:
+        _write_generated_files()

@@ -668,6 +668,7 @@ def run_live_benchmark(
     model: str = "gpt-4o-mini",
     api_key: Optional[str] = None,
     transport=None,
+    base_url: Optional[str] = None,
 ) -> Tuple[List[TaskScore], float]:
     """Run all tasks against a real Chat Completions backend.
 
@@ -690,13 +691,24 @@ def run_live_benchmark(
     Returns:
         Tuple of (task_scores, overall_accuracy)
     """
+    effective_model = model[len("ollama/"):] if model.startswith("ollama/") else model
+    resolved_base_url = base_url or (
+        os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+        if model.startswith("ollama/")
+        else "https://api.openai.com/v1"
+    )
+    is_loopback = any(
+        h in resolved_base_url for h in ("127.0.0.1", "localhost", "[::1]")
+    )
     if transport is None:
         if not api_key:
-            api_key = os.environ.get("OPENAI_API_KEY")
+            api_key = os.environ.get("OPENAI_API_KEY") or (
+                str("ollama") if is_loopback else None
+            )
         if not api_key:
             raise RuntimeError(
                 "OPENAI_API_KEY not provided and not in environment. "
-                "Set it before running live benchmark."
+                "Set it before running live benchmark (or use --model ollama/<model> for local Ollama)."
             )
         from openai_transport import default_openai_transport
 
@@ -706,7 +718,12 @@ def run_live_benchmark(
             delay = 2.0
             for attempt in range(5):
                 try:
-                    return default_openai_transport(payload, timeout_s=60.0)
+                    return default_openai_transport(
+                        payload,
+                        timeout_s=120.0 if is_loopback else 60.0,
+                        base_url=resolved_base_url,
+                        api_key=str(api_key),
+                    )
                 except Exception as exc:
                     if "429" in str(exc) and attempt < 4:
                         time.sleep(delay)
@@ -718,7 +735,7 @@ def run_live_benchmark(
     for i, task in enumerate(tasks):
         print(f"  [{i+1}/{len(tasks)}] {task.id} ({task.category})...", end=" ", flush=True)
 
-        payload = build_task_payload(task, model)
+        payload = build_task_payload(task, effective_model)
         response_text = ""
         try:
             response = transport(payload)
@@ -780,7 +797,12 @@ def main():
     parser.add_argument(
         "--model",
         default="gpt-4o-mini",
-        help="OpenAI model ID for live mode (default gpt-4o-mini; must support response_format json_schema)",
+        help="Model ID for live mode (e.g. ollama/qwen3-coder:30b or gpt-4o-mini)",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Optional OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1 for ollama/*)",
     )
     parser.add_argument(
         "--output",
@@ -800,7 +822,7 @@ def main():
         scores, overall = run_offline_benchmark(tasks)
     else:
         print(f"Running LIVE benchmark against {args.model}...")
-        scores, overall = run_live_benchmark(tasks, model=args.model)
+        scores, overall = run_live_benchmark(tasks, model=args.model, base_url=args.base_url)
 
     # Print results
     print_results_table(scores, overall)

@@ -43,7 +43,18 @@ def transform_prompt_for_tool_mode(prompt):
     return transformed
 
 
-def probe(model, task_id, prompt, api_key, max_tokens, timeout_s, answer_mode="regex", tool_info=None):
+def probe(
+    model,
+    task_id,
+    prompt,
+    api_key,
+    max_tokens,
+    timeout_s,
+    answer_mode="regex",
+    tool_info=None,
+    base_url=None,
+    transport=None,
+):
     """Probe a task/model pair for refusal.
 
     Args:
@@ -52,10 +63,13 @@ def probe(model, task_id, prompt, api_key, max_tokens, timeout_s, answer_mode="r
         answer_mode: "regex" or "tool"
         tool_info: Dict {task_id: (token_set, correct_token)} for tool mode
     """
+    is_ollama = model.startswith("ollama/")
+    effective_model = model[len("ollama/"):] if is_ollama else model
+
     # Transform prompt if tool mode
     request_prompt = prompt
     body_dict = {
-        "model": model,
+        "model": effective_model,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": request_prompt}],
     }
@@ -65,24 +79,78 @@ def probe(model, task_id, prompt, api_key, max_tokens, timeout_s, answer_mode="r
         request_prompt = transform_prompt_for_tool_mode(prompt)
         token_set, _ = tool_info[task_id]
         body_dict["messages"][0]["content"] = request_prompt
-        body_dict["tools"] = [
-            {
-                "name": "submit_answer",
-                "description": "Submit the final answer",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "answer": {
-                            "type": "string",
-                            "enum": token_set,
-                            "description": "The final answer token"
-                        }
+        if is_ollama:
+            body_dict["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submit_answer",
+                        "description": "Submit the final answer",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "answer": {
+                                    "type": "string",
+                                    "enum": token_set,
+                                    "description": "The final answer token",
+                                }
+                            },
+                            "required": ["answer"],
+                        },
                     },
-                    "required": ["answer"]
                 }
+            ]
+            body_dict["tool_choice"] = {
+                "type": "function",
+                "function": {"name": "submit_answer"},
             }
-        ]
-        body_dict["tool_choice"] = {"type": "tool", "name": "submit_answer"}
+        else:
+            body_dict["tools"] = [
+                {
+                    "name": "submit_answer",
+                    "description": "Submit the final answer",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "answer": {
+                                "type": "string",
+                                "enum": token_set,
+                                "description": "The final answer token"
+                            }
+                        },
+                        "required": ["answer"]
+                    }
+                }
+            ]
+            body_dict["tool_choice"] = {"type": "tool", "name": "submit_answer"}
+
+    if is_ollama:
+        call_transport = transport
+        if call_transport is None:
+            from pathlib import Path
+
+            driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
+            if driver_dir not in sys.path:
+                sys.path.insert(0, driver_dir)
+            from openai_transport import default_openai_transport
+
+            call_transport = default_openai_transport
+        resolved_url = base_url or os.environ.get(
+            "AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
+        )
+        try:
+            out = call_transport(
+                body_dict,
+                timeout_s=timeout_s,
+                base_url=resolved_url,
+                api_key=str("ollama"),
+            )
+            choices = out.get("choices") or []
+            finish = choices[0].get("finish_reason") if choices else None
+            stop_reason = "refusal" if finish == "content_filter" else (finish or "stop")
+            return task_id, model, stop_reason, None
+        except Exception as e:
+            return task_id, model, None, str(e)[:120]
 
     body = json.dumps(body_dict).encode("utf-8")
     req = urllib.request.Request(API_URL, data=body, headers={
@@ -103,6 +171,7 @@ def main():
     ap.add_argument("--answer-mode", default="regex", choices=["regex", "tool"],
                     help="Answer mode: 'regex' (v4, default) or 'tool' (v5)")
     ap.add_argument("--models", default="claude-fable-5,claude-opus-5")
+    ap.add_argument("--base-url", default=None, help="Optional base URL for ollama/<model> runs")
     ap.add_argument("--tasks", default="", help="Comma-separated task-id prefixes to probe (default: all)")
     ap.add_argument("--tasks-file", default="bench/tasks_frontier.jsonl")
     ap.add_argument("--ground-truth-file", default="bench/ground_truth_frontier.jsonl")
@@ -111,8 +180,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=60.0)
     args = ap.parse_args()
 
-    api_key = os.environ.get("BENCH_API_KEY")
-    if not api_key:
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    api_key = os.environ.get("BENCH_API_KEY", "")
+    if any(not m.startswith("ollama/") for m in models) and not api_key:
         print("ERROR: BENCH_API_KEY not set - probe is API-only (no CLI fallback).", file=sys.stderr)
         sys.exit(2)
 
@@ -131,7 +201,6 @@ def main():
     if args.answer_mode == "tool" and audit_tasks:
         tool_info, _ = audit_tasks(args.tasks_file, args.ground_truth_file)
 
-    models = args.models.split(",")
     jobs = [(m, tid, prompt) for m in models for tid, prompt in tasks]
     print(f"Probing {len(tasks)} tasks x {len(models)} models = {len(jobs)} calls "
           f"(mode={args.answer_mode}, max_tokens={args.max_tokens})")
@@ -143,7 +212,7 @@ def main():
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = [ex.submit(probe, m, tid, prompt, api_key, args.max_tokens, args.timeout,
-                         args.answer_mode, tool_info)
+                         args.answer_mode, tool_info, args.base_url)
                 for m, tid, prompt in jobs]
         for fut in concurrent.futures.as_completed(futs):
             tid, model, stop_reason, err = fut.result()
