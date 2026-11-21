@@ -76,6 +76,21 @@ Anti-vacuity: a test is only accepted when breaking the production code in `chat
 
 With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the harness. If the config (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`) declares no `providers`, a built-in `ollama` provider (`http://127.0.0.1:11434/v1`, models `any`, local, 300 s idle timeout) is added and `ollama/qwen3-coder:30b` is selected. `AESOP_CHAT_BACKEND=pipe` restores the raw pipe backend. Each plain turn sends the prior completed turns (newest 20 messages or 24000 chars, `boundContext`); failed turns are not remembered. An unreachable provider shows `error: <p>: connect: cannot reach <p> at <origin> - is it running?` (also once at startup for the built-in default); non-2xx replies include the provider's own error message. `/models` also lists the ids a provider serves when its `models` is `any`. Tests: `tests/chat-ollama-default.test.mjs`.
 
+## `aesop ask` (one-shot, `chat/ask.mjs`)
+
+`aesop ask [--model <provider>/<model>] [--system <text>] [--json] [--timeout <s>] "<prompt>"`: `runAsk({argv, stdin, stdout, stderr, env, cwd})` returns the exit code. It reuses the harness (`loadRegistry`, `applyDefaultProvider`, `assertProviderAllowed`, `harnessSource`) and the chat config lookup (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`, else the built-in ollama default). No TTY needed; no history file, no conversation state. Piped (non-TTY) stdin is appended to the prompt as context; `--system` text is prepended to the one user message (the harness takes a single line). Plain mode writes only the answer to stdout (a final newline is added if missing); diagnostics go to stderr. `--json` writes one object `{ok, provider, model, text, elapsed_ms, error?}` to stdout (not streamed). `--timeout` is a total wall-clock cap in seconds (default 300).
+
+| Exit | Meaning |
+|------|---------|
+| 0 | ok |
+| 2 | usage (no prompt, unknown option, bad `--timeout`, unknown provider/model, no provider selected) |
+| 3 | provider unreachable (`cannot reach <p> at <origin> — is it running?` on stderr) |
+| 4 | provider or model error (HTTP error, auth, bad response, stream cut) |
+| 5 | timeout |
+| 6 | boundary refused (Anthropic host, Claude model id, `cli`/`claude` provider type); no request is sent |
+
+Failure classes come from the harness's `error: <provider>: <class>: <reason>` lines (connect=3, timeout=5, refused=6, else 4). Tests: `tests/chat-ask.test.mjs` (spawns the real CLI against a fake 127.0.0.1 server).
+
 ## Spec
 
 `chat/SPEC.md` is the durable improvement spec (R1..R24). `chat/SPEC.original.md` is its frozen original and never changes. `tests/chat-spec.test.mjs` has one `R<n>:` test per requirement.
