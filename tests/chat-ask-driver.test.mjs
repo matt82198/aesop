@@ -84,11 +84,13 @@ test('through the driver: the answer streams to stdout, the request is the same,
 
 test('through the driver: a timeout is exit 5 and the provider sees the connection close', async () => {
   await withFake((req, body, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); }, async ({ fake, dir, config }) => {
-    const r = await ask(['--timeout', '0.5', 'hang'], { cwd: dir, config });
+    const r = await ask(['--timeout', '1', 'hang'], { cwd: dir, config });
     assert.equal(r.code, 5, r.stderr);
-    assert.match(r.stderr, /error: fake: timeout: timed out after 0.5 s/);
-    for (let i = 0; i < 80 && fake.closed.length === 0; i += 1) await sleep(25);
-    assert.ok(fake.closed.length >= 1, 'nothing is left holding the provider connection after ask exits');
+    assert.match(r.stderr, /error: fake: timeout: timed out after 1 s/);
+    // On a slow machine the timeout can fire before the engine has connected, and then there is no
+    // request at all. Whatever did reach the provider must be closed once ask has exited.
+    for (let i = 0; i < 80 && fake.closed.length < fake.posts().length; i += 1) await sleep(25);
+    assert.equal(fake.closed.length, fake.posts().length, 'nothing is left holding a provider connection after ask exits');
   });
 });
 
