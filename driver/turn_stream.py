@@ -449,7 +449,9 @@ def stream_request(endpoint, headers, body, *, provider_id, base, timeout_ms=DEF
                         delta = parse_stream_line(tail, report_usage)
                         if delta is not DONE and delta != "":
                             emit(delta)
-            outcome.ok = True
+            # A cancel closes the socket. On Windows the blocked read then raises; on Linux it just
+            # returns end-of-stream, which looks like a finished reply. A cancelled turn is never ok.
+            outcome.ok = not cancel.cancelled
         except TurnFailure as failure:
             outcome.failure = failure
         except (OSError, http.client.HTTPException, ValueError) as exc:
