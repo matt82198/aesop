@@ -49,6 +49,7 @@ from turn_backend import (  # noqa: E402
     TurnProvider,
     TurnResult,
 )
+from turn_engine import EngineError, TurnEngine  # noqa: E402
 from turn_frames import FrameWriter  # noqa: E402
 from turn_gate import parse_url, refusal_for  # noqa: E402
 from turn_stream import CancelToken, StreamResult, run_stream_turn  # noqa: E402
@@ -349,18 +350,62 @@ def _serve(entry, default_model, stdin, stdout) -> int:
     def bad_request(reason, turn_id=None):
         writer.control(_event("notify", turn_id, text=f"error: driver: bad-request: {reason}"))
 
-    def run_one(request):
+    engine = TurnEngine()
+    default_registry = {"providers": {entry["id"]: entry["raw"]}, "routes": {}}
+
+    def run_messages(request):
+        """A turn given as explicit messages: one stateless request to the CLI's provider."""
         turn_id = request["id"]
-        token = request["token"]
         result = run_stream_turn(
-            entry, request["model"], request["messages"], cancel=token, on_delta=writer.data,
+            entry, request["model"], request["messages"], cancel=request["token"], on_delta=writer.data,
             notify=lambda text: writer.control(_event("notify", turn_id, text=text)),
         )
         if result.usage is not None:
             writer.control(_event("usage", turn_id, usage=result.usage))
         writer.control(_done_message(result, turn_id))
-        with tokens_lock:
-            tokens.pop(turn_id, None)
+
+    def run_line(request):
+        """A turn given as a line: the routed engine, with this session's context and breaker state."""
+        turn_id = request["id"]
+        raw = request["raw"]
+        registry = raw.get("registry") if isinstance(raw.get("registry"), dict) else default_registry
+        selection = raw.get("selection") if isinstance(raw.get("selection"), dict) else {"provider": entry["id"], "model": request["model"]}
+        env = None
+        if isinstance(raw.get("keys"), dict):
+            # Keys travel on stdin with the turn, never on the command line or in the child's environment.
+            env = {str(name): str(value) for name, value in raw["keys"].items()}
+        now = raw.get("now") if isinstance(raw.get("now"), (int, float)) and not isinstance(raw.get("now"), bool) else None
+        try:
+            result = engine.run_turn(
+                registry, selection, request["line"], task=raw.get("task") if isinstance(raw.get("task"), str) else "chat",
+                cancel=request["token"], on_delta=writer.data, now=now, env=env,
+                notify=lambda text: writer.control(_event("notify", turn_id, text=text)),
+                flash=lambda text: writer.control(_event("flash", turn_id, text=text)),
+                usage=lambda report: writer.control(_event("usage", turn_id, usage=report)),
+            )
+        except EngineError as exc:
+            # The turn could not start; the adapter raises this text the way the harness throws it.
+            writer.control({"type": "done", "id": turn_id, "ok": False, "exit": EXIT_USAGE, "thrown": str(exc), "error": str(exc)})
+            return
+        done = {
+            "type": "done", "id": turn_id, "ok": result.ok, "exit": result.exit_code,
+            "provider": result.provider, "model": result.model, "text": result.text, "elapsed_ms": result.elapsed_ms,
+        }
+        if not result.ok:
+            done["error"] = result.error or "unknown error"
+        if result.cancelled:
+            done["cancelled"] = True
+        writer.control(done)
+
+    def run_one(request):
+        try:
+            if "messages" in request:
+                run_messages(request)
+            else:
+                run_line(request)
+        finally:
+            with tokens_lock:
+                tokens.pop(request["id"], None)
 
     def worker():
         while True:
@@ -371,6 +416,7 @@ def _serve(entry, default_model, stdin, stdout) -> int:
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    graceful = False
     for request in _read_requests(stdin):
         if not isinstance(request, dict):
             bad_request("a request is one JSON object per line")
@@ -378,6 +424,7 @@ def _serve(entry, default_model, stdin, stdout) -> int:
         op = request.get("op")
         turn_id = request.get("id")
         if op == "shutdown":
+            graceful = True
             break
         if op == "cancel":
             with tokens_lock:
@@ -389,21 +436,30 @@ def _serve(entry, default_model, stdin, stdout) -> int:
             bad_request("unknown op", turn_id)
             continue
         messages = request.get("messages")
-        if messages is None and isinstance(request.get("line"), str):
-            messages = [{"role": "user", "content": request["line"]}]
-        if not isinstance(messages, list) or not messages:
+        line = request.get("line")
+        if messages is not None and (not isinstance(messages, list) or not messages):
+            bad_request("messages must be a non-empty list", turn_id)
+            continue
+        if messages is None and not isinstance(line, str):
             bad_request("a turn needs a line or a messages list", turn_id)
             continue
         _, model = _split_model_spec(request.get("model") if isinstance(request.get("model"), str) else None)
         token = CancelToken()
         with tokens_lock:
             tokens[turn_id] = token
-        pending.put({"id": turn_id, "token": token, "model": model or default_model, "messages": messages})
-    # End of input: cancel whatever is running or queued, then close the stream.
-    with tokens_lock:
-        live = list(tokens.values())
-    for token in live:
-        token.cancel()
+        job = {"id": turn_id, "token": token, "model": model or default_model, "raw": request}
+        if messages is not None:
+            job["messages"] = messages
+        else:
+            job["line"] = line
+        pending.put(job)
+    # `shutdown` lets queued turns finish. End of input (the parent went away) cancels whatever is
+    # running or queued. Either way the stream then closes with `E 0`.
+    if not graceful:
+        with tokens_lock:
+            live = list(tokens.values())
+        for token in live:
+            token.cancel()
     pending.put(None)
     thread.join()
     writer.end(EXIT_OK)

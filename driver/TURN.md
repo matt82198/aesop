@@ -61,9 +61,26 @@ E <exit>
 
 Requests are one JSON object per stdin line:
 
-- `{"op":"turn","id":<id>,"line":"text"}` or `{"op":"turn","id":<id>,"messages":[...]}`, optional `"model"`.
+- `{"op":"turn","id":<id>,"line":"text"}`: a routed turn through the session's engine (next section). Optional fields: `task` (default `chat`), `selection` `{"provider","model"}`, `registry`, `keys`, `now`, `model`.
+- `{"op":"turn","id":<id>,"messages":[...]}`: one stateless request with exactly these messages to the provider the child was started with. No context, no routing.
 - `{"op":"cancel","id":<id>}` closes that turn's socket; the turn ends with `cancelled` and the session keeps serving.
-- `{"op":"shutdown"}` or end of stdin cancels the turn in flight and ends the stream with `E 0`.
+- `{"op":"shutdown"}` lets queued turns finish, then ends the stream with `E 0`. End of stdin (the parent went away) cancels the turn in flight and any queued turns, then ends the stream with `E 0`.
+
+## The routed engine (P5, `turn_engine.py`)
+
+`TurnEngine.run_turn` is a port of the turn loop in `chat/harness.mjs`. One engine lives for a `--serve` session and holds what a session needs: the conversation, a circuit breaker and a latency average per provider, and the sticky Ollama window.
+
+- `registry` is data: `{"providers": {id: raw}, "routes": {task: {"target", "candidates", "fallback", "fallbackOn", "strategy"}}}` with targets already resolved to `{"provider","model"}`. The chat adapter sends it with every turn, so the engine acts on the registry as it is now. Without it the engine uses the one provider the child was started with.
+- `keys` is `{ENV_NAME: value}` for the key variables providers name in `api_key_env`. Keys travel on stdin with the turn, never on the command line. When `keys` is absent the child's own environment is read.
+- `now` (milliseconds) pins the clock for the turn; only tests send it.
+- Candidates: a `chat` turn starts from the selection; any other task starts from its route's `target`. `candidates` replaces the list; otherwise it is the primary plus `fallback`. `strategy` `cheapest` orders by `cost_per_mtok` (local is 0), `fastest` by the first-delta latency average; ties keep config order. Each candidate is tried at most once per turn.
+- Fallback: only `connect`, `timeout`, `rate-limit` and `server` failures fall back, unless the route says `fallbackOn: "any"`. A failure after the first delta never re-sends (`stream interrupted from <provider>`). A cancel never falls back.
+- Breaker: 3 consecutive retryable failures open a provider's breaker for 30 s; the skip is announced once as a `flash` event.
+- Context: completed `chat` turns are remembered; each chat turn sends the newest 20 messages or 24000 characters, never splitting a message, always starting on a user message. Failed and task-route turns are not remembered.
+- Events per turn: `notify` (system lines), `flash` (one-frame notices), `usage` (`{provider,total,prompt,completion,cost}`; local cost is 0, `cost_per_mtok` `{input,output}` prices the rest, otherwise `cost` is null).
+- A turn that cannot start (no provider selected, a route with no target) ends with a `done` frame carrying `"thrown": "<message>"`; the chat adapter raises that message, as the harness throws it.
+
+Parity with the harness is tested, not assumed: `tests/chat-driver-parity.test.mjs` runs the same scripted turns through `harnessSource` and through `chat/driver_source.mjs` and compares every delta, system line, usage report, thrown error and request.
 
 The session is ONE frames stream; every control frame of a turn carries its `id`, and a turn's `done` frame carries that turn's exit code. Turns run one at a time, in order. A line that is not a JSON object, or an unknown op, gets one `error: driver: bad-request: <reason>` notify event and the session continues.
 
