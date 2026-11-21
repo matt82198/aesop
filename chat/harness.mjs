@@ -30,6 +30,10 @@ export class ProviderRefused extends Error {
 }
 
 const REFUSED_TYPES = new Set(['cli', 'exec', 'claude', 'anthropic']);
+// A model id names Claude or Anthropic when "claude" or "anthropic" is a whole token anywhere in it, bounded by
+// start, end, whitespace, or one of / : . _ -. So gateway ids (openrouter/anthropic/..., us.anthropic.claude-3)
+// are refused, while words that merely start with the letters (claudette-7b) are not.
+const CLAUDE_MODEL_TOKEN = /(?:^|[\s/:._-])(?:claude|anthropic)(?=$|[\s/:._-])/i;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const DONE = Symbol('done');
 // Keys a provider entry may carry; any other key gets a NOTICE by name (spec H-R7, H-R24).
@@ -66,7 +70,7 @@ export function assertProviderAllowed(provider, model) {
   if (REFUSED_TYPES.has(type)) {
     throw new ProviderRefused(id, `provider type "${type}" is command-style or Anthropic`);
   }
-  if (model !== undefined && type !== 'orchestrator' && /^(claude|anthropic\/)/i.test(String(model))) {
+  if (model !== undefined && type !== 'orchestrator' && CLAUDE_MODEL_TOKEN.test(String(model).trim())) {
     throw new ProviderRefused(id, `model "${model}" resolves to Claude`);
   }
   let url;
