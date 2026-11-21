@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Peer push sweep: push committed codex/* and agy/* worktree branches to origin.
 
+INDEX: Pushes one unpushed codex/agy worktree branch per watchdog cycle via a locked detached worker.
+
 Why: Codex and agy lanes commit to their worktree branches but never push. The sweep runs
 once per watchdog cycle (daemons/run-watchdog.sh) and pushes at most ONE unpushed branch per
 cycle, oldest first. The push runs in a detached worker that holds a lock file, so the
