@@ -57,6 +57,7 @@ function saveHistory(file, history) {
 }
 import { resolveColor, resolveUnicode } from './render.mjs';
 import { Session, pipeSource } from './session.mjs';
+import { selectBackend } from './backends/orchestrator_source.mjs';
 
 const HELP_TEXT = [
   'aesop chat - interactive chat TUI (needs a terminal on stdin and stdout)',
@@ -108,7 +109,7 @@ export async function runChat({
   stdout = process.stdout,
   stderr = process.stderr,
   env = process.env,
-  source = pipeSource,
+  source = selectBackend(env) ?? pipeSource,
 } = {}) {
   if (argv.includes('--help') || argv.includes('-h')) {
     stdout.write(`${HELP_TEXT}\n`);
