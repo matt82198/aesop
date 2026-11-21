@@ -454,6 +454,39 @@ test('H-R21: ctrl-c aborts the in-flight request, shows cancelled, no fallback',
   } finally { await A.close(); await B.close(); }
 });
 
+test('ctrl-c cancels the active stream and preserves a queued turn', async () => {
+  let firstResponse;
+  let startFirst;
+  const firstStarted = new Promise((resolve) => { startFirst = resolve; });
+  const server = await startFake((req, body, res) => {
+    if (body.messages.at(-1).content === 'first') {
+      firstResponse = res;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"choices":[{"delta":{"content":"first chunk"}}]}\n\n');
+      startFirst();
+    } else {
+      sse(res, ['second completed']);
+    }
+  });
+  const chat = await startChat({ config: { providers: { local: prov(server.url) }, default: 'local/m' } });
+  try {
+    await chat.submit('first', 0);
+    await Promise.race([firstStarted, sleep(2000)]);
+    assert.ok(firstResponse, 'the first request started');
+    await chat.submit('second', 0);
+    chat.ctrlC();
+    const deadline = Date.now() + 2000;
+    while (!chat.lastFrame().includes('second completed') && Date.now() < deadline) await sleep(10);
+    assert.match(chat.lastFrame(), /cancelled: local request aborted/, 'Ctrl-C must cancel the active request');
+    assert.match(chat.lastFrame(), /second completed/, 'the queued request must still complete');
+    assert.deepEqual(server.posts().map(({ body }) => body.messages.at(-1).content), ['first', 'second']);
+  } finally {
+    firstResponse?.end();
+    await chat.submit('/exit', 0);
+    await server.close();
+  }
+});
+
 test('H-R22: tokens from usage or chars/4 estimate marked ~; local cost 0', async () => {
   let withUsage = true;
   const A = await startFake((q, b, res) => sse(res, ['abcdefgh'], withUsage ? { usage: { prompt_tokens: 11, completion_tokens: 7 } } : {}));
