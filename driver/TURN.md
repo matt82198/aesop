@@ -90,6 +90,12 @@ The session is ONE frames stream; every control frame of a turn carries its `id`
 - The idle timeout is the provider's `timeout_ms` (default 60000; the built-in local provider uses 300000). It bounds the connect, the wait for the response head and each wait for more body bytes.
 - A key is read only from the env var named by `api_key_env`; a keyed provider with the variable unset and `is_local` not true is `no-key` and sends nothing.
 - A parent that must stop the child at once uses `proc_util.kill_process_tree`; the provider then sees the connection close.
+- A refused connect to a loopback host is reported at once. Windows re-sends the SYN to a closed port for about 2 s before it reports the refusal; for loopback hosts the driver turns that off (`SIO_TCP_INITIAL_RTO`, best effort, as Node does), so "is it running?" does not take seconds. Measured on this box: 2030 ms before, 0 ms after. <!-- metrics-verified: tests/test_turn_stream.py test_a_refused_loopback_connect_is_reported_at_once asserts under 1 s; the two figures are one local run of a socket connect to a closed 127.0.0.1 port -->
+
+## Callers
+
+- `aesop chat` with `AESOP_CHAT_BACKEND=driver` (P5): `chat/driver_source.mjs`, one `--serve` child per session.
+- `aesop ask` (P6): `chat/ask.mjs` uses the same adapter for its one turn and ends the child before it returns. Its arguments, selection and exit codes did not change; `AESOP_ASK_BACKEND=harness` keeps the in-process Node harness as a way back.
 
 ## Ollama context window (P3, `turn_context.py`, finding f-db2dd2fa)
 

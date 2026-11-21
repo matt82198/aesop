@@ -92,7 +92,9 @@ With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the 
 
 ## `aesop ask` (one-shot, `chat/ask.mjs`)
 
-`aesop ask [--model <provider>/<model>] [--system <text>] [--json] [--timeout <s>] "<prompt>"`: `runAsk({argv, stdin, stdout, stderr, env, cwd})` returns the exit code. It reuses the harness (`loadRegistry`, `applyDefaultProvider`, `assertProviderAllowed`, `harnessSource`) and the chat config lookup (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`, else the built-in ollama default). No TTY needed; no history file, no conversation state. Piped (non-TTY) stdin is appended to the prompt as context; `--system` text is prepended to the one user message (the harness takes a single line). Plain mode writes only the answer to stdout (a final newline is added if missing); diagnostics go to stderr. `--json` writes one object `{ok, provider, model, text, elapsed_ms, error?}` to stdout (not streamed). `--timeout` is a total wall-clock cap in seconds (default 300).
+`aesop ask [--model <provider>/<model>] [--system <text>] [--json] [--timeout <s>] "<prompt>"`: `runAsk({argv, stdin, stdout, stderr, env, cwd})` returns the exit code. It reuses the registry code (`loadRegistry`, `applyDefaultProvider`, `assertProviderAllowed`, `resolveSelection`) and the chat config lookup (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`, else the built-in ollama default). No TTY needed; no history file, no conversation state. Piped (non-TTY) stdin is appended to the prompt as context; `--system` text is prepended to the one user message (the harness takes a single line). Plain mode writes only the answer to stdout (a final newline is added if missing); diagnostics go to stderr. `--json` writes one object `{ok, provider, model, text, elapsed_ms, error?}` to stdout (not streamed). `--timeout` is a total wall-clock cap in seconds (default 300).
+
+**The ask turn runs in the driver (spec H-R26)**: `chat/ask.mjs` hands its one turn to `driverSource` (the driver child, `driver/turn.py --serve`) and ends the child before it returns. Arguments, selection and exit codes did not change. `AESOP_ASK_BACKEND=harness` keeps the in-process `harnessSource` as a way back; any other value is exit 2. With no usable Python the turn is `error: driver: connect: cannot start the turn engine` (exit 3).
 
 | Exit | Meaning |
 |------|---------|
@@ -103,7 +105,7 @@ With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the 
 | 5 | timeout |
 | 6 | boundary refused (Anthropic host, Claude model id, `cli`/`claude` provider type); no request is sent |
 
-Failure classes come from the harness's `error: <provider>: <class>: <reason>` lines (connect=3, timeout=5, refused=6, else 4). Tests: `tests/chat-ask.test.mjs` (spawns the real CLI against a fake 127.0.0.1 server).
+Failure classes come from the engine's `error: <provider>: <class>: <reason>` lines (connect=3, timeout=5, refused=6, else 4). Tests: `tests/chat-ask.test.mjs` (spawns the real CLI against a fake 127.0.0.1 server; unchanged by the move to the driver) and `tests/chat-ask-driver.test.mjs` (the turn goes through the driver, the flag, no process left behind).
 
 ## Spec
 

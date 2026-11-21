@@ -230,6 +230,20 @@ class FailureClassTests(unittest.TestCase):
         self.assertIn("is it running? (ECONNREFUSED)", lines[0])
         self.assertEqual((result.exit_code, deltas), (3, []))
 
+    def test_a_refused_loopback_connect_is_reported_at_once(self):
+        # Windows retransmits the SYN to a closed loopback port for about 2 s before it reports the
+        # refusal; the Node harness answers in milliseconds. "Is it running?" must not take seconds.
+        import time
+        for host in ("127.0.0.1", "localhost"):
+            with self.subTest(host=host):
+                url = f"http://{host}:{closed_port()}/v1"
+                started = time.monotonic()
+                result, _, lines = run_turn(entry_for(url))
+                elapsed = time.monotonic() - started
+                self.assertEqual(result.exit_code, 3, lines)
+                self.assertIn("(ECONNREFUSED)", lines[0])
+                self.assertLess(elapsed, 1.0, f"a refused connect to {host} took {elapsed:.2f} s")
+
     def test_a_hang_past_the_idle_timeout_is_timeout_exit_5(self):
         release = threading.Event()
 

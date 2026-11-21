@@ -1,8 +1,11 @@
-// `aesop ask`: one-shot, non-interactive prompt to a local open-weight model. Reuses the chat harness
-// (registry, provider gate, streaming); holds no conversation state and writes no history file.
+// `aesop ask`: one-shot, non-interactive prompt to a local open-weight model. The registry, selection and
+// provider gate are the chat's (chat/harness.mjs); the turn itself runs in the aesop turn engine, the driver
+// child (chat/driver_source.mjs -> driver/turn.py --serve, spec H-R26). It holds no conversation state and
+// writes no history file.
 // Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider/model error, 5 timeout, 6 boundary refused.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { driverSource } from './driver_source.mjs';
 import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistry, ProviderRefused, resolveSelection } from './harness.mjs';
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
@@ -77,6 +80,14 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     stderr.write(`aesop ask: ${args.error}\n${USAGE}\n`);
     return EXIT.USAGE;
   }
+  // The turn runs in the aesop turn engine (the driver child). AESOP_ASK_BACKEND=harness keeps the
+  // in-process Node harness as a way back; any other value is a usage error, never a silent default.
+  const backendFlag = env.AESOP_ASK_BACKEND;
+  if (backendFlag !== undefined && backendFlag !== '' && backendFlag !== 'driver' && backendFlag !== 'harness') {
+    stderr.write(`aesop ask: AESOP_ASK_BACKEND: unknown value "${backendFlag}" (use driver or harness)\n`);
+    return EXIT.USAGE;
+  }
+  const makeSource = backendFlag === 'harness' ? harnessSource : driverSource;
 
   let configPath = env.AESOP_CHAT_CONFIG;
   if (!configPath) {
@@ -132,7 +143,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     if (/^warning: /.test(text)) stderr.write(`${text}\n`);
     else failures.push(text);
   };
-  const source = harnessSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
+  const source = makeSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
 
   let text = '';
   try {
@@ -143,6 +154,9 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   } catch (err) {
     clearTimeout(timer);
     return finish(EXIT.PROVIDER, { provider, model, text, error: `error: ${provider}: ${err && err.message ? err.message : err}` });
+  } finally {
+    // One ask, one turn: end the driver child now so nothing outlives this process.
+    source.close?.();
   }
   clearTimeout(timer);
 

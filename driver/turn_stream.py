@@ -280,9 +280,61 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, (socket.timeout, TimeoutError))
 
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+# WSAIoctl code SIO_TCP_INITIAL_RTO and a TCP_INITIAL_RTO_PARAMETERS value that turns SYN
+# retransmission off (both fields TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS; one pad byte).
+_SIO_TCP_INITIAL_RTO = 0x98000011
+_NO_SYN_RETRANSMIT = b"\xfe\xff\xfe\x00"
+
+
+def _no_syn_retransmissions(sock) -> None:
+    """Windows only, best effort: make a refused loopback connect fail at once.
+
+    Windows re-sends the SYN to a closed port for about 2 s before reporting the
+    refusal. Node (libuv) turns that off for loopback, so the harness says "is it
+    running?" in milliseconds; this does the same for the driver. Any failure
+    here is ignored: the connect then just takes the slow path.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        returned = ctypes.c_ulong(0)
+        ctypes.windll.ws2_32.WSAIoctl(
+            ctypes.c_size_t(sock.fileno()), _SIO_TCP_INITIAL_RTO, _NO_SYN_RETRANSMIT, len(_NO_SYN_RETRANSMIT),
+            None, 0, ctypes.byref(returned), None, None,
+        )
+    except (ImportError, AttributeError, OSError, ValueError):
+        pass
+
+
+class _LoopbackConnection(http.client.HTTPConnection):
+    """An HTTPConnection to a loopback host whose refused connect is reported at once on Windows."""
+
+    def connect(self):
+        last_error = None
+        for family, kind, proto, _, address in socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM):
+            sock = None
+            try:
+                sock = socket.socket(family, kind, proto)
+                sock.settimeout(self.timeout)
+                _no_syn_retransmissions(sock)
+                sock.connect(address)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.sock = sock
+                return
+            except OSError as exc:
+                last_error = exc
+                if sock is not None:
+                    sock.close()
+        raise last_error if last_error is not None else OSError("no address for the loopback host")
+
+
 def _default_connect(scheme: str, host: str, port: Optional[int], timeout_s: float):
     if scheme == "https":
         return http.client.HTTPSConnection(host, port, timeout=timeout_s)
+    if host in _LOOPBACK_HOSTS:
+        return _LoopbackConnection(host, port, timeout=timeout_s)
     return http.client.HTTPConnection(host, port, timeout=timeout_s)
 
 
