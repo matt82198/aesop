@@ -34,16 +34,36 @@ function loadHistory(file) {
     return [];
   }
 }
-// Atomic save: the whole history is written to a temp file beside the target, then renamed over it,
-// so a failed write never leaves the existing file truncated or half-written. A failure never ends
-// the session; it returns a short reason (the error code) that the caller shows in the chat, or
-// null on success.
-function saveHistory(file, history) {
+// Read used only by the save merge. ENOENT (no file yet) and malformed JSON count as empty history.
+// Any other read error (EBUSY, EPERM, EACCES, EISDIR, ...) is rethrown so the save refuses to write:
+// an empty merge would otherwise rename a one-line file over the whole existing history.
+function readHistoryForSave(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw err;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter((l) => typeof l === 'string').slice(-HISTORY_FILE_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+// Atomic save: the line is merged into the file as it is now on disk (re-read here, so a second
+// instance's lines survive), written to a temp file beside the target, then renamed over it. A failed
+// write never leaves the existing file truncated or half-written. A failure never ends the session;
+// it returns a short reason (the error code) that the caller shows in the chat, or null on success.
+function saveHistory(file, line) {
   if (!file) return null;
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(tmp, `${JSON.stringify(history.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
+    const merged = readHistoryForSave(file);
+    if (merged[merged.length - 1] !== line) merged.push(line);
+    writeFileSync(tmp, `${JSON.stringify(merged.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
     renameSync(tmp, file);
     return null;
   } catch (err) {
@@ -55,7 +75,7 @@ function saveHistory(file, history) {
     return (err && err.code) || 'unknown error';
   }
 }
-import { resolveColor, resolveUnicode } from './render.mjs';
+import { displayWidth, resolveColor, resolveUnicode } from './render.mjs';
 import { Session, pipeSource } from './session.mjs';
 
 const HELP_TEXT = [
@@ -79,6 +99,12 @@ const HELP_TEXT = [
 // never wiped (no ESC[2J, no ESC[H).
 const CURSOR_UP = (n) => `\x1b[${n}A`;
 const CLEAR_TO_END = '\x1b[J';
+const SGR_PATTERN = /\x1b\[[0-9;]*m/g;
+// Physical terminal rows that logical lines occupy at `columns`: a line wider than the terminal
+// wraps onto extra rows, and an empty line still takes one.
+function physicalRows(lines, columns) {
+  return lines.reduce((n, l) => n + Math.max(1, Math.ceil(displayWidth(l) / columns)), 0);
+}
 // Bracketed paste mode: the terminal wraps pasted text in ESC[200~ / ESC[201~.
 const PASTE_ON = '\x1b[?2004h';
 const PASTE_OFF = '\x1b[?2004l';
@@ -142,8 +168,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   // Unset (or empty) AESOP_CHAT_HISTORY falls back to ~/.aesop/chat-history.json.
   const historyFile = env.AESOP_CHAT_HISTORY || join(os.homedir(), '.aesop', 'chat-history.json');
   const history = loadHistory(historyFile);
-  // Number of terminal lines the last frame drew; the next frame moves back over them.
-  let drawnLines = 0;
+  // Plain text of the lines the last frame drew. After a resize the terminal reflows those lines
+  // at the new width, so the next frame moves back over the physical rows they now occupy.
+  let drawnPlain = [];
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
@@ -151,8 +178,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     unicode: resolveUnicode({ env }),
     status: { cwd: process.cwd() },
     onFrame: (frame) => {
-      const up = drawnLines > 1 ? CURSOR_UP(drawnLines - 1) : '';
-      drawnLines = frame.split('\n').length;
+      const rows = physicalRows(drawnPlain, stdout.columns || 80);
+      const up = rows > 1 ? CURSOR_UP(rows - 1) : '';
+      drawnPlain = frame.split('\n').map((l) => l.replace(SGR_PATTERN, ''));
       stdout.write(`\r${up}${CLEAR_TO_END}${frame}`);
     },
   });
@@ -205,9 +233,10 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
 
     const submit = (line) => {
       let notice = null;
+      // Consecutive duplicates store one entry, matching the reducer.
       if (line.trim() !== '') {
-        history.push(line);
-        const failure = saveHistory(historyFile, history);
+        if (history[history.length - 1] !== line) history.push(line);
+        const failure = saveHistory(historyFile, line);
         if (failure) notice = `history not saved: ${failure}`;
       }
       chain = chain.then(async () => {
@@ -252,7 +281,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     };
 
     const handleKey = (str, key) => {
-      const result = applyKey(input, toKey(str, key));
+      const result = applyKey(input, { ...toKey(str, key), now: Date.now() });
       input = result.state;
       const effect = result.effect;
       if (effect && effect.type === 'quit') {
@@ -266,6 +295,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         session.setInput(input);
         submit(effect.line);
         return;
+      } else if (session.state.hint) {
+        // Any key other than ctrl-c retires the quit hint.
+        session.setHint(null);
       }
       session.setInput(input);
     };

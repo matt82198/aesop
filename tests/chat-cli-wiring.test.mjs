@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -450,6 +452,55 @@ test('chat_history_failed_write_leaves_existing_file_untouched', async () => {
       readFileSync(historyFile, 'utf8'),
       original,
       'a failed history write must never corrupt or partially replace the existing history file',
+    );
+  } finally {
+    safeRm(dir);
+  }
+});
+
+// Makes reads of one history file throw EBUSY after the first read (the startup load), so only the
+// save-time re-read fails. Writes and renames are untouched. Returns a restore function.
+function failHistoryReadsAfterStartup(historyFile) {
+  const original = fs.readFileSync;
+  let reads = 0;
+  fs.readFileSync = function patchedReadFileSync(path, ...rest) {
+    if (String(path) === historyFile && ++reads > 1) {
+      const err = new Error('EBUSY: resource busy or locked, read');
+      err.code = 'EBUSY';
+      throw err;
+    }
+    return original.call(this, path, ...rest);
+  };
+  syncBuiltinESMExports();
+  return () => {
+    fs.readFileSync = original;
+    syncBuiltinESMExports();
+  };
+}
+
+test('chat_history_save_read_error_never_shrinks_existing_history', async () => {
+  const dir = freshTempDir();
+  try {
+    const historyFile = join(dir, 'chat-history.json');
+    const seeded = Array.from({ length: 5 }, (_, i) => `old line ${i + 1}`);
+    const original = `${JSON.stringify(seeded, null, 2)}\n`;
+    writeFileSync(historyFile, original, 'utf8');
+    const restore = failHistoryReadsAfterStartup(historyFile);
+    let io;
+    let done;
+    try {
+      ({ io, done } = await startChatAndSubmit(historyFile, 'fresh line'));
+      const shown = await waitUntil(() => /history not saved: EBUSY/.test(io.text()));
+      assert.ok(shown, `a transient read error during save must show "history not saved: EBUSY"; last output: ${io.text().slice(-300)}`);
+    } finally {
+      restore();
+      io.stdin.write('\x03\x03');
+    }
+    assert.equal(await resolvesWithin(done), 0, 'ctrl-c twice must still exit 0 after a refused history save');
+    assert.equal(
+      readFileSync(historyFile, 'utf8'),
+      original,
+      'a save whose re-read failed must leave the existing history untouched, never shrink it to the new line',
     );
   } finally {
     safeRm(dir);
