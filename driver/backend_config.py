@@ -354,10 +354,12 @@ def validate_api_key_env(name, where: str = "backend") -> None:
                 f"like a non-LLM secret ('{fragment}'); refusing to send "
                 f"it as a Bearer token to a configured endpoint"
             )
+    # The env var name is deliberately NOT logged (CodeQL clear-text logging):
+    # `where` identifies which config entry to review.
     print(
-        f"NOTICE: {where} api_key_env '{name}' is not a known LLM-provider "
+        f"NOTICE: {where} api_key_env is not a known LLM-provider "
         f"key env var; its value WILL be sent as a Bearer token to the "
-        f"configured base_url. If '{name}' holds anything other than an LLM "
+        f"configured base_url. If it holds anything other than an LLM "
         f"API key (master/encryption/signing/deploy material), this config "
         f"exfiltrates it -- verify before running live.",
         file=sys.stderr,
