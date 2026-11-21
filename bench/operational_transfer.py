@@ -36,6 +36,7 @@ def main():
     mode.add_argument("--v1", action="store_true", help="Replay the first rubric and its three original cases")
     mode.add_argument("--compact", action="store_true", help="Compare baseline, revised and compact rules on regression and holdout cases")
     mode.add_argument("--baseline-model", metavar="OLLAMA_TAG", help="Run one unassisted local model on the full tier comparison corpus")
+    mode.add_argument("--terminal-model", metavar="OLLAMA_TAG", help="Compare identical terminal evidence with and without the frozen refutation rule")
     parser.add_argument("--shared-corpus", action="store_true", help="Use the historical findings shared with the archived model scorecards")
     args = parser.parse_args()
     if args.shared_corpus and not args.baseline_model:
@@ -51,14 +52,18 @@ def main():
         cases.extend(json.loads((HERE / "fixtures/operational-transfer-holdout.json").read_text(encoding="utf-8")))
     if args.compact:
         rules["compact"] = (HERE / "fixtures/operational-triage-compact.md").read_text(encoding="utf-8")
-    model = args.baseline_model or MODEL
+    model = args.terminal_model or args.baseline_model or MODEL
+    if args.terminal_model:
+        cases = json.loads((HERE / "fixtures" / "operational-terminal-transfer.json").read_text(encoding="utf-8"))
+        rules["candidate"] = (HERE / "fixtures" / "operational-refutation.md").read_text(encoding="utf-8")
     if args.baseline_model:
         cases.extend(json.loads((HERE / "fixtures/operational-tier-corpus.json").read_text(encoding="utf-8")))
     if args.shared_corpus:
         cases = shared_cases()
     for index, case in enumerate(cases):
-        item = CorpusItem(case["id"], case["finding_text"], case["source_lens"], "", "", "")
-        pack = build_finding_context_pack(item, str(ROOT), str(ROOT))
+        item = CorpusItem(case["id"], case["finding_text"], case.get("source_lens", "terminal_review"),
+                          "", "", "", evidence=case.get("evidence", []))
+        pack = build_finding_context_pack(item, str(ROOT), str(ROOT), enriched=bool(args.terminal_model))
         arms = ("baseline", "candidate") if index % 2 == 0 else ("candidate", "baseline")
         if args.compact:
             ordered = tuple(rules)

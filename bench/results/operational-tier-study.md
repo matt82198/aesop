@@ -93,6 +93,12 @@ The current pilots used author-written rubrics. They did not test a worker disti
 
 ## Reproduction
 
+### Terminal evidence transfer protocol
+
+Freeze six terminal findings, two each for defects, refuted claims and proposed capabilities. The six findings are new to this local comparison. The author knew the terminal observations and historical changes when writing the briefs and labels. The proposed capabilities are retrospective requests. This is a transfer pilot on a new subsystem, with one author and two examples per class.
+
+Run all three installed models once per case and arm, alternating arm order by case. Both arms receive the same two observations. Only the candidate arm receives the frozen instruction in `bench/fixtures/operational-refutation.md`, written from the preceding infrastructure replay. No case ID, expected label or source revision is given to the model. Exact verdict agreement is the primary endpoint. Count a schema or transport failure as incorrect and report it separately. Compare paired gains, losses and unchanged decisions per model. A candidate qualifies for further testing on a model only with at least one gain and zero baseline-correct cases lost. A tie provides no evidence for adding instructions. Preserve all runs and postpone production decisions.
+
 From the repository root, `python -B bench/operational_transfer.py --baseline-model qwen2.5-coder:14b` replays the sixteen-case set. Append `--shared-corpus` for the July findings and substitute either other Ollama tag for the other local runs. The worker receives the finding text and source lens. Expected labels and commit references are attached to the recorded output after inference.
 
 `python -B bench/tier_scorecard.py` checks the recorded cell counts and prints model totals and disagreements without making model calls. The inputs are the four `seam-*.jsonl` checkpoints, the dated shadow scorecards, and the local `operational-tier-*.jsonl` and `operational-shared-*.jsonl` files alongside this report.
