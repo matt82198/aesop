@@ -15,6 +15,7 @@ import { INPUT_PREFIX } from './render.mjs';
 export const SLASH_COMMANDS = ['help', 'model', 'models', 'auth', 'detect', 'clear', 'exit', 'quit'];
 
 const HISTORY_LIMIT = 500;
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 /**
  * Idle window (ms) after which an open paste is treated as stuck. A real paste delivers its bytes in
@@ -58,7 +59,14 @@ function tabSpaces(buf, cursor) {
   return ' '.repeat(8 - (column % 8));
 }
 
+function endOfGrapheme(buffer, index) {
+  const { index: start, segment } = graphemes.segment(buffer).containing(index);
+  return start + segment.length;
+}
+
 function withBuffer(s, buffer, cursor) {
+  // Editing in the middle can join characters on either side into a single glyph.
+  if (cursor > 0 && cursor < buffer.length) cursor = endOfGrapheme(buffer, cursor - 1);
   return { ...s, inputBuffer: buffer, cursor };
 }
 
@@ -149,15 +157,18 @@ export function applyKey(state, key = {}) {
   if (key.ctrl && name === 'd' && buf === '') return { state: s, effect: { type: 'quit' } };
 
   if (name === 'return' || name === 'enter') return onEnter(s);
-  if (name === 'backspace') {
+  if (name === 'backspace' || name === 'left') {
     if (cursor === 0) return { state: s, effect: null };
-    return { state: withBuffer(s, buf.slice(0, cursor - 1) + buf.slice(cursor), cursor - 1), effect: null };
+    const previous = graphemes.segment(buf).containing(cursor - 1).index;
+    const next = name === 'left' ? buf : buf.slice(0, previous) + buf.slice(cursor);
+    return { state: withBuffer(s, next, previous), effect: null };
   }
-  if (name === 'delete' || (key.ctrl && name === 'd')) {
-    return { state: withBuffer(s, buf.slice(0, cursor) + buf.slice(cursor + 1), cursor), effect: null };
+  if (name === 'right' || name === 'delete' || (key.ctrl && name === 'd')) {
+    if (cursor === buf.length) return { state: s, effect: null };
+    const following = endOfGrapheme(buf, cursor);
+    if (name === 'right') return { state: withBuffer(s, buf, following), effect: null };
+    return { state: withBuffer(s, buf.slice(0, cursor) + buf.slice(following), cursor), effect: null };
   }
-  if (name === 'left') return { state: withBuffer(s, buf, Math.max(0, cursor - 1)), effect: null };
-  if (name === 'right') return { state: withBuffer(s, buf, Math.min(buf.length, cursor + 1)), effect: null };
   if (name === 'home' || (key.ctrl && name === 'a')) return { state: withBuffer(s, buf, 0), effect: null };
   if (name === 'end' || (key.ctrl && name === 'e')) return { state: withBuffer(s, buf, buf.length), effect: null };
   if (key.ctrl && name === 'u') return { state: withBuffer(s, '', 0), effect: null };
