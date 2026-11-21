@@ -1,0 +1,1 @@
+Which current promise failed, for whom, and on what evidence? A wrong or missing promised result is a defect. Extra diagnostic or planning capability is an enhancement. Cite the observation; flag unresolved requirements.

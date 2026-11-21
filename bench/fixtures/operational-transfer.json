@@ -1,0 +1,37 @@
+[
+  {
+    "id": "registration-audit",
+    "finding_text": "Task registrations are only logged to console stdout; an operator auditing a machine a week later has no persistent record of what was registered, when, with what commands.",
+    "source_lens": "observability_audit",
+    "expected": "enhancement_opportunity",
+    "source": "driver/decisions/shadow/corpus-2026-07-23.jsonl#8"
+  },
+  {
+    "id": "tracker-latency",
+    "finding_text": "When creating a tracker item takes several seconds, operators cannot tell whether migration, SQLite append, or rendering consumed the time. The item is stored and returned. The create endpoint emits no stage timings.",
+    "source_lens": "observability_audit",
+    "expected": "enhancement_opportunity",
+    "source": "e0446cd0^..e0446cd0"
+  },
+  {
+    "id": "wave-duration",
+    "finding_text": "A wave agent with a missing start time has a null duration in the timeline API. The dashboard's elapsed-time cell and accessible phase title both display the string `nulls` to operators. The API defines null as an unknown duration.",
+    "source_lens": "observability_audit",
+    "expected": "real_defect",
+    "source": "b198764a^..b198764a"
+  },
+  {
+    "id": "shard-timing",
+    "finding_text": "In CI, the test runner partitions modules round-robin. It executes the assigned modules but does not balance shards by recorded runtime or export per-module elapsed times. This makes it difficult for maintainers to tune how long each shard takes.",
+    "source_lens": "infrastructure_review",
+    "expected": "enhancement_opportunity",
+    "source": "0a2f7e57^..0a2f7e57"
+  },
+  {
+    "id": "timeline-timestamps",
+    "finding_text": "The fleet timeline serializes a timezone-aware UTC timestamp and then appends Z. The browser receives a +00:00Z suffix, Date parsing produces Invalid Date, and the positions of live agents' bars become NaN.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "64b37a31^..64b37a31"
+  }
+]

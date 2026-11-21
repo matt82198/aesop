@@ -1,0 +1,37 @@
+[
+  {
+    "id": "concurrent-store-append",
+    "finding_text": "Six writer threads share an event store. With the configured one-millisecond SQLite busy window, concurrent appends raise raw database-is-locked errors. The existing multiwriter test reproduced lost appends in three runs.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "66b67a0b"
+  },
+  {
+    "id": "tracker-retry",
+    "finding_text": "Creating a tracker item appends the durable event before rendering tracker.json. When rendering raises WriteConflict, repeating the documented create call mints a second ID. The next projection contains two copies of the requested item.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "6301f32c"
+  },
+  {
+    "id": "disk-only-items",
+    "finding_text": "Four tracker records were written directly to disk. The consistency check then refused every projection render, leaving 174 already accepted creation events absent from tracker.json. Operators had no supported way to reconcile the records.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "3f8315b8"
+  },
+  {
+    "id": "task-stream",
+    "finding_text": "Task lifecycle events can be read from the brain's JSONL file. An operator querying the tracker SQLite store must obtain these events separately to join them to the other streams.",
+    "source_lens": "infrastructure_review",
+    "expected": "enhancement_opportunity",
+    "source": "c16d5853"
+  },
+  {
+    "id": "new-worker-provider",
+    "finding_text": "Operators who want to use Gemini as the worker cannot select it in the Aesop configuration. The configured worker backends are available, but using this provider requires a new driver and trial runner.",
+    "source_lens": "infrastructure_review",
+    "expected": "enhancement_opportunity",
+    "source": "97e12e50"
+  }
+]

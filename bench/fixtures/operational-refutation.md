@@ -1,0 +1,1 @@
+Separate the reported symptom from the contract it would violate. Trace one observation to the affected consumer. If that observation contradicts the specific claim, refute it. If it confirms a broken promise, identify the failure. For a proposed capability, identify who currently relies on it. If the evidence cannot distinguish the explanations, say what is missing.
