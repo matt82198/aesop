@@ -34,6 +34,24 @@ function loadHistory(file) {
     return [];
   }
 }
+// Read used only by the save merge. ENOENT (no file yet) and malformed JSON count as empty history.
+// Any other read error (EBUSY, EPERM, EACCES, EISDIR, ...) is rethrown so the save refuses to write:
+// an empty merge would otherwise rename a one-line file over the whole existing history.
+function readHistoryForSave(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw err;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter((l) => typeof l === 'string').slice(-HISTORY_FILE_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
 // Atomic save: the line is merged into the file as it is now on disk (re-read here, so a second
 // instance's lines survive), written to a temp file beside the target, then renamed over it. A failed
 // write never leaves the existing file truncated or half-written. A failure never ends the session;
@@ -43,7 +61,7 @@ function saveHistory(file, line) {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    const merged = loadHistory(file);
+    const merged = readHistoryForSave(file);
     if (merged[merged.length - 1] !== line) merged.push(line);
     writeFileSync(tmp, `${JSON.stringify(merged.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
     renameSync(tmp, file);
