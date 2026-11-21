@@ -277,7 +277,92 @@ class FailureClassTests(unittest.TestCase):
             self.assertEqual(fake.requests, [])
 
 
+class CleanEofAfterShutdown:
+    """A fake http.client connection whose read returns a clean end of stream once its socket is shut down.
+
+    That is what Linux does: shutdown() makes a blocked recv() return 0 bytes, not an error. Windows
+    raises instead. The fake makes the Linux shape reproducible on every platform.
+    """
+
+    class _Socket:
+        def __init__(self):
+            self.down = threading.Event()
+
+        def shutdown(self, how):
+            self.down.set()
+
+        def close(self):
+            self.down.set()
+
+    class _Response:
+        status = 200
+
+        def __init__(self, sock, first_seen):
+            self._sock = sock
+            self._first_seen = first_seen
+            self._sent = False
+
+        def getheader(self, name, default=None):
+            return "text/event-stream"
+
+        def read1(self, size):
+            if not self._sent:
+                self._sent = True
+                return b'data: {"choices":[{"delta":{"content":"one"}}]}\n\n'
+            self._sock.down.wait(5)
+            return b""
+
+    def __init__(self):
+        self.sock = None
+        self.first_seen = threading.Event()
+
+    def connect(self):
+        self.sock = self._Socket()
+
+    def putrequest(self, *args, **kwargs):
+        pass
+
+    def putheader(self, *args):
+        pass
+
+    def endheaders(self, body=None):
+        pass
+
+    def getresponse(self):
+        return self._Response(self.sock, self.first_seen)
+
+    def close(self):
+        pass
+
+
 class CancelTests(unittest.TestCase):
+    def test_a_cancel_that_ends_the_stream_cleanly_is_still_cancelled_not_ok(self):
+        # Linux shape: after the cancel the read just ends. The turn must not be reported as a
+        # completed reply (it would also be remembered as conversation context).
+        fake = CleanEofAfterShutdown()
+        token = turn_stream.CancelToken()
+        box = {}
+
+        def on_delta(text):
+            fake.first_seen.set()
+
+        def work():
+            box["lines"] = []
+            box["result"] = turn_stream.run_stream_turn(
+                entry_for("http://127.0.0.1:9/v1"), "m", MESSAGES, env={}, cancel=token,
+                on_delta=on_delta, notify=box["lines"].append, connect=lambda *args: fake,
+            )
+
+        thread = threading.Thread(target=work)
+        thread.start()
+        self.assertTrue(fake.first_seen.wait(5))
+        token.cancel()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        result = box["result"]
+        self.assertEqual((result.ok, result.cancelled, result.text, result.exit_code), (False, True, "one", 130))
+        self.assertEqual(box["lines"], ["cancelled: fake request aborted"])
+
     def test_cancel_mid_stream_closes_the_socket_and_reports_cancelled(self):
         first_seen = threading.Event()
 
