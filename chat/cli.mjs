@@ -26,6 +26,34 @@ import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
 import { harnessSource, listModelLines, loadRegistry, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
+// AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
+const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness']);
+// Per-viewer selection memory (H-R10): {provider, model} only, never a key. Stored under the state root.
+function selectionFile(settings) {
+  return join(settings.AESOP_STATE_ROOT || join(os.homedir(), '.aesop'), 'chat-selection.json');
+}
+function loadSelection(file, registry) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    if (typeof parsed?.provider !== 'string' || typeof parsed?.model !== 'string') return null;
+    const picked = resolveSelection(registry, `${parsed.provider}/${parsed.model}`);
+    return picked.error ? null : { provider: picked.provider, model: picked.model };
+  } catch {
+    return null;
+  }
+}
+// Atomic write; a failed save is silent because the selection is only a convenience.
+function saveSelection(file, selection) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(tmp, `${JSON.stringify({ provider: selection.provider, model: selection.model })}\n`, 'utf8');
+    renameSync(tmp, file);
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
+  }
+}
+
 function loadHistory(file) {
   if (!file) return [];
   try {
@@ -173,12 +201,19 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   // at the new width, so the next frame moves back over the physical rows they now occupy.
   let drawnPlain = [];
   // AESOP_CHAT_BACKEND=harness selects the model-agnostic provider registry (chat/harness.mjs).
-  const harness = env.AESOP_CHAT_BACKEND === 'harness';
+  const backendValue = env.AESOP_CHAT_BACKEND;
+  const badBackend = backendValue !== undefined && backendValue !== '' && !BACKEND_VALUES.has(backendValue);
+  const harness = backendValue === 'harness';
   const registry = harness ? loadRegistry(env.AESOP_CHAT_CONFIG) : null;
-  const selection = registry ? registry.defaultSelection : null;
+  const stateFile = selectionFile(env);
+  const selection = registry ? (loadSelection(stateFile, registry) ?? registry.defaultSelection) : null;
   const status = { cwd: process.cwd() };
   if (harness) Object.assign(status, { provider: selection ? selection.provider : null, model: selection ? selection.model : null });
   const backend = { source: source ?? pipeSource };
+  if (badBackend) {
+    // Never a silent default: the value is named, and turns get the error instead of a backend (H-R28).
+    backend.source = async function* () { /* no backend for an unknown value */ };
+  }
   // Harness hooks: /model is checked against the registry (an unknown name leaves the selection
   // unchanged); /models lists providers and aliases with probes that send only GET /models.
   const hooks = harness
@@ -188,6 +223,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         if (picked.error) return picked.error;
         session.state.status.provider = picked.provider;
         session.state.status.model = picked.model;
+        if (registry) saveSelection(stateFile, picked);
         return null;
       },
       listModels: () => listModelLines(registry, env),
@@ -207,6 +243,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       stdout.write(`\r${up}${CLEAR_TO_END}${frame}`);
     },
   });
+  if (badBackend) {
+    session.state.transcript.push({ role: 'system', text: `error: AESOP_CHAT_BACKEND: unknown value "${backendValue}" (use pipe, orchestrator or harness)` });
+  }
   if (harness) {
     backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env);
     for (const text of registry.notices) session.state.transcript.push({ role: 'system', text });
