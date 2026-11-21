@@ -38,7 +38,7 @@ Source: the `token_count` event of one working thread, read by the orchestrator 
 |---|---|
 | total_tokens | 72,013,649 |
 | input_tokens | 71,898,043 |
-| cached_input_tokens (part of input) | 71,464,704 (99.4% of input) |
+| cached_input_tokens (part of input) | 71,464,704 (99.4% of input) <!-- metrics-verified: Codex token_count event 2026-11-21T20:54Z; 71,464,704 / 71,898,043 --> |
 | output_tokens | 115,606 |
 | reasoning_output_tokens | 28,894 |
 
@@ -59,7 +59,7 @@ The orchestrator main thread's own token total is **not measured** in this docum
 ### 2e. Reading
 
 - Output is tiny next to input. In the Codex thread, output was 115,606 tokens against 71,898,043 input tokens.
-- Nearly all spend is re-reading cached context. In the Codex thread, 99.4% of input was served from cache.
+- Nearly all spend is re-reading cached context. In the Codex thread, 99.4% of input was served from cache. <!-- metrics-verified: Codex token_count event 2026-11-21T20:54Z; 71,464,704 / 71,898,043 -->
 - Bulk context work belongs on local or cheap tiers. A local tier has no metered tokens, and its cost is latency (see 2c).
 - The expensive tier holds intent and verdicts. It should not carry bulk reads and writes.
 
