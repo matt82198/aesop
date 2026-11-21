@@ -342,3 +342,77 @@ test('render_frame_clips_to_rows_when_chrome_exceeds_rows', async () => {
     `a frame rendered with rows=3 must have at most 3 lines (clip, never scroll); got ${lines.length}:\n${stripAnsi(frame)}`,
   );
 });
+
+test('render_2000_line_transcript_repaint_cost_is_bounded_in_wt_and_conhost_modes', async () => {
+  const { renderFrame, wrapText } = await loadRender();
+  const transcript = [];
+  for (let i = 0; i < 320; i += 1) {
+    transcript.push({
+      role: 'user',
+      text: `Turn ${i}: profile chat repaint cost across 2000 wrapped lines in Windows Terminal and conhost.`,
+    });
+    const trace =
+      i % 4 === 0
+        ? ` trace=${'C:/Users/Mattt/aesop/tools/ci_shard_runner.py:142:AssertionError:expected_zero_drift_'.repeat(16)}`
+        : '';
+    transcript.push({
+      role: 'assistant',
+      text: `Turn ${i} reply: verified ANSI SGR escapes, wide CJK (\u6f22\u5b57), and cursor-up repainting.${trace}`,
+      streaming: false,
+    });
+  }
+  const streamingReply = { role: 'assistant', text: 'Streaming reply:', streaming: true };
+  transcript.push(streamingReply);
+
+  const state = makeState({
+    transcript,
+    inputBuffer: 'typing in windows terminal',
+    cursor: 26,
+    mode: 'streaming',
+  });
+
+  // Confirm fixture genuinely exceeds 2,000 wrapped transcript lines at 80 columns.
+  const fullLines = renderFrame(state, { columns: 80, rows: 100000, color: false, unicode: false }).split('\n');
+  assert.ok(fullLines.length >= 2000, `fixture must have >= 2000 wrapped lines; got ${fullLines.length}`);
+
+  const wtOpts = { columns: 120, rows: 36, color: true, unicode: true };
+  const conhostOpts = { columns: 80, rows: 25, color: true, unicode: false };
+
+  // Warm initial cache + V8 JIT, and verify cached output equals a fresh-object render byte-for-byte.
+  const firstWt = renderFrame(state, wtOpts);
+  const freshState = makeState({
+    ...state,
+    transcript: transcript.map((m) => ({ ...m })),
+  });
+  assert.equal(firstWt, renderFrame(freshState, wtOpts), 'cached renderFrame must match fresh render byte-for-byte');
+  renderFrame(state, conhostOpts);
+
+  // Measure 120 incremental repaints (60 Windows Terminal 120x36 unicode + 60 conhost 80x25 ASCII)
+  // while keystrokes, spinnerTick, and streaming reply text advance on every frame.
+  const frames = 120;
+  const t0 = performance.now();
+  for (let i = 0; i < frames; i += 1) {
+    state.status.spinnerTick = i;
+    state.inputBuffer = `typing in windows terminal ${i}`;
+    state.cursor = state.inputBuffer.length;
+    if (i % 2 === 0) streamingReply.text += ' tok';
+    renderFrame(state, i % 2 === 0 ? wtOpts : conhostOpts);
+  }
+  const elapsedMs = performance.now() - t0;
+  const avgMs = elapsedMs / frames;
+  assert.ok(
+    avgMs < 1.5,
+    `2000-line transcript incremental repaint averaged ${avgMs.toFixed(2)}ms/frame (${elapsedMs.toFixed(1)}ms for ${frames} frames); must stay < 1.5ms/frame`,
+  );
+
+  // Also bound wrapText linear O(L) cost on a 20,000-char unspaced log/JSON word.
+  const longWord = '0123456789abcdef'.repeat(1250);
+  const tw0 = performance.now();
+  const wrapped = wrapText(longWord, 80);
+  const wrapElapsedMs = performance.now() - tw0;
+  assert.equal(wrapped.length, 250);
+  assert.ok(
+    wrapElapsedMs < 40,
+    `wrapText on a 20,000-char unspaced word took ${wrapElapsedMs.toFixed(1)}ms (quadratic regression); must stay < 40ms`,
+  );
+});
