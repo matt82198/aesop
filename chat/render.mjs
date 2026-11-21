@@ -57,9 +57,34 @@ function codePointWidth(cp) {
  * @returns {number}
  */
 export function displayWidth(s) {
+  const str = String(s);
   let w = 0;
-  for (const ch of String(s)) w += codePointWidth(ch.codePointAt(0));
+  for (let i = 0; i < str.length; i += 1) {
+    const c = str.charCodeAt(i);
+    if (c < 0x300) {
+      w += 1;
+      continue;
+    }
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
+      const lo = str.charCodeAt(i + 1);
+      if (lo >= 0xdc00 && lo <= 0xdfff) {
+        w += codePointWidth(((c - 0xd800) << 10) + (lo - 0xdc00) + 0x10000);
+        i += 1;
+        continue;
+      }
+    }
+    w += codePointWidth(c);
+  }
   return w;
+}
+
+function isNarrowSingleLine(para, width) {
+  if (para.length > width) return false;
+  if (para.length > 0 && para.charCodeAt(0) === 0x20) return false;
+  for (let i = 0; i < para.length; i += 1) {
+    if (para.charCodeAt(i) >= 0x300) return false;
+  }
+  return true;
 }
 
 /**
@@ -72,34 +97,63 @@ export function displayWidth(s) {
 export function wrapText(text, width) {
   const out = [];
   for (const para of String(text).split('\n')) {
+    if (isNarrowSingleLine(para, width)) {
+      out.push(para);
+      continue;
+    }
     let cur = '';
     let curW = 0;
     for (let word of para.split(' ')) {
       let wordW = displayWidth(word);
-      while (wordW > width) {
+      if (wordW > width) {
         if (cur !== '') {
           out.push(cur);
           cur = '';
           curW = 0;
         }
-        const chars = [...word];
-        let piece = '';
-        let pieceW = 0;
-        let i = 0;
-        for (; i < chars.length; i++) {
-          const cw = codePointWidth(chars[i].codePointAt(0));
-          if (pieceW + cw > width) break;
-          piece += chars[i];
-          pieceW += cw;
+        let pos = 0;
+        let remW = wordW;
+        while (remW > width) {
+          let i = pos;
+          let pieceW = 0;
+          while (i < word.length) {
+            const c = word.charCodeAt(i);
+            let cp = c;
+            let step = 1;
+            if (c >= 0xd800 && c <= 0xdbff && i + 1 < word.length) {
+              const lo = word.charCodeAt(i + 1);
+              if (lo >= 0xdc00 && lo <= 0xdfff) {
+                cp = ((c - 0xd800) << 10) + (lo - 0xdc00) + 0x10000;
+                step = 2;
+              }
+            }
+            const cw = c < 0x300 ? 1 : codePointWidth(cp);
+            if (pieceW + cw > width) break;
+            pieceW += cw;
+            i += step;
+          }
+          if (i === pos) {
+            // A single character wider than the column: emit it whole rather than loop forever.
+            const c = word.charCodeAt(pos);
+            const step =
+              c >= 0xd800 &&
+              c <= 0xdbff &&
+              pos + 1 < word.length &&
+              word.charCodeAt(pos + 1) >= 0xdc00 &&
+              word.charCodeAt(pos + 1) <= 0xdfff
+                ? 2
+                : 1;
+            const cp =
+              step === 2 ? ((c - 0xd800) << 10) + (word.charCodeAt(pos + 1) - 0xdc00) + 0x10000 : c;
+            pieceW = codePointWidth(cp);
+            i = pos + step;
+          }
+          out.push(word.slice(pos, i));
+          pos = i;
+          remW -= pieceW;
         }
-        if (i === 0) {
-          // A single character wider than the column: emit it whole rather than loop forever.
-          piece = chars[0];
-          i = 1;
-        }
-        out.push(piece);
-        word = chars.slice(i).join('');
-        wordW = displayWidth(word);
+        word = word.slice(pos);
+        wordW = remW;
       }
       if (cur === '') {
         cur = word;
@@ -182,23 +236,47 @@ export function resolveUnicode({ env = {}, unicode } = {}) {
   return true;
 }
 
-function transcriptLines(transcript, columns, color, unicode) {
-  const lines = [];
-  for (const msg of transcript) {
-    if (msg.role === 'user') {
-      lines.push(...block(USER_PREFIX, ' '.repeat(USER_PREFIX.length), msg.text, columns, painter('bold', color)));
-    } else if (msg.role === 'assistant') {
-      let text = msg.text ?? '';
-      if (msg.streaming) text = `${text}${text ? ' ' : ''}${msg.spinnerGlyph ?? ''}`;
-      lines.push(...block(ASSISTANT_PREFIX, ' '.repeat(ASSISTANT_PREFIX.length), text, columns, painter('green', color)));
-    } else if (msg.role === 'tool') {
-      const border = `    ${unicode ? '│' : '|'} `;
-      lines.push(...block(border, border, msg.text, columns, painter('yellow', color)));
+const MSG_CACHE = new WeakMap();
+const MAX_STYLE_VARIANTS = 4;
+
+function renderMessageLines(msg, spinner, columns, color, unicode) {
+  const isCacheable = msg !== null && typeof msg === 'object' && !msg.streaming;
+  const styleKey = `${columns}:${color ? 1 : 0}:${unicode ? 1 : 0}`;
+  let entry;
+  if (isCacheable) {
+    entry = MSG_CACHE.get(msg);
+    if (entry !== undefined && entry.role === msg.role && entry.text === msg.text) {
+      const cachedLines = entry.variants.get(styleKey);
+      if (cachedLines !== undefined) return cachedLines;
     } else {
-      // Errors stand out in red so a failed turn is never mistaken for normal output.
-      const style = /^(stream error:|error:)/.test(msg.text) ? 'red' : 'dim';
-      lines.push(...block(SYSTEM_PREFIX, ' '.repeat(SYSTEM_PREFIX.length), msg.text, columns, painter(style, color)));
+      entry = undefined;
     }
+  }
+
+  let lines;
+  if (msg.role === 'user') {
+    lines = block(USER_PREFIX, ' '.repeat(USER_PREFIX.length), msg.text, columns, painter('bold', color));
+  } else if (msg.role === 'assistant') {
+    let text = msg.text ?? '';
+    if (msg.streaming) text = `${text}${text ? ' ' : ''}${spinner}`;
+    lines = block(ASSISTANT_PREFIX, ' '.repeat(ASSISTANT_PREFIX.length), text, columns, painter('green', color));
+  } else if (msg.role === 'tool') {
+    const border = `    ${unicode ? '│' : '|'} `;
+    lines = block(border, border, msg.text, columns, painter('yellow', color));
+  } else {
+    // Errors stand out in red so a failed turn is never mistaken for normal output.
+    const style = /^(stream error:|error:)/.test(msg.text) ? 'red' : 'dim';
+    lines = block(SYSTEM_PREFIX, ' '.repeat(SYSTEM_PREFIX.length), msg.text, columns, painter(style, color));
+  }
+
+  if (isCacheable) {
+    if (entry === undefined) {
+      entry = { role: msg.role, text: msg.text, variants: new Map() };
+      MSG_CACHE.set(msg, entry);
+    } else if (entry.variants.size >= MAX_STYLE_VARIANTS) {
+      entry.variants.delete(entry.variants.keys().next().value);
+    }
+    entry.variants.set(styleKey, lines);
   }
   return lines;
 }
@@ -221,13 +299,7 @@ export function renderFrame(state, opts = {}) {
   const status = state.status ?? {};
   const divider = (unicode ? '─' : '-').repeat(columns);
 
-  const banner = block('', '', `aesop ${VERSION} - chat (type /help for commands)`, columns, painter('bold', color));
-
-  const spinner = spinnerGlyph(status.spinnerTick ?? 0);
-  const transcript = (state.transcript ?? []).map((msg) =>
-    msg.role === 'assistant' && msg.streaming ? { ...msg, spinnerGlyph: spinner } : msg,
-  );
-  const body = transcriptLines(transcript, columns, color, unicode);
+  const header = block('', '', `aesop ${VERSION} - chat (type /help for commands)`, columns, painter('bold', color));
 
   const footer = [];
   if (state.hint) footer.push(...block('  ', '  ', state.hint, columns, painter('dim', color)));
@@ -248,17 +320,42 @@ export function renderFrame(state, opts = {}) {
     footer.push(...block(idx === 0 ? INPUT_PREFIX : '  ', '  ', seg, columns, (s) => s));
   });
 
-  const header = [...banner];
   const room = rows - header.length - footer.length;
   // Oldest transcript lines go first. With no room left for the transcript, the banner goes too,
   // so the frame never exceeds rows and the input line (the last footer line) always stays.
-  if (room > 0) {
-    if (body.length <= room) return [...header, ...body, ...footer].join('\n');
-    // One row of the room goes to the marker that says how much transcript is hidden above.
-    const kept = room - 1;
-    const hidden = body.length - kept;
-    const marker = painter('dim', color)(`(${hidden} earlier lines hidden)`.slice(0, columns));
-    return [...header, marker, ...body.slice(body.length - kept), ...footer].join('\n');
+  if (room <= 0) {
+    return [...header, ...footer].slice(-rows).join('\n');
   }
-  return [...header, ...footer].slice(-rows).join('\n');
+
+  const spinner = spinnerGlyph(status.spinnerTick ?? 0);
+  const rawTranscript = state.transcript ?? [];
+  const tailChunks = [];
+  let collected = 0;
+  let totalLines = 0;
+
+  // Walk newest-to-oldest so only the visible bottom window is assembled while cached line counts
+  // still yield the exact `(N earlier lines hidden)` header count.
+  for (let i = rawTranscript.length - 1; i >= 0; i -= 1) {
+    const msgLines = renderMessageLines(rawTranscript[i], spinner, columns, color, unicode);
+    totalLines += msgLines.length;
+    if (collected < room && msgLines.length > 0) {
+      const need = room - collected;
+      const slice = msgLines.length <= need ? msgLines : msgLines.slice(msgLines.length - need);
+      tailChunks.push(slice);
+      collected += slice.length;
+    }
+  }
+
+  const tailLines = [];
+  for (let i = tailChunks.length - 1; i >= 0; i -= 1) {
+    tailLines.push(...tailChunks[i]);
+  }
+
+  if (totalLines <= room) return [...header, ...tailLines, ...footer].join('\n');
+  // One row of the room goes to the marker that says how much transcript is hidden above.
+  const kept = room - 1;
+  const hidden = totalLines - kept;
+  const marker = painter('dim', color)(`(${hidden} earlier lines hidden)`.slice(0, columns));
+  const keptLines = kept > 0 ? tailLines.slice(tailLines.length - kept) : [];
+  return [...header, marker, ...keptLines, ...footer].join('\n');
 }
