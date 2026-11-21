@@ -1,5 +1,7 @@
 """Build LANE-CONTRACT.md from contract/*.md (the step files are the source).
 
+INDEX: generate LANE-CONTRACT.md from the contract/ floor and step files; --check fails when stale
+
 LANE-CONTRACT.md is GENERATED: floor, knowledge, reasoning, judgement, review,
 keyrun, concatenated in that order with one blank line between files. Floor text
 lives only in contract/floor.md and is never hand-duplicated.
