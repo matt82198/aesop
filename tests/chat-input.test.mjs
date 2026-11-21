@@ -403,3 +403,70 @@ test('session_resize_updates_width_used_by_next_frame', async () => {
   const widest = Math.max(...last.split('\n').map((l) => l.length));
   assert.ok(widest <= 5, `after session.resize(5, 3) the next frame must be at most 5 columns wide; widest line is ${widest}:\n${last}`);
 });
+
+// ---------------------------------------------------------------------------
+// Stuck paste mode: a paste-start with no paste-end must not capture every later Enter.
+// Time is injected through key.now (milliseconds); the idle window is PASTE_IDLE_MS in chat/input.mjs.
+// ---------------------------------------------------------------------------
+
+const at = (key, now) => ({ ...key, now });
+const STUCK_IDLE_GAP_MS = 1000; // well past any sane idle window (300-500ms)
+
+test('paste_stuck_enter_submits_after_idle_timeout', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), at(pasteStart(), 0)).state;
+  s = applyKey(s, at(ch('f'), 1)).state;
+  s = applyKey(s, at(newline(), 2)).state;
+  s = applyKey(s, at(ch('s'), 3)).state;
+  const r = applyKey(s, at(enter(), 3 + STUCK_IDLE_GAP_MS));
+  assert.equal(r.effect?.type, 'submit', 'an Enter after the paste has been idle past the timeout must submit even with no paste-end');
+  assert.equal(r.effect.line, 'f\ns', 'the submitted line must be the buffer text received before the idle timeout');
+  assert.equal(r.state.pasting, false, 'the idle timeout must clear paste mode');
+});
+
+test('paste_stuck_enter_inside_idle_window_stays_newline', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), at(pasteStart(), 0)).state;
+  s = applyKey(s, at(ch('a'), 10)).state;
+  const r = applyKey(s, at(enter(), 20));
+  assert.notEqual(r.effect?.type, 'submit', 'an Enter that arrives within the idle window of a paste must stay a literal newline');
+  assert.equal(r.state.inputBuffer, 'a\n', 'the in-window Enter must insert a newline into the buffer');
+});
+
+test('paste_stuck_escape_clears_paste_mode', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), at(pasteStart(), 0)).state;
+  s = applyKey(s, at(ch('a'), 1)).state;
+  s = applyKey(s, at(named('escape'), 2)).state;
+  assert.equal(s.pasting, false, 'escape must clear paste mode');
+  const r = applyKey(s, at(enter(), 3));
+  assert.equal(r.effect?.type, 'submit', 'after escape clears paste mode, Enter must submit');
+  assert.equal(r.effect.line, 'a', 'the submitted line must be the text typed before escape');
+});
+
+test('paste_stuck_ctrl_c_clears_paste_mode_and_only_hints', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), at(pasteStart(), 0)).state;
+  s = applyKey(s, at(ch('x'), 1)).state;
+  const c = applyKey(s, at(ctrl('c'), 2));
+  assert.equal(c.effect?.type, 'hint', 'a single ctrl-c must still only print the hint');
+  assert.equal(c.state.pasting, false, 'ctrl-c must clear paste mode');
+  const r = applyKey(c.state, at(enter(), 3));
+  assert.equal(r.effect?.type, 'submit', 'after ctrl-c clears paste mode, Enter must submit');
+  assert.equal(r.effect.line, 'x', 'the submitted line must be the text typed before ctrl-c');
+});
+
+test('paste_timed_paste_end_keeps_newlines_and_submits_on_later_enter', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), at(pasteStart(), 0)).state;
+  s = applyKey(s, at(ch('p'), 1)).state;
+  s = applyKey(s, at(newline(), 2)).state;
+  s = applyKey(s, at(ch('q'), 3)).state;
+  const inside = applyKey(s, at(enter(), 4));
+  assert.notEqual(inside.effect?.type, 'submit', 'an Enter inside a normal timed paste must not submit');
+  assert.equal(inside.state.inputBuffer, 'p\nq\n', 'an Enter inside a normal timed paste must add a newline');
+  s = applyKey(inside.state, at(pasteEnd(), 5)).state;
+  const r = applyKey(s, at(enter(), 6));
+  assert.equal(r.effect?.type, 'submit', 'a plain Enter after a proper paste-end must submit');
+  assert.equal(r.effect.line, 'p\nq\n', 'the submitted line must keep the paste text and its newlines');
+});

@@ -10,7 +10,8 @@
 - ctrl-c once shows a hint; ctrl-c twice exits.
 - ctrl-d on an empty line exits; on a non-empty line it deletes the character under the cursor.
 - TAB expands to the next 8-column tab stop, counted from the screen column after the `> ` prefix (the buffer column restarts after each newline).
-- Esc is not yet bound.
+- Esc leaves paste mode (it binds nothing else yet). ctrl-c also leaves paste mode, and still only hints on the first press.
+- A paste with no paste-end marker is not stuck: after PASTE_IDLE_MS (400 ms) with no key, paste mode ends and a plain Enter submits.
 
 ## Paste lifecycle
 - PASTE_ON (ESC[?2004h) is written once at start. PASTE_OFF (ESC[?2004l) is written exactly once, by whichever comes first: finish (`/exit`, ctrl-c twice, ctrl-d on an empty line), a process `exit`, SIGTERM (exit 143), SIGHUP (exit 129) or an external SIGINT (exit 130; POSIX only, on win32 these handlers are not reached). Raw mode is restored in the same single restore.
