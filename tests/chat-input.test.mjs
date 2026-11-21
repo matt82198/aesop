@@ -470,3 +470,29 @@ test('paste_timed_paste_end_keeps_newlines_and_submits_on_later_enter', async ()
   assert.equal(r.effect?.type, 'submit', 'a plain Enter after a proper paste-end must submit');
   assert.equal(r.effect.line, 'p\nq\n', 'the submitted line must keep the paste text and its newlines');
 });
+
+test('editing crosses and deletes whole Unicode graphemes', async (t) => {
+  const { applyKey, createInputState } = await loadInput();
+  for (const glyph of ['😀', 'e\u0301', '👩🏽‍💻', '🇨🇦']) {
+    await t.test(glyph, () => {
+      const after = typeAll(applyKey, createInputState(), 'x' + glyph);
+      const before = applyKey(after, named('left')).state;
+      assert.equal(before.cursor, 1);
+      assert.equal(applyKey(before, named('right')).state.cursor, after.cursor);
+      assert.equal(applyKey(before, ch('!')).state.inputBuffer, 'x!' + glyph);
+      assert.equal(applyKey(after, named('backspace')).state.inputBuffer, 'x');
+      for (const key of [named('delete'), ctrl('d')]) {
+        assert.equal(applyKey(before, key).state.inputBuffer, 'x');
+      }
+    });
+  }
+});
+
+test('inserting a base before a combining mark leaves the cursor after the joined glyph', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  const mark = typeAll(applyKey, createInputState(), '\u0301z');
+  const start = applyKey(mark, named('home')).state;
+  const joined = applyKey(start, ch('e')).state;
+  assert.equal(joined.cursor, 2);
+  assert.equal(applyKey(joined, named('backspace')).state.inputBuffer, 'z');
+});
