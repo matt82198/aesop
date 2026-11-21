@@ -3,6 +3,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from operational_transfer import SHARED_CASES
+
 RESULTS = Path(__file__).resolve().parent / "results"
 ARCHIVE = {
     "one-shot": "seam-u-orig-2026-07-27.jsonl",
@@ -11,6 +13,16 @@ ARCHIVE = {
     "seated with repair": "seam-s-loop.jsonl",
 }
 LOCAL = ("qwen2.5-coder-14b", "qwen3-coder-30b", "qwen3.8-27b")
+BLIND_TAGS = ("haiku-4.5", "sonnet-5", "opus-4.8", "fable-blind", "gpt-4o",
+              "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "")
+JUDGMENTS = {
+    "new capability": {
+        "registration-audit", "tracker-latency", "shard-timing", "merge-contention",
+        "journal-latency", "burn-projection", "task-stream", "new-worker-provider",
+    },
+    "reported value": {"wave-duration", "timeline-timestamps", "status-heartbeat", "dashboard-root"},
+    "state across steps": {"backup-cycle", "concurrent-store-append", "tracker-retry", "disk-only-items"},
+}
 
 
 def read_rows(filename):
@@ -56,6 +68,7 @@ def local_counts():
         if len(rows) != len(expected) or {r["case"] for r in rows} != set(expected):
             raise ValueError(f"Missing or duplicated local cells for {model}")
         counts = Counter()
+        correct = set()
         for r in rows:
             if (r["model"].replace(":", "-") != model or r["arm"] != "baseline"
                     or r["expected"] != expected[r["case"]]):
@@ -65,12 +78,35 @@ def local_counts():
                 counts["unscored"] += 1
             elif verdict == expected[r["case"]]:
                 counts["correct"] += 1
+                correct.add(r["case"])
             else:
                 counts["disagreed"] += 1
                 print(model, r["case"], "expected", expected[r["case"]], "returned", verdict)
         print(model, dict(counts), "tokens", sum(r["tokens"] for r in rows))
+        print({group: (len(correct & ids), len(ids)) for group, ids in JUDGMENTS.items()})
+
+
+def shared_counts():
+    path = RESULTS.parents[1] / "driver/decisions/shadow/corpus-2026-07-23.jsonl"
+    truth = {r["id"]: r["labels"]["ground_truth"] for r in
+             map(json.loads, path.read_text(encoding="utf-8").splitlines()) if r["id"] in SHARED_CASES}
+    for tag in (*BLIND_TAGS, *LOCAL):
+        if tag in LOCAL:
+            rows = read_rows(f"operational-shared-{tag}.jsonl")
+            pairs = [(r["case"], r["decision"]["verdict"]) for r in rows]
+        else:
+            suffix = "-" + tag if tag else ""
+            path = RESULTS / f"shadow-adjudication-2026-07-23{suffix}.json"
+            rows = json.loads(path.read_text(encoding="utf-8"))["items"]
+            pairs = [(r["id"], r["challenger_classification"]) for r in rows if r["id"] in truth]
+        if len(pairs) != len(SHARED_CASES) or set(dict(pairs)) != set(SHARED_CASES):
+            raise ValueError(f"Missing or duplicated common cases for {tag}")
+        by_class = Counter(truth[key] for key, verdict in pairs if truth[key] == verdict)
+        print(tag or "gpt-4o-mini", dict(by_class), "unscored",
+              sum(verdict == "DECISION_FAILED" for _, verdict in pairs))
 
 
 if __name__ == "__main__":
     archive_counts()
     local_counts()
+    shared_counts()
