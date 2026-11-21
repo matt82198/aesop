@@ -23,6 +23,7 @@ const HELP_LINES = [
   'Slash commands:',
   '  /help                  list these commands',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
+  '  /models                list configured providers and models',
   '  /auth                  show credential status (no network call)',
   '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
@@ -270,7 +271,11 @@ export class Session {
    */
   refreshTokens(chars) {
     const u = this.state.turnUsage;
-    const turn = u ? { n: u.total, est: false } : { n: Math.ceil(chars / 4), est: true };
+    const turn = u
+      ? { n: u.total, est: false }
+      : chars === 0
+        ? { n: 0, est: false }
+        : { n: Math.ceil(chars / 4), est: true };
     this.state.status.tokens = this.committedTokens + turn.n;
     this.state.status.tokensEstimated = this.committedEstimated || turn.est;
     if (u && typeof u.cost === 'number') {
@@ -309,6 +314,10 @@ export class Session {
     } finally {
       clearInterval(ticker);
       reply.streaming = false;
+      if (chars === 0 && reply.text === '') {
+        const idx = this.state.transcript.indexOf(reply);
+        if (idx !== -1) this.state.transcript.splice(idx, 1);
+      }
       this.state.mode = 'idle';
       this.state.status.elapsedMs = Date.now() - started;
       this.refreshTokens(chars);
