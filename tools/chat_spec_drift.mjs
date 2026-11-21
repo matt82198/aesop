@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Spec-drift meter for the chat TUI (stdlib only).
+// INDEX: chat TUI spec-drift meter (R-test pass rate, SPEC.md plan drift, anti-weakening)
 // Usage: node tools/chat_spec_drift.mjs --baseline <sha>
 // Prints JSON: {total, passing, failing, impl_drift_pct, plan_drift_pct, original_changed, tests_weakened}
 //   impl_drift_pct = 100*(total-passing)/total over tests/chat-spec.test.mjs (TAP).
