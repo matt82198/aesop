@@ -354,10 +354,12 @@ def validate_api_key_env(name, where: str = "backend") -> None:
                 f"like a non-LLM secret ('{fragment}'); refusing to send "
                 f"it as a Bearer token to a configured endpoint"
             )
+    # The env var name is deliberately NOT logged (CodeQL clear-text logging):
+    # `where` identifies which config entry to review.
     print(
-        f"NOTICE: {where} api_key_env '{name}' is not a known LLM-provider "
+        f"NOTICE: {where} api_key_env is not a known LLM-provider "
         f"key env var; its value WILL be sent as a Bearer token to the "
-        f"configured base_url. If '{name}' holds anything other than an LLM "
+        f"configured base_url. If it holds anything other than an LLM "
         f"API key (master/encryption/signing/deploy material), this config "
         f"exfiltrates it -- verify before running live.",
         file=sys.stderr,
@@ -878,3 +880,81 @@ def describe_backend(config: Optional[dict] = None) -> str:
         return driver.describe()
 
     return f"unknown backend '{backend_name}'"
+
+
+# ---- Chat provider registry seam (H-R26, H-R27).
+# Mirrors chat/harness.mjs validateProviderConfig rules, using the same Python guards above as the
+# source of truth for URL, loopback and key-env checks. The shared fixture
+# tests/fixtures/provider-config-cases.json is read by both sides.
+
+_CHAT_REFUSED_TYPES = ("cli", "exec", "claude", "anthropic")
+_CHAT_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _chat_host(base_url: str) -> str:
+    """Lowercased hostname with trailing dots and IPv6 brackets removed."""
+    host = (urlparse(base_url).hostname or "").lower().rstrip(".")
+    return host.strip("[]")
+
+
+def _chat_is_anthropic_host(host: str) -> bool:
+    return (
+        host == "anthropic.com" or host.endswith(".anthropic.com")
+        or host == "claude.ai" or host.endswith(".claude.ai")
+    )
+
+
+def validate_provider_entry(entry) -> tuple:
+    """Return (ok, reason) for one chat `providers.<id>` entry.
+
+    Refusals mirror chat/harness.mjs assertProviderAllowed: command-style types, Anthropic or
+    claude.ai hosts, claude*/anthropic/* model ids (except type orchestrator), non-loopback
+    http without allow_insecure, is_local with a non-loopback host, and key env names that
+    fail validate_api_key_env. Never raises; the reason never contains a key value or the URL.
+    """
+    if not isinstance(entry, dict):
+        return False, "provider entry must be an object"
+    ptype = entry.get("type")
+    if ptype in _CHAT_REFUSED_TYPES:
+        return False, f"type '{ptype}' is refused"
+    base_url = entry.get("base_url")
+    if not isinstance(base_url, str):
+        return False, "base_url must be a string"
+    try:
+        validate_base_url(base_url)
+    except ValueError:
+        return False, "invalid base_url"
+    host = _chat_host(base_url)
+    if _chat_is_anthropic_host(host):
+        return False, "Anthropic host is refused"
+    scheme = urlparse(base_url).scheme
+    if scheme == "http" and host not in _CHAT_LOOPBACK_HOSTS and entry.get("allow_insecure") is not True:
+        return False, "non-loopback http requires allow_insecure"
+    models = entry.get("models")
+    if isinstance(models, list) and ptype != "orchestrator":
+        for model in models:
+            if isinstance(model, str) and (model.startswith("claude") or model.startswith("anthropic/")):
+                return False, "a model id resolving to Claude is refused"
+    if entry.get("is_local") is True:
+        try:
+            validate_is_local_base_url(base_url)
+        except ValueError:
+            return False, "is_local requires a loopback base_url"
+    if "api_key_env" in entry:
+        try:
+            validate_api_key_env(entry["api_key_env"], where="providers")
+        except ValueError:
+            return False, "api_key_env is not an allowed key variable name"
+    return True, None
+
+
+def load_provider_seat(entry) -> dict:
+    """Accept a chat-shaped `providers.<id>` entry as a driver seat definition, unchanged.
+
+    Raises:
+        ValueError: if the entry fails validate_provider_entry.
+    """
+    ok, reason = validate_provider_entry(entry)
+    if not ok:
+        raise ValueError(f"provider entry refused: {reason}")
+    return dict(entry)

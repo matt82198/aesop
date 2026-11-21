@@ -1138,7 +1138,7 @@ class TestApiKeyEnvAllowlistPrimary(unittest.TestCase):
                 validate_api_key_env(name, where="backend")
             out = stderr.getvalue()
             self.assertIn("NOTICE", out, name)
-            self.assertIn(name, out)
+            self.assertNotIn(name, out)  # name never logged (CodeQL clear-text logging)
             # The notice must name the risk: not a known LLM-provider key.
             self.assertIn("not a known LLM", out, name)
 

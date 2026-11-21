@@ -35,12 +35,24 @@ Node stdlib only, ESM `.mjs`. No `package.json` inside `chat/`. The TTY decision
 - `chat/session.mjs` — `class Session({columns, rows, color, status, onFrame, source?})`. `submit(line, chunks?)` returns a promise; `resize(columns, rows)` sets the size the next frame uses. `state` holds `transcript` and `status`. `pipeSource(line, {stdin?})` is the default backend (the pipe runtime; `stdin` injects the pipe input and each stdout write streams out as it arrives). The session exports no echo backend; the test-only `echoSource` lives in `tests/helpers/chat-echo-source.mjs`.
 - `chat/cli.mjs` — `runChat({argv, stdin, stdout, stderr, env, source?})` returns an exit code. Input history persists in the JSON-array file named by env `AESOP_CHAT_HISTORY` (loaded on start, appended on submit, capped at 500 lines). The save is atomic: it writes `<file>.<pid>.tmp` beside the target, then renames over it. A failed save never ends the session and never corrupts the existing file; it shows one status line in the chat, `history not saved: <error code>`; unset (or empty) defaults to `~/.aesop/chat-history.json` (os.homedir(); tests redirect HOME/USERPROFILE via tests/helpers/isolated-env.mjs, so the default never touches the real home). `shouldEnterChat({interactive, args, env})` is the bare-invocation seam: true only on a TTY with `--chat-default` or `AESOP_DEFAULT=chat`. `bin/cli.js` dynamic-imports this file for both the `chat` verb and the bare case.
 
-**Slash commands**: `/help`, `/model <provider>/<model>`, `/auth`, `/clear`, `/exit`, `/quit`.
+**Slash commands**: `/help`, `/model <provider>/<model>` (or an alias), `/models`, `/auth`, `/detect`, `/clear`, `/exit`, `/quit`.
+
+**Registry (harness mode, H-R6 to H-R9)**: `loadRegistry` reads `providers`, `aliases` and `default` from the config. Unknown keys inside a provider entry produce a `NOTICE` naming the key only (never its value); top-level keys outside `providers`/`aliases`/`default` are ignored, since the file is shared with other seats. Alias chains resolve up to 3 hops; cycles and deeper chains are a config `error:` line and the alias is dropped. `resolveSelection` makes `/model` accept only a registered provider and a listed model (or `models: "any"`); anything else leaves the selection unchanged with `unknown provider:` or `unknown model:`. `/models` lists aliases and providers with a status (`refused`, `no key`, `reachable`, `unreachable`); the only request it sends is `GET {base_url}/models`. `validateProviderConfig` is the pure gate checked against `tests/fixtures/provider-config-cases.json`.
 
 **Exit codes**
 - `0` — help printed, or the interactive session ended (`/exit`, `/quit`, ctrl-c twice, or ctrl-d on an empty line).
 - `2` — usage error, or stdin/stdout is not a terminal. In that case stdout stays empty and stderr gets exactly one line naming `aesop pipe`.
 - `143` (SIGTERM), `129` (SIGHUP), `130` (SIGINT) — the signal exits; the terminal is restored first. The PASTE_OFF write is best-effort and never changes the exit code, even when it throws.
+
+**Harness backend (`AESOP_CHAT_BACKEND=harness`, `chat/harness.mjs`)**: providers come from the `providers` block of the file named by `AESOP_CHAT_CONFIG`. `assertProviderAllowed(provider, model)` is the single gate, run at load and again at request time. It refuses Anthropic or claude.ai hosts, command-style types (`cli`, `exec`, `claude`, `anthropic`), model ids containing a token-bounded `claude` or `anthropic` match anywhere in the id, including gateway routes (except type `orchestrator`), non-http(s) URLs, and non-loopback http without `allow_insecure`. A refused provider stays visible as a `refused:` line and is never sent a request. `harnessSource` streams OpenAI-compatible SSE over `node:http` and never follows redirects. H-R1 to H-R5 are green; the Python seam (H-R26) is not wired.
+
+**Routes and fallback (H-R11 to H-R15, H-R18, H-R19, H-R24)**: `routes` maps a task class to a `provider/model` (or alias) or an object `{target, candidates, fallback, fallback_on, strategy}`. A `/<task> text` turn (task declared in `routes`, never `chat`) uses that route; plain turns use the selected model, plus `routes.chat` fallback and strategy when present. Candidates are tried in order, each at most once per turn. Only connect, timeout, rate-limit and server failures (and a stream cut before the first chunk) fall back; a failure after the first chunk shows `stream interrupted from <provider>` and never re-sends. `fallback_on: "any"` also falls back on auth or refused failures. `strategy` is `cheapest` (cost_per_mtok, local = 0) or `fastest` (in-memory latency EWMA).
+
+**Breaker and errors**: A breaker skips a provider after 3 consecutive retryable failures for a 30 s cooldown, announced once. Every failure is one `error: <provider>: <class>: <reason>` line via `harnessSource`'s `notify` option. JSON, SSE and NDJSON replies normalise to the same deltas.
+
+**Harness UI details**: `/auth` in harness mode lists env key status offline (H-R24). Breaker skip (H-R16) is flashed as a one-frame hint, since the transcript repaints every frame. Ctrl-c during a streamed harness reply aborts the request, shows `cancelled`, and never falls back (H-R21). Token counts come from the provider's `usage` (or chars/4 marked `~`), and a local provider's cost is `$0` <!-- metrics-verified: chat/harness.mjs usageOf sets cost = 0 for is_local providers --> (H-R22).
+
+**Detect**: `/detect` probes only loopback `detect_candidates` (ports or loopback URLs) and only when asked; other hosts are listed as skipped (H-R23).
 
 **Wiring in bin/cli.js**: `aesop chat`; bare `aesop` on a TTY enters chat when `--chat-default` or `AESOP_DEFAULT=chat` is set. A bare `aesop` on a non-TTY stays the pipe filter.
 
@@ -65,6 +77,10 @@ node --test tests/stdio-cli-wiring.test.mjs tests/stdio-pipe.test.mjs tests/stdi
 ```
 
 Anti-vacuity: a test is only accepted when breaking the production code in `chat/` turns it red. The streaming mutant (buffer every chunk before emitting) is the reference check.
+
+## Default backend (Ollama)
+
+With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the harness. If the config (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`) declares no `providers`, a built-in `ollama` provider (`http://127.0.0.1:11434/v1`, models `any`, local, 300 s idle timeout) is added and `ollama/qwen3-coder:30b` is selected. `AESOP_CHAT_BACKEND=pipe` restores the raw pipe backend. Each plain turn sends the prior completed turns (newest 20 messages or 24000 chars, `boundContext`); failed turns are not remembered. An unreachable provider shows `error: <p>: connect: cannot reach <p> at <origin> - is it running?` (also once at startup for the built-in default); non-2xx replies include the provider's own error message. `/models` also lists the ids a provider serves when its `models` is `any`. Tests: `tests/chat-ollama-default.test.mjs`.
 
 ## Spec
 

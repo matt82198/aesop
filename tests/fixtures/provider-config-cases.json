@@ -1,0 +1,47 @@
+[
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://127.0.0.1:11434/v1", "models": ["qwen2.5:7b"], "is_local": true },
+    "expect": "accept",
+    "reason": "loopback http provider with a listed model is accepted"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://api.example.test/v1", "models": ["m"] },
+    "expect": "accept",
+    "reason": "https non-Anthropic provider is accepted"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://api.anthropic.com/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "Anthropic host is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://claude.ai/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "claude.ai host is refused"
+  },
+  {
+    "config": { "type": "cli", "base_url": "http://127.0.0.1:1/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "command-style provider type is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://127.0.0.1:1/v1", "models": ["claude-sonnet"] },
+    "expect": "reject",
+    "reason": "a model id resolving to Claude is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://example.test/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "non-loopback http without allow_insecure is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://example.test/v1", "models": ["m"], "allow_insecure": true },
+    "expect": "accept",
+    "reason": "non-loopback http with allow_insecure is accepted"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "not a url", "models": ["m"] },
+    "expect": "reject",
+    "reason": "an invalid base_url is refused"
+  }
+]

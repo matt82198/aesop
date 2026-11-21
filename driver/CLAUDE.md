@@ -27,7 +27,7 @@
 - **brief_lint.py** — Brief lint, called in `_dispatch_and_journal` after build_manifest_item and before the first model call. ast-reads the item's acceptance test (explicit `acceptanceTestFile` key, else a `.py` token in testCmd), collects asserted string literals and names imported from the module under test, and checks the prompt contains them. Default appends a "Required names and strings" section and logs `brief-lint-added` to state_dir/brief_lint.log. Strict (item `briefLintStrict: true` or env `AESOP_BRIEF_LINT_STRICT=1`) raises BriefLintRefusal, so the item is marked failed and never dispatched. Tests: test_brief_lint_asserted_names.
 - **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
 - **anthropic_transport.py** — stdlib urllib transport for the Anthropic endpoint.
-- **backend_config.py** — Seat config builder: reads `aesop.config.json` seats block, constructs driver instances.
+- **backend_config.py** — Seat config builder: reads `aesop.config.json` seats block, constructs driver instances. Also the chat provider seam (H-R26, H-R27): `validate_provider_entry(entry)` returns `(ok, reason)` for a chat `providers.<id>` entry using the same URL, loopback and key-env guards, and `load_provider_seat(entry)` accepts a valid entry unchanged as a seat; checked against `tests/fixtures/provider-config-cases.json` by `tests/test_provider_config_conformance.py`.
 - **context_pack.py** — Context-pack assembly for orchestrator decisions (allowlist-only reads).
   `add_evidence_to_pack()` is the ONLY supported way to attach already-in-memory evidence
   text to a pack built outside `build_context_pack()` — pure in-memory, never touches

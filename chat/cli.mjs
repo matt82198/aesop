@@ -18,13 +18,42 @@
  * @module chat/cli
  */
 
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
+import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
+// AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
+const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness']);
+// Per-viewer selection memory (H-R10): {provider, model} only, never a key. Stored under the state root.
+function selectionFile(settings) {
+  return join(settings.AESOP_STATE_ROOT || join(os.homedir(), '.aesop'), 'chat-selection.json');
+}
+function loadSelection(file, registry) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    if (typeof parsed?.provider !== 'string' || typeof parsed?.model !== 'string') return null;
+    const picked = resolveSelection(registry, `${parsed.provider}/${parsed.model}`);
+    return picked.error ? null : { provider: picked.provider, model: picked.model };
+  } catch {
+    return null;
+  }
+}
+// Atomic write; a failed save is silent because the selection is only a convenience.
+function saveSelection(file, selection) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(tmp, `${JSON.stringify({ provider: selection.provider, model: selection.model })}\n`, 'utf8');
+    renameSync(tmp, file);
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
+  }
+}
+
 function loadHistory(file) {
   if (!file) return [];
   try {
@@ -85,6 +114,7 @@ const HELP_TEXT = [
   '  /help                  list these commands',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
   '  /auth                  show credential status (no network call)',
+  '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
   '  /exit, /quit           leave chat (ctrl-c twice also quits)',
   '',
@@ -134,7 +164,7 @@ export async function runChat({
   stdout = process.stdout,
   stderr = process.stderr,
   env = process.env,
-  source = pipeSource,
+  source,
 } = {}) {
   if (argv.includes('--help') || argv.includes('-h')) {
     stdout.write(`${HELP_TEXT}\n`);
@@ -171,12 +201,53 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   // Plain text of the lines the last frame drew. After a resize the terminal reflows those lines
   // at the new width, so the next frame moves back over the physical rows they now occupy.
   let drawnPlain = [];
+  // AESOP_CHAT_BACKEND=harness selects the model-agnostic provider registry (chat/harness.mjs).
+  const backendValue = env.AESOP_CHAT_BACKEND;
+  const badBackend = backendValue !== undefined && backendValue !== '' && !BACKEND_VALUES.has(backendValue);
+  // Default backend: the model harness (local Ollama unless the config declares providers). An injected
+  // source, or an explicit AESOP_CHAT_BACKEND=pipe|orchestrator, keeps the old behaviour.
+  const implicitHarness = !source && (backendValue === undefined || backendValue === '');
+  const harness = backendValue === 'harness' || implicitHarness;
+  let configPath = env.AESOP_CHAT_CONFIG;
+  if (!configPath && implicitHarness) {
+    const local = join(process.cwd(), 'aesop.config.json');
+    if (existsSync(local)) configPath = local;
+  }
+  const registry = harness ? loadRegistry(configPath) : null;
+  const defaulted = implicitHarness ? applyDefaultProvider(registry) : false;
+  const stateFile = selectionFile(env);
+  const selection = registry ? (loadSelection(stateFile, registry) ?? registry.defaultSelection) : null;
+  const status = { cwd: process.cwd() };
+  if (harness) Object.assign(status, { provider: selection ? selection.provider : null, model: selection ? selection.model : null });
+  const backend = { source: source ?? pipeSource };
+  if (badBackend) {
+    // Never a silent default: the value is named, and turns get the error instead of a backend (H-R28).
+    backend.source = async function* () { /* no backend for an unknown value */ };
+  }
+  // Harness hooks: /model is checked against the registry (an unknown name leaves the selection
+  // unchanged); /models lists providers and aliases with probes that send only GET /models.
+  const hooks = harness
+    ? {
+      setModel: (arg) => {
+        const picked = resolveSelection(registry, arg);
+        if (picked.error) return picked.error;
+        session.state.status.provider = picked.provider;
+        session.state.status.model = picked.model;
+        if (registry) saveSelection(stateFile, picked);
+        return null;
+      },
+      listModels: () => listModelLines(registry, env),
+      auth: () => authLines(registry, env),
+      detect: () => detectLines(registry, env),
+    }
+    : {};
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
     color: resolveColor({ env, argv, isTTY: true }),
     unicode: resolveUnicode({ env }),
-    status: { cwd: process.cwd() },
+    status,
+    hooks,
     onFrame: (frame) => {
       const rows = physicalRows(drawnPlain, stdout.columns || 80);
       const up = rows > 1 ? CURSOR_UP(rows - 1) : '';
@@ -184,6 +255,33 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       stdout.write(`\r${up}${CLEAR_TO_END}${frame}`);
     },
   });
+  if (badBackend) {
+    session.state.transcript.push({ role: 'system', text: `error: AESOP_CHAT_BACKEND: unknown value "${backendValue}" (use pipe, orchestrator or harness)` });
+  }
+  if (harness) {
+    // Fallback, error and cancel lines go to the transcript as they happen (H-R12, H-R19, H-R21).
+    const notify = (text) => session.state.transcript.push({ role: 'system', text });
+    // A skip notice is flashed for one frame: the transcript repaints every frame, so a line kept there
+    // would be drawn again on each repaint (H-R16 announces the skip once).
+    const flash = (text) => { session.setHint(text); session.setHint(null); };
+    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env, {
+      notify,
+      flash,
+      usage: (u) => session.setUsage(u),
+    });
+    for (const text of registry.notices) session.state.transcript.push({ role: 'system', text });
+    if (defaulted) {
+      // Startup reachability probe (GET /models on the loopback default). Unreachable is a visible line;
+      // the session stays usable and never falls back to echo.
+      const entry = registry.providers.get('ollama');
+      probeProvider(entry, env, 1500).then((status) => {
+        if (status === 'reachable') return;
+        notify('error: ollama: connect: cannot reach ollama at http://127.0.0.1:11434 — is it running?');
+        session.emit();
+      }).catch(() => {});
+    }
+    if (!selection) session.state.transcript.push({ role: 'system', text: 'no provider configured (see /help)' });
+  }
 
   return new Promise((resolve) => {
     let input = { ...createInputState(), history, historyIndex: history.length };
@@ -231,7 +329,12 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       resolve(code);
     };
 
+    // The abort controller for the turn in flight. In harness mode ctrl-c while a reply streams aborts
+    // the request (H-R21); the pipe backend keeps the hint-then-quit behaviour.
+    let turnAbort = null;
     const submit = (line) => {
+      const ctl = harness ? new AbortController() : null;
+      turnAbort = ctl;
       let notice = null;
       // Consecutive duplicates store one entry, matching the reducer.
       if (line.trim() !== '') {
@@ -241,8 +344,13 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       }
       chain = chain.then(async () => {
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
-        const chunks = line.startsWith('/') ? undefined : source(line);
+        // A harness route turn (`/code ...`) reaches the backend with its task class; other slash lines are commands.
+        const routed = harness ? matchRoute(registry, line) : null;
+        const signal = ctl ? ctl.signal : undefined;
+        const chunks = routed ? backend.source(routed.body, { task: routed.task, signal })
+          : line.startsWith('/') ? undefined : backend.source(line, ctl ? { signal } : undefined);
         await session.submit(line, chunks);
+        if (turnAbort === ctl) turnAbort = null;
         // A failed history save is shown as one visible status line; the session keeps running.
         if (notice) {
           session.state.transcript.push({ role: 'system', text: notice });
@@ -265,6 +373,11 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const onKeypress = (str, key) => {
       const before = input;
       try {
+        if (turnAbort && session.state.mode === 'streaming' && key && key.ctrl && key.name === 'c') {
+          // Ctrl-c during a streamed harness reply aborts that request; the turn shows "cancelled".
+          turnAbort.abort();
+          return;
+        }
         handleKey(str, key);
       } catch (err) {
         // A throw while handling a key (a failed render, for example) is shown as an error line and
