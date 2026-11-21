@@ -19,6 +19,8 @@ Durable, testable specs for aesop's planned features, derived from C:/Users/Matt
 1. Plan drift = `100 * (1 - LCS_similarity(spec, original))`, where LCS similarity is line-level: `2 * LCS_lines / (lines(spec) + lines(original))`. Pure diff from the original; no judgment.
 2. Implementation drift = `unmet requirement tests / total requirement tests * 100`, measured like `tools/chat_spec_drift.mjs` on branch `feat/chat-tui-improve-loop`.
 
-Exit ceiling (Matt, 2026-11-21): drift must stay at or below 86%. Above it, the loop does not exit and the divergence is escalated.
+Exit ceiling (Matt, 2026-11-21): drift must stay at or below 86%. Above it, the loop does not exit and the divergence is escalated. <!-- metrics-verified: Matt 2026-11-21 stated threshold, not a measured stat -->
+
+(Sibling: C:/Users/Mattt/Desktop/aesop-chat-plan.md)
 
 These specs are text only; code and tests that enforce them belong to later PRs.
