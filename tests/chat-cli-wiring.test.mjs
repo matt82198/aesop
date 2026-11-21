@@ -536,3 +536,77 @@ test('chat_history_happy_path_appends_and_caps_at_500_with_no_notice', async () 
     safeRm(dir);
   }
 });
+
+test('chat_bracketed_paste_coalesces_intermediate_repaints_and_flushes_if_paste_end_lost', async () => {
+  const { runChat } = await import(pathToFileURL(chatCliPath).href);
+  const dir = freshTempDir();
+  try {
+    const historyFile = join(dir, 'chat-history.json');
+    const makeIo = () => {
+      const stdin = new PassThrough();
+      stdin.isTTY = true;
+      stdin.setRawMode = () => {};
+      const writes = [];
+      const stdout = new Writable({
+        write(chunk, _enc, cb) {
+          writes.push(Buffer.from(chunk).toString('utf8'));
+          cb();
+        },
+      });
+      stdout.isTTY = true;
+      stdout.columns = 80;
+      stdout.rows = 24;
+      const stderr = new Writable({ write(_c, _e, cb) { cb(); } });
+      return { stdin, stdout, stderr, writes };
+    };
+
+    const io1 = makeIo();
+    const submitted = [];
+    const source = async function* (line) {
+      submitted.push(line);
+      yield 'ok';
+    };
+    const done1 = runChat({
+      stdin: io1.stdin,
+      stdout: io1.stdout,
+      stderr: io1.stderr,
+      env: { AESOP_CHAT_HISTORY: historyFile, NO_COLOR: '1' },
+      source,
+    });
+    await waitUntil(() => io1.writes.join('').includes('\x1b[?2004h'));
+    const beforePasteWrites = io1.writes.length;
+    const payload = 'x'.repeat(300);
+    io1.stdin.write(`\x1b[200~${payload}\x1b[201~`);
+    await new Promise((r) => setTimeout(r, 50));
+    const pasteRepaints = io1.writes.length - beforePasteWrites;
+    assert.ok(
+      pasteRepaints <= 3,
+      `300-char bracketed paste must coalesce intermediate repaints (<=3 writes), got ${pasteRepaints}`,
+    );
+    io1.stdin.write('\r');
+    assert.ok(await waitUntil(() => submitted.length === 1), 'plain Enter submits coalesced paste');
+    assert.equal(submitted[0], payload);
+    io1.stdin.write('\x03\x03');
+    await resolvesWithin(done1);
+
+    // Lost paste-end fallback: pasted buffer still flushes onto screen after PASTE_IDLE_MS.
+    const io2 = makeIo();
+    const done2 = runChat({
+      stdin: io2.stdin,
+      stdout: io2.stdout,
+      stderr: io2.stderr,
+      env: { AESOP_CHAT_HISTORY: historyFile, NO_COLOR: '1' },
+      source,
+    });
+    await waitUntil(() => io2.writes.join('').includes('\x1b[?2004h'));
+    io2.stdin.write('\x1b[200~unterminated-paste-text');
+    assert.ok(
+      await waitUntil(() => io2.writes.join('').includes('unterminated-paste-text')),
+      'paste without paste-end must flush to the frame once PASTE_IDLE_MS elapses',
+    );
+    io2.stdin.write('\x03\x03');
+    await resolvesWithin(done2);
+  } finally {
+    safeRm(dir);
+  }
+});
