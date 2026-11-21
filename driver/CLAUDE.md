@@ -11,11 +11,11 @@
   truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree is killed
   (taskkill /T /F Windows, killpg POSIX), exit 124 promptly, partial output preserved. Never
   subprocess.run(shell=True, timeout=) — Windows kills only cmd.exe then re-blocks on the orphaned grandchild.
-- **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable
-  seam (FakeTransport in tests: no API key or network).
+- **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable seam (FakeTransport in tests: no API key or network).
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
   construct-time validate_base_url; key waiver only via loopback-validated is_local.
 - **turn_backend.py / turn.py** — TUI driver P1: `python -m driver.turn [--json] [--model p/m] [--system s] [--timeout s] "prompt"`, one turn over openai_compatible_driver (proxy env ignored), exit codes = aesop ask (0/2/3/4/5/6). Anthropic/Claude ids and hosts refused (6) before any socket. Tests: test_turn_backend, test_turn_cli.
+- **turn_stream.py / turn_frames.py** — TUI driver P2: streamed turns over `http.client` (no proxy env, no redirects): SSE, NDJSON and whole-JSON replies become the same deltas; failures use the harness classes; `CancelToken.cancel()` closes the socket and the turn reports `cancelled`. `turn.py --stream` writes deltas, `--frames` writes an AESOP-PIPE/1 stream (`hello`, `data` deltas, `event` notify/usage, `done`, `E <exit>`; Ctrl-C exits 130), `--serve` keeps one child for many turns (stdin JSON lines `turn`/`cancel`/`shutdown`; EOF ends with `E 0`), `--base-url` swaps the built-in provider. Protocol detail: the turn.py docstring. Tests: test_turn_stream, test_turn_serve (helper tests/turn_fake_server.py).
 - **Turn engine (spec H-R26)** — the driver is the one turn engine: lanes, the chat TUI, `aesop ask` and codex/gemini/agy turns all run through `python -m driver.turn`; `chat/` is a thin spawn adapter reading AESOP-PIPE/1 frames (`stdio/frames.mjs`) from one driver child per session, and where the Node harness and the driver disagree the driver wins. Non-Anthropic only: Claude ids and hosts are refused (exit 6) before any socket, `backend: claude` and the Codex CLI are barred from TUI turns ("codex" = the OpenAI HTTP backend), `/model orchestrator/seat` is the only Claude path. The Node harness stays the default until a golden-transcript parity test passes; `AESOP_CHAT_BACKEND=driver` selects the driver before that.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
