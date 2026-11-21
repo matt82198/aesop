@@ -20,7 +20,7 @@ Release that brings the npm package and the README in line with the current lice
 - #1441 feat(driver): one-shot turn engine python -m driver.turn (TUI P1)
 - #1436 feat(chat): aesop ask: headless one-shot for agents
 - #1432 feat(chat): talk to local open-weight models via Ollama (model-agnostic harness)
-- #1428 feat(chat): spec-driven TUI improvements (drift 0%)
+- #1428 feat(chat): spec-driven TUI improvements
 - #1417 feat(loop): pre-test gates on worker patch output
 - #1388 feat(chat): repaint in place, timed spinner, streaming pipe source, TAB stops, history seam
 - #1385 feat(auth): zero-dependency auth CLI with control ops on the stream-json pipe
