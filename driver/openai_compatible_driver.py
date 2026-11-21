@@ -37,6 +37,7 @@ def make_openai_compatible_transport(
     api_key_env: str = "OPENAI_API_KEY",
     timeout_s: float = 120.0,
     is_local: bool = False,
+    ignore_env_proxy: bool = False,
 ):
     """Factory function: return a transport callable for an OpenAI-compatible endpoint.
 
@@ -48,6 +49,9 @@ def make_openai_compatible_transport(
             instead of raising. Requires a loopback base_url (validated here):
             the key waiver keys off this VALIDATED flag, never off the URL
             text (a substring check is spoofable, e.g. "localhost.attacker.example").
+        ignore_env_proxy: if True, HTTP(S)_PROXY / ALL_PROXY environment
+            variables are ignored for this transport (an empty ProxyHandler
+            is installed). Default False keeps urllib's env-proxy behavior.
 
     Returns:
         A transport callable (payload dict) -> dict matching the CodexDriver contract.
@@ -101,7 +105,10 @@ def make_openai_compatible_transport(
             # POST with hard timeout.
             # Create a custom opener with auth-stripping redirect handler.
             # This prevents Authorization header leakage on cross-origin redirects.
-            opener = urllib.request.build_opener(_AuthStripRedirectHandler())
+            handlers = [_AuthStripRedirectHandler()]
+            if ignore_env_proxy:
+                handlers.insert(0, urllib.request.ProxyHandler({}))
+            opener = urllib.request.build_opener(*handlers)
             with opener.open(request, timeout=timeout_s) as response:
                 status = response.status
                 # Cap response read at MAX_RESPONSE_SIZE bytes before parsing.

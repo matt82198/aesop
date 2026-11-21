@@ -333,8 +333,6 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     // the request (H-R21); the pipe backend keeps the hint-then-quit behaviour.
     let turnAbort = null;
     const submit = (line) => {
-      const ctl = harness ? new AbortController() : null;
-      turnAbort = ctl;
       let notice = null;
       // Consecutive duplicates store one entry, matching the reducer.
       if (line.trim() !== '') {
@@ -343,14 +341,15 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         if (failure) notice = `history not saved: ${failure}`;
       }
       chain = chain.then(async () => {
+        // Only the turn at the front of the queue owns Ctrl-C.
+        turnAbort = harness ? new AbortController() : null;
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
         // A harness route turn (`/code ...`) reaches the backend with its task class; other slash lines are commands.
         const routed = harness ? matchRoute(registry, line) : null;
-        const signal = ctl ? ctl.signal : undefined;
+        const signal = turnAbort?.signal;
         const chunks = routed ? backend.source(routed.body, { task: routed.task, signal })
-          : line.startsWith('/') ? undefined : backend.source(line, ctl ? { signal } : undefined);
+          : line.startsWith('/') ? undefined : backend.source(line, signal ? { signal } : undefined);
         await session.submit(line, chunks);
-        if (turnAbort === ctl) turnAbort = null;
         // A failed history save is shown as one visible status line; the session keeps running.
         if (notice) {
           session.state.transcript.push({ role: 'system', text: notice });
@@ -362,6 +361,8 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         // the session keeps running so ctrl-d can still exit cleanly.
         session.state.transcript.push({ role: 'system', text: `error: ${err && err.message ? err.message : err}` });
         session.emit();
+      }).finally(() => {
+        turnAbort = null;
       });
     };
 
