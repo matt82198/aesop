@@ -111,8 +111,18 @@ The terminal receipts were paraphrased for the briefs. For example, the characte
 
 As a separate dispatch check, `aesop ask` at upstream commit `ece51950` sent the six scored 30B rows to local Ollama with the aggregate withheld. The 27B worker returned four baseline matches, five candidate matches, one gain on the exit claim, and zero losses. A deterministic comparison of its JSON answer against the six rows matched exactly. This dispatch is excluded from the 36 adjudications.
 
+### Confirming the 30B transfer
+
+**The instruction failed the next infrastructure transfer check.** With evidence alone, Qwen3-Coder 30B scored 8/8 using 5,218 tokens. With the same instruction it scored 7/8 using 5,888 tokens. All 16 decisions were schema-valid. The candidate retained the four genuine defects, lost one of the four refuted claims and gained zero cases. Keep the instruction experimental.
+
+Four distinct merged PR receipts supplied the observations. Each allegation was presented twice in isolated calls, once with evidence of incorrect behavior and once with evidence from the corrected implementation. The eight snapshots include a repeated lock wait, Git staging of a transient lock, context filtering by task and the timing boundary of a directory walk. The incorrect task-filter snapshot comes from a documented mutation test. The author selected and paraphrased the receipts. Paired snapshots from the same PR share a mechanism. [Lock retry](https://github.com/matt82198/aesop/pull/1406) · [Store staging](https://github.com/matt82198/aesop/pull/1409) · [Task filtering](https://github.com/matt82198/aesop/pull/1412) · [Walk timing](https://github.com/matt82198/aesop/pull/1420)
+
+The lost case captures the distinction the worker missed. A lock existed on disk while the store writer ran. After the commit, a lookup in Git's tracked paths returned no entry for that lock. The baseline refuted the claim that the lock was version-controlled. The candidate quoted the same lookup and accepted the claim. Across the terminal and infrastructure trials together, 30B scored 12/14 in either arm with one gain and one loss.
+
+The follow-up used the same 30B tag, candidate instruction, alternating arm order and exact-match criterion as the first trial. The case manifest was frozen before inference, SHA-256 `ab62b82248b472ea9c97465c3608378e6f27dbe7e0d099480c4d6cc5cbb19a91` on the original UTF-8 LF bytes. One call per cell limits conclusions about repeatability.
+
 ## Reproduction
 
 From the repository root, `python -B bench/operational_transfer.py --baseline-model qwen2.5-coder:14b` replays the sixteen-case set. Append `--shared-corpus` for the July findings or use `--terminal-model qwen2.5-coder:14b` for the paired terminal evidence transfer. Substitute either other Ollama tag for the other local runs. Expected labels and commit references stay out of the prompts.
 
-`python -B bench/tier_scorecard.py` checks the recorded cell counts and prints model totals and disagreements without making model calls. The inputs are the four `seam-*.jsonl` checkpoints, the dated shadow scorecards, and the local `operational-tier-*.jsonl` and `operational-shared-*.jsonl` files alongside this report.
+Use `python -B bench/operational_transfer.py --receipt-transfer` for the 30B confirmation. Run `python -B bench/tier_scorecard.py` to check recorded cell counts, model totals, paired gains and losses without making model calls.

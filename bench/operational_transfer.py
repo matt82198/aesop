@@ -37,6 +37,7 @@ def main():
     mode.add_argument("--compact", action="store_true", help="Compare baseline, revised and compact rules on regression and holdout cases")
     mode.add_argument("--baseline-model", metavar="OLLAMA_TAG", help="Run one unassisted local model on the full tier comparison corpus")
     mode.add_argument("--terminal-model", metavar="OLLAMA_TAG", help="Compare identical terminal evidence with and without the frozen refutation rule")
+    mode.add_argument("--receipt-transfer", action="store_true", help="Replay the selected worker on pre-fix and corrected infrastructure receipts")
     parser.add_argument("--shared-corpus", action="store_true", help="Use the historical findings shared with the archived model scorecards")
     args = parser.parse_args()
     if args.shared_corpus and not args.baseline_model:
@@ -53,17 +54,24 @@ def main():
     if args.compact:
         rules["compact"] = (HERE / "fixtures/operational-triage-compact.md").read_text(encoding="utf-8")
     model = args.terminal_model or args.baseline_model or MODEL
+    evidence_trial = bool(args.terminal_model or args.receipt_transfer)
+    default_lens = "terminal_review"
     if args.terminal_model:
         cases = json.loads((HERE / "fixtures" / "operational-terminal-transfer.json").read_text(encoding="utf-8"))
+    if args.receipt_transfer:
+        protocol = json.loads((HERE / "fixtures" / "operational-receipt-transfer.json").read_text(encoding="utf-8"))
+        cases, model = protocol["cases"], protocol["model"]
+        default_lens = "infrastructure_review"
+    if evidence_trial:
         rules["candidate"] = (HERE / "fixtures" / "operational-refutation.md").read_text(encoding="utf-8")
     if args.baseline_model:
         cases.extend(json.loads((HERE / "fixtures/operational-tier-corpus.json").read_text(encoding="utf-8")))
     if args.shared_corpus:
         cases = shared_cases()
     for index, case in enumerate(cases):
-        item = CorpusItem(case["id"], case["finding_text"], case.get("source_lens", "terminal_review"),
+        item = CorpusItem(case["id"], case["finding_text"], case.get("source_lens", default_lens),
                           "", "", "", evidence=case.get("evidence", []))
-        pack = build_finding_context_pack(item, str(ROOT), str(ROOT), enriched=bool(args.terminal_model))
+        pack = build_finding_context_pack(item, str(ROOT), str(ROOT), enriched=evidence_trial)
         arms = ("baseline", "candidate") if index % 2 == 0 else ("candidate", "baseline")
         if args.compact:
             ordered = tuple(rules)
@@ -84,7 +92,7 @@ def main():
                 "case": item.id, "arm": arm, "model": model, "decision": decision,
                 "expected": case["expected"], "tokens": seat.get_tokens_spent(),
             }), flush=True)
-            if decision["verdict"] == "DECISION_FAILED" and not (args.baseline_model or args.terminal_model):
+            if decision["verdict"] == "DECISION_FAILED" and not (args.baseline_model or evidence_trial):
                 raise SystemExit("A call failed. Resolve the infrastructure error before scoring.")
 
 
