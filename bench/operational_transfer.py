@@ -84,7 +84,7 @@ def main():
                 "case": item.id, "arm": arm, "model": model, "decision": decision,
                 "expected": case["expected"], "tokens": seat.get_tokens_spent(),
             }), flush=True)
-            if decision["verdict"] == "DECISION_FAILED" and not args.baseline_model:
+            if decision["verdict"] == "DECISION_FAILED" and not (args.baseline_model or args.terminal_model):
                 raise SystemExit("A call failed. Resolve the infrastructure error before scoring.")
 
 

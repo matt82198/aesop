@@ -91,14 +91,28 @@ All 12 archived GPT-4o mini blind attempts failed to yield a valid decision and 
 
 The current pilots used author-written rubrics. They did not test a worker distilling its own mistakes. To test that hypothesis, freeze a development set, give a worker and an independent adjudicator the same cases and evidence, and separately compress each into the same token allowance. Compare both against baseline and against evidence alone on untouched cases, including previously correct controls. Preserve ranking, schema failures, abstentions, tokens and evidence quality as separate outcomes. No rule in this report is ready for production promotion.
 
-## Reproduction
-
-### Terminal evidence transfer protocol
+## Terminal evidence transfer protocol
 
 Freeze six terminal findings, two each for defects, refuted claims and proposed capabilities. The six findings are new to this local comparison. The author knew the terminal observations and historical changes when writing the briefs and labels. The proposed capabilities are retrospective requests. This is a transfer pilot on a new subsystem, with one author and two examples per class.
 
 Run all three installed models once per case and arm, alternating arm order by case. Both arms receive the same two observations. Only the candidate arm receives the frozen instruction in `bench/fixtures/operational-refutation.md`, written from the preceding infrastructure replay. No case ID, expected label or source revision is given to the model. Exact verdict agreement is the primary endpoint. Count a schema or transport failure as incorrect and report it separately. Compare paired gains, losses and unchanged decisions per model. A candidate qualifies for further testing on a model only with at least one gain and zero baseline-correct cases lost. A tie provides no evidence for adding instructions. Preserve all runs and postpone production decisions.
 
-From the repository root, `python -B bench/operational_transfer.py --baseline-model qwen2.5-coder:14b` replays the sixteen-case set. Append `--shared-corpus` for the July findings and substitute either other Ollama tag for the other local runs. The worker receives the finding text and source lens. Expected labels and commit references are attached to the recorded output after inference.
+The protocol, cases and candidate instruction were committed at `72817cf0` before inference. All 36 decisions passed schema validation. Each arm includes six calls. Token counts come from Ollama.
+
+| Worker | Evidence alone | Evidence plus rule | Cases gained / lost | Tokens alone / with rule |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen2.5-Coder 14B | 4/6 | 4/6 | 0 / 0 | 4,200 / 4,633 |
+| Qwen3-Coder 30B | 4/6 | 5/6 | 1 / 0 | 4,080 / 4,487 |
+| Qwen3.8 27B | 6/6 | 6/6 | 0 / 0 | 7,973 / 9,784 |
+
+Only the 30B worker met the criterion for another trial. The changed decision concerned a claim that a missing Ollama model terminated chat. The request returned 404, but the same process accepted another selection and completed two turns. The 14B worker cited both observations in the candidate arm and still accepted the exit claim. Both coders accepted a second refuted finding about a paste being split into two turns, even while quoting the single persisted history entry containing both lines. All three workers matched both defect labels and both enhancement labels in both arms. The 27B baseline already matched every expected disposition.
+
+The terminal receipts were paraphrased for the briefs. For example, the character-removal case gives the affected suffix of the saved line. The evaluation measures whether a worker can use supplied observations. Retrieval of those observations and inspection of a running process were outside the worker task. The 30B gain justifies a larger independent transfer set for that worker. The observed ties would add tokens to the other two workers.
+
+As a separate dispatch check, `aesop ask` at upstream commit `ece51950` sent the six scored 30B rows to local Ollama with the aggregate withheld. The 27B worker returned four baseline matches, five candidate matches, one gain on the exit claim, and zero losses. A deterministic comparison of its JSON answer against the six rows matched exactly. This dispatch is excluded from the 36 adjudications.
+
+## Reproduction
+
+From the repository root, `python -B bench/operational_transfer.py --baseline-model qwen2.5-coder:14b` replays the sixteen-case set. Append `--shared-corpus` for the July findings or use `--terminal-model qwen2.5-coder:14b` for the paired terminal evidence transfer. Substitute either other Ollama tag for the other local runs. Expected labels and commit references stay out of the prompts.
 
 `python -B bench/tier_scorecard.py` checks the recorded cell counts and prints model totals and disagreements without making model calls. The inputs are the four `seam-*.jsonl` checkpoints, the dated shadow scorecards, and the local `operational-tier-*.jsonl` and `operational-shared-*.jsonl` files alongside this report.

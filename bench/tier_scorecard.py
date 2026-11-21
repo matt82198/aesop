@@ -109,7 +109,34 @@ def shared_counts():
               sum(not valid or verdict == "DECISION_FAILED" for _, verdict, valid in pairs))
 
 
+def terminal_counts():
+    cases = json.loads((RESULTS.parent / "fixtures/operational-terminal-transfer.json").read_text(encoding="utf-8"))
+    truth = {case["id"]: case["expected"] for case in cases}
+    arms = ("baseline", "candidate")
+    cells = {(key, arm) for key in truth for arm in arms}
+    for tag in LOCAL:
+        rows = read_rows(f"operational-terminal-{tag}.jsonl")
+        if len(rows) != len(cells) or {(row["case"], row["arm"]) for row in rows} != cells:
+            raise ValueError(f"Missing or duplicated terminal decisions for {tag}")
+        correct = {arm: set() for arm in arms}
+        tokens = Counter()
+        failed = Counter()
+        for row in rows:
+            key, arm, decision = row["case"], row["arm"], row["decision"]
+            if row["expected"] != truth[key] or row["model"].replace(":", "-") != tag:
+                raise ValueError(f"Mismatched terminal metadata for {tag} {key}")
+            tokens[arm] += row["tokens"]
+            if not decision["schema_validated"] or decision["verdict"] == "DECISION_FAILED":
+                failed[arm] += 1
+            elif decision["verdict"] == truth[key]:
+                correct[arm].add(key)
+        before, after = (correct[arm] for arm in arms)
+        print(tag, "terminal", len(before), len(after), "gains", sorted(after - before),
+              "losses", sorted(before - after), "tokens", dict(tokens), "failed", dict(failed))
+
+
 if __name__ == "__main__":
     archive_counts()
     local_counts()
     shared_counts()
+    terminal_counts()
