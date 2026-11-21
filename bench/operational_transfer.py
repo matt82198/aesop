@@ -13,6 +13,21 @@ from shadow_adjudication import (
 
 HERE = Path(__file__).resolve().parent
 MODEL = "qwen2.5-coder:14b"
+SHARED_CASES = (
+    "vbs-waitforexit", "dryrun-blocked", "uninstall-exit0", "unc-paths",
+    "hardcoded-username", "audit-log-observability", "ps1-syntax-gate",
+    "test-hardcoded-path", "fixreview-parents1", "regression-ui-suite",
+    "cimergewait-exit0", "vbs-syntax-validity",
+)
+
+
+def shared_cases():
+    path = ROOT / "driver/decisions/shadow/corpus-2026-07-23.jsonl"
+    source = {row["id"]: row for row in map(json.loads, path.read_text(encoding="utf-8").splitlines())}
+    return [
+        {**source[key], "expected": source[key]["labels"]["ground_truth"]}
+        for key in SHARED_CASES
+    ]
 
 
 def main():
@@ -21,7 +36,10 @@ def main():
     mode.add_argument("--v1", action="store_true", help="Replay the first rubric and its three original cases")
     mode.add_argument("--compact", action="store_true", help="Compare baseline, revised and compact rules on regression and holdout cases")
     mode.add_argument("--baseline-model", metavar="OLLAMA_TAG", help="Run one unassisted local model on the full tier comparison corpus")
+    parser.add_argument("--shared-corpus", action="store_true", help="Use the historical findings shared with the archived model scorecards")
     args = parser.parse_args()
+    if args.shared_corpus and not args.baseline_model:
+        parser.error("--shared-corpus requires --baseline-model")
     cases = json.loads((HERE / "fixtures" / "operational-transfer.json").read_text(encoding="utf-8"))
     rubric_path = ROOT / "driver/decisions/operational-triage.md"
     if args.v1:
@@ -36,6 +54,8 @@ def main():
     model = args.baseline_model or MODEL
     if args.baseline_model:
         cases.extend(json.loads((HERE / "fixtures/operational-tier-corpus.json").read_text(encoding="utf-8")))
+    if args.shared_corpus:
+        cases = shared_cases()
     for index, case in enumerate(cases):
         item = CorpusItem(case["id"], case["finding_text"], case["source_lens"], "", "", "")
         pack = build_finding_context_pack(item, str(ROOT), str(ROOT))

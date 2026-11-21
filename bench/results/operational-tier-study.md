@@ -15,3 +15,7 @@ Group cases by the judgment they require before inspecting the three-model matri
 | Trace lost progress, state or durability across steps | backup-cycle, concurrent-store-append, tracker-retry, disk-only-items |
 
 For the archived runs, preserve task, model, repeat and experimental arm. Count every recorded attempt. Separate a scored incorrect patch from a structured-output or submission failure when the record distinguishes them. Task families describe what an item tests, not the internal cause of a model decision. No machinery is promoted by this comparison.
+
+### Shared historical findings
+
+Replay twelve operational findings verbatim from the July adjudication corpus so all three local models can be compared with historical model decisions on the same examples. The selection covers process lifecycle and exit status, portability, diagnostic scope, and refutation of a review finding. The cases were selected retrospectively and include the original audit-log case. Score against the project's recorded disposition. The brief and source lens go to the worker. Corpus evidence, historical answers and labels stay out of the prompt. Exclude enriched scorecards, retain failed blind runs as unavailable for semantic comparison, and disclose harness differences. Agreement measures classification only.
