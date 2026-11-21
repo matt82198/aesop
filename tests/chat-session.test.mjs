@@ -588,3 +588,43 @@ test('test_helper_provides_an_injectable_echo_source', async () => {
   for await (const chunk of echoSource('one  two')) words.push(chunk);
   assert.equal(words.join(''), 'one two', 'the helper echo must stream the words of the line, space-joined');
 });
+
+test('session_zero_chunk_failed_turn_omits_empty_assistant_bubble_and_preserves_exact_token_tracking', async () => {
+  const { Session } = await loadSession();
+  const frames = [];
+  let attempt = 0;
+  let session;
+  const source = async function* () {
+    attempt += 1;
+    if (attempt === 1) {
+      session.state.transcript.push({ role: 'system', text: 'error: ollama: bad-response: HTTP 404: model not found' });
+      return;
+    }
+    session.setUsage({ total: 18, cost: 0 });
+    yield 'answer after fixing model';
+  };
+  session = new Session({
+    columns: 100,
+    rows: 30,
+    status: { model: 'qwen3-coder:30b', provider: 'ollama', cwd: '/w' },
+    onFrame: (f) => frames.push(f),
+    source,
+  });
+
+  await session.submit('hello on missing model');
+  const emptyAssistants = session.state.transcript.filter((m) => m.role === 'assistant' && m.text === '');
+  assert.equal(emptyAssistants.length, 0, 'a 0-chunk failed turn must not leave a phantom empty assistant bubble');
+  assert.equal(session.state.status.tokensEstimated, false, 'a 0-char failed turn must not mark 0 tokens as estimated (~0)');
+
+  await session.submit('hello on valid model');
+  assert.equal(session.state.status.tokens, 18);
+  assert.equal(
+    session.state.status.tokensEstimated,
+    false,
+    'an earlier 0-char failed turn must not taint subsequent exact provider usage with ~',
+  );
+  assert.ok(!frames.at(-1).includes('tokens ~18'), `status bar must show exact tokens 18, got:\n${frames.at(-1)}`);
+
+  await session.submit('/help');
+  assert.ok(frames.at(-1).includes('/models'), '/help output in Session must document /models');
+});
