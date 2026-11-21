@@ -50,19 +50,37 @@ acquire_lock() {
   local stale_threshold="$2"
   local guard="$lock_dir.guard"
   local guard_stale_secs=60
+  local guard_wait_tries=200   # x 0.05s = ~10s bounded spin, then fail closed (return 1)
+  local rc=0 fd="" tries=0
 
   mkdir -p "$(dirname "$lock_dir")" 2>/dev/null || true
 
-  if ! mkdir "$guard" 2>/dev/null; then
-    if [ -n "$(find "$guard" -maxdepth 0 -mmin +$((guard_stale_secs / 60)) 2>/dev/null)" ]; then
-      rmdir "$guard" 2>/dev/null || true
-      mkdir "$guard" 2>/dev/null || return 1
+  if command -v flock >/dev/null 2>&1 && { exec {fd}>"$lock_dir.flk"; } 2>/dev/null; then
+    # Kernel-managed mutex: waits (bounded) for the previous occupant to leave the section and
+    # is released by the kernel if the occupant dies. Closed before returning so no child
+    # spawned later inherits it.
+    if flock -w 10 "$fd" 2>/dev/null; then
+      acquire_lock_guarded "$lock_dir" "$stale_threshold" || rc=$?
     else
-      return 1
+      rc=1
     fi
+    exec {fd}>&-
+    return "$rc"
   fi
 
-  local rc=0
+  # Fallback (no flock(1)): mkdir mutex with a BOUNDED SPIN. A loser waits for the occupant to
+  # finish and then judges the lock itself; returning "held" at once let both contenders fail
+  # or both succeed depending on where the occupant was.
+  while ! mkdir "$guard" 2>/dev/null; do
+    if [ -n "$(find "$guard" -maxdepth 0 -mmin +$((guard_stale_secs / 60)) 2>/dev/null)" ]; then
+      rmdir "$guard" 2>/dev/null || true
+      continue
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$guard_wait_tries" ]; then return 1; fi
+    sleep 0.05 2>/dev/null || sleep 1
+  done
+
   acquire_lock_guarded "$lock_dir" "$stale_threshold" || rc=$?
   rmdir "$guard" 2>/dev/null || true
   return "$rc"

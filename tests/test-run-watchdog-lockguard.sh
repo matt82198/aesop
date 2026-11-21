@@ -27,6 +27,28 @@ fail() { echo "FAIL: $*"; FAILED=$((FAILED + 1)); }
 # A pid that is guaranteed dead: the pid of a bash process that has already exited.
 dead_pid() { bash -c 'echo $$'; }
 
+# show_trial <trial_dir> <summary>: print each driver's RC and stderr so a CI log shows the
+# interleaving (RC=1 held / RC=2 reclaimed / RC=0 fresh) and the reclaim reason.
+show_trial() {
+  echo "  trial $1: $2"
+  local d
+  for d in a b; do
+    echo "    driver $d: $(tr '\n' ' ' < "$1/$d.out" 2>/dev/null) stderr: $(tr '\n' '|' < "$1/$d.err" 2>/dev/null)"
+  done
+}
+
+# DRIVER (args: script, lock, barrier-file-or-empty, trial dir): optionally wait at the barrier,
+# acquire, print RC, then stay ALIVE until both drivers have finished acquiring (bounded 20s).
+# A fixed "sleep 1" hold let a slow-starting contender arrive after the winner had exited, which
+# is a legitimate dead-holder reclaim, not a double acquisition; the holder must outlive the race.
+DRIVER='source "$1"
+if [ -n "$3" ]; then while [ ! -f "$3" ]; do sleep 0.01; done; fi
+acquire_lock "$2" 300
+echo "RC=$?"
+: > "$4/done.$$"
+n=0
+while [ "$(find "$4" -maxdepth 1 -name "done.*" | wc -l)" -lt 2 ] && [ "$n" -lt 400 ]; do sleep 0.05; n=$((n + 1)); done'
+
 CYCLE_MOCK="$TMP_DIR/mock-cycle.sh"
 printf '%s\n' '#!/bin/bash' 'COUNT=$(cat "$1" 2>/dev/null || echo 0)' 'echo $((COUNT + 1)) > "$1"' > "$CYCLE_MOCK"
 chmod +x "$CYCLE_MOCK"
@@ -104,13 +126,13 @@ for i in $(seq 1 15); do
   LOCK="$ROOT/$i/lock"; mkdir "$LOCK"
   echo "$(dead_pid)" > "$LOCK/pid"
   echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
-  ( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/$i/a.out" 2>/dev/null ) &
-  ( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/$i/b.out" 2>/dev/null ) &
+  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT/$i" > "$ROOT/$i/a.out" 2> "$ROOT/$i/a.err" ) &
+  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT/$i" > "$ROOT/$i/b.out" 2> "$ROOT/$i/b.err" ) &
   wait
   winners=$(grep -hE '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$winners" != "1" ]; then
     bad=$((bad + 1))
-    echo "  trial $i: winners=$winners"; cat "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null
+    show_trial "$ROOT/$i" "winners=$winners"
   fi
 done
 if [ "$bad" -eq 0 ]; then
@@ -133,14 +155,14 @@ for i in $(seq 1 40); do
   echo "$(dead_pid)" > "$LOCK/pid"
   echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
   GO="$ROOT/$i/go"
-  ( bash -c 'source "$1"; while [ ! -f "$3" ]; do sleep 0.01; done; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" "$GO" > "$ROOT/$i/a.out" 2>/dev/null ) &
-  ( bash -c 'source "$1"; while [ ! -f "$3" ]; do sleep 0.01; done; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" "$GO" > "$ROOT/$i/b.out" 2>/dev/null ) &
+  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/a.out" 2> "$ROOT/$i/a.err" ) &
+  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/b.out" 2> "$ROOT/$i/b.err" ) &
   touch "$GO"
   wait
   acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$acquirers" != "1" ]; then
     bad4b=$((bad4b + 1))
-    echo "  trial $i: acquirers=$acquirers"; cat "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null
+    show_trial "$ROOT/$i" "acquirers=$acquirers"
   fi
 done
 if [ "$bad4b" -eq 0 ]; then
