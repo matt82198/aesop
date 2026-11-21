@@ -11,6 +11,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.12.0] - 2026-11-21
+
+Release that brings the npm package and the README in line with the current license. The project is MIT-licensed from 2026-10-27 (commit ee9ed649, #1330, which relicensed from PolyForm Noncommercial 1.0.0); npm `latest` 0.11.0 still carried the PolyForm notice. This section covers the merged PRs between v0.11.0 and origin/main.
+
+### Added
+
+- #1441 feat(driver): one-shot turn engine python -m driver.turn (TUI P1)
+- #1436 feat(chat): aesop ask: headless one-shot for agents
+- #1432 feat(chat): talk to local open-weight models via Ollama (model-agnostic harness)
+- #1428 feat(chat): spec-driven TUI improvements (drift 0%)
+- #1417 feat(loop): pre-test gates on worker patch output
+- #1388 feat(chat): repaint in place, timed spinner, streaming pipe source, TAB stops, history seam
+- #1385 feat(auth): zero-dependency auth CLI with control ops on the stream-json pipe
+- #1384 feat(chat): zero-dependency interactive chat TUI on the stdio TTY seam
+- #1379 feat(stdio): generic zero-dependency stdin/stdout pipeline
+- #1356 feat(tools): claudemd_lint ratchets a 1024-byte line cap per CLAUDE.md file
+- #1354 feat(gates): machinery-map symbol gate, skipped only on a scaffold without the map
+
+### Changed
+
+- Relicensed to MIT (from PolyForm Noncommercial 1.0.0). See #1330.
+- #1448 docs: aesop is overhauling into a model-agnostic harness (with measured token economics)
+- #1427 docs(specs): frozen specs for planned chat and state-ownership features
+- #1422 docs: foreign-agent interop contract (Codex, agy)
+- #1421 Add harness-neutral comparison corpus and shared results home
+- #1418 Add Google Gemini worker seat with config-selected driver and trial runner
+- #1416 Add brief lint for asserted names and imports before first model call
+- #1420 test(collect-signals): bound the junk walk, not whole-process wall time
+- #1415 wave loop: redispatch on identical repeat failure; repair rounds carry latest test output
+- #1414 chore(gates): re-measure inprocess-timeout baseline (approved by Matt 2026-11-18)
+- #1412 event store context core (merge of branch event-store-context-core)
+- #1410 event store trigger watch (merge of branch event-store-trigger-watch)
+- #1408 event store verify requires head (merge of branch event-store-verify-requires-head)
+- #1409 event store lock not tracked (merge of branch event-store-lock-not-tracked)
+- #1407 shard matrix no fail fast (merge of branch shard-matrix-no-fail-fast)
+- #1405 event store one claim slice (merge of branch event-store-one-claim-slice)
+- #1404 event store append lock (merge of branch event-store-append-lock)
+- #1403 event store verify v1 seq (merge of branch event-store-verify-v1-seq)
+- #1406 shell audit log append race (merge of branch shell-audit-log-append-race)
+- #1396 docs(dispatch-model): drop unsourced and computed cost figures
+- #1394 docs(archive): drop unsourced cost figures
+- #1395 docs: drop unsourced cost figures from top-level pages
+- #1393 docs(archive): drop unsourced cost figures, cite bench median
+- #1392 docs(lane-contract): Mode 2 repos stop at PR open, never armed
+- #1390 chore(tests): fix stale comments in auth-cli spec (f-2a1383b1)
+- #1386 docs(lane-contract): chunked S3 test-log recipe under the 180 s harness window
+- #1383 docs(lane-contract): S3 test-log recipe (foreground reporter log, no reruns)
+- #1373 checkpoint(2026-10-29T02:38Z): port 02:18Z-02:38Z orchestrator lines to main
+- #1372 checkpoint(2026-10-29T02:16Z): port generator-landed and fail-open-gates lines to main
+- #1371 checkpoint(2026-10-29T01:55Z): port MATTWORKPC catch-up deltas (hooks regen, receipt key, compact restore, clock correction) to main
+- #1370 chore(receipts): register MATTWORKPC receipt pubkey
+- #1369 checkpoint(2026-10-29T01:50Z): cross-box catch-up state captured from mattworkpc session
+- #1367 docs(tools): split tools/CLAUDE.md into a map and six per-group pages
+- #1366 test(scaffold): teardown never masks the real assertion and the budget failure reports elapsed time
+- #1365 docs(lane-contract): S4 SHIP names per-branch message files and scans by range when the tree is committed
+- #1293 docs(tools): record Atomics.wait backoff in lock.mjs entry (tracker 4fc897d6b12f)
+- #1363 docs(ci-catalog): CI-A31 sync-gate base-ref shape and CI-A32 incident DRIFT on a PR
+- #1358 docs(lane-contract): S3 gate list runs the G10 encoding lint
+- #1357 docs(ci-catalog): CI-A30 Loop-Proof gate row; CI-A25 says which sed shapes are now allowed
+- #1301 chore(deps)(deps): Bump anthropic from 1.13.0 to 2.1.0
+- #1297 chore(stats): scheduled refresh
+- #1302 chore(deps)(deps): Bump the minor-and-patch group with 4 updates
+- #1355 docs(ci-catalog): rows CI-A22 to CI-A29 and the catalog lookup in the S3 and S4 stage rows
+- #1350 docs(lane-contract): S3 names the aesop gate list, S4 commits before merge
+- #1346 chore(deps): bump ui/web minor-and-patch group with rebuilt dist
+- #1344 ckpt(state): NEXT STEPS rewritten for 2026-10-27
+- #1339 docs(state): land the 2026-10-27 local STATE.md checkpoint
+- #1338 test(lockguard): count the fresh-mkdir acquirer as a winner; add barrier-released reclaim case (f-e2a51807)
+- #1337 test(emit_receipt): _alive treats a reaped or zombie pid as dead on POSIX (f-c57accac)
+- #1336 docs(ci-catalog): add CI-A16..A21 for the six R-CI-1 categories (f-454bb7ad)
+- #1334 docs(hooks): check_* count is 23, list the three unnumbered checks (f-284c87fa)
+- #1333 docs(archive): bind essay incident counts to docs/INCIDENTS.md (f-ff93d867)
+- #1332 docs: one page per topic; README and CONTRIBUTING enter through the blueprint (R-END-1/2/3)
+- #1331 docs(entry): rewrite README, docs index and quickstart for the public MIT repo
+- #1328 docs(gates): gates and hooks, claim-binding stub, install guide, gate reference (OSS blueprint L5)
+- #1326 docs(event-store): correct the verify guide and CLI paragraph after #1321
+- #1330 chore(license): relicense to MIT from PolyForm Noncommercial 1.0.0
+- #1329 docs(security): report through GitHub private vulnerability reporting; note the undici advisory resolved
+- #1327 docs(receipts): receipts loop, signed receipts, verify guide and receipt format (R-OSS-1)
+- #1325 docs(trust): L7 provenance, security, contributing, releasing (OSS blueprint)
+- #1324 docs(tools): join two same-tool bullet pairs so tools/CLAUDE.md is under the 150-line cap
+- #1320 docs: stage lanes, crash-only and the stage matrix (R-OSS-1)
+- #1321 docs: stage lanes, crash-only and the stage matrix (R-OSS-1)
+- #1319 docs: retire narrative docs and add the OSS blueprint plan
+- #1311 ci(regen-on-main): pass step outputs via env and NUL-safe git add (SEC-8)
+- #1309 docs(stage-contracts): keyrun S0 EVIDENCE and S5 VALIDATE cells (R-IMG-1)
+- #1306 docs(lane-contract): scan --range after a merge-forward, never retry --staged on an empty index
+- #1300 chore(deps)(deps): Bump certifi
+- #1303 docs(lanes): S4 scans --range after a merge-forward commit; never push past a refusal (CI-A15)
+- #1298 docs(state): pin the INTENT block and goal tree G0-G7 with rulings pointers
+- #1296 ci: pin text files to LF and media to binary in .gitattributes (R-CI-2)
+- #1292 docs(lane-contract): stage lanes section (G5)
+- #1291 docs: stage x category lane contracts (G5, R-LANES-1)
+- #1290 docs(state): pin G1.2, G1.3, G3.1, G4 goals and the v0.11.0 version line
+- #1289 docs(ci): fold CI-A1 refutation, CI-LINEAR-BASE and CI-LITERAL-PATHS recipes into the catalog (G1.3)
+- #1287 ci: sweep recurring CI reds into docs/CI-CATALOG.md with one root fix per category (G1.3)
+- #1288 ci(CI-A1): print per-generator timings in the scaffold push-gate step
+
+### Fixed
+
+- #1445 fix(chat): coalesce repaints during bracketed paste
+- #1440 fix(chat): bucket Ollama num_ctx (8k/16k/32k) and never shrink it, to stop model reload thrash
+- #1444 fix(chat): drop the empty reply bubble on a failed turn and count it as 0 tokens
+- #1439 fix(chat): Ctrl-C cancels the active request while later turns are queued
+- #1438 fix(chat): cursor movement and deletion across Unicode graphemes
+- #1435 fix(chat): size Ollama context via native /api/chat num_ctx and warn when input exceeds the window
+- #1426 fix(chat): show failed history saves and write history atomically
+- #1425 fix(chat): paste mode can no longer stick after a lost paste-end
+- #1424 fix(metrics-gate): exempt root checkpoint journals
+- #1397 fix(tripwire): excuse a memory write only on an exact path and sha256 ledger row
+- #1391 fix(tests): pin the collect-signals scan root so the suite never walks the real TEMP tree (f-d3175771, f-ae2b205a)
+- #1389 fix(auth): restrict win32 credential file ACL to the current user
+- #1387 fix(tests): retry rmSync on EPERM/EBUSY/ENOTEMPTY in dash-fresh-init cleanup
+- #1381 fix(stdio): single TTY seam, real EPIPE test, ship stdio/ in the tarball
+- #1374 fix(backup-fleet): prevent 22-minute autodiscovery hang with early heartbeat + timeout bounds
+- #1375 fix: status heartbeat path resolution prefers conductor3 (wrong-data P0) + machinery-map citations (f-58ff8836)
+- #1376 fix(tools): healthcheck UTF-8 output on Windows cp1252 consoles (f-6905850f)
+- #1364 fix(gates): claudemd_sync_gate resolves origin/<base> and fails closed instead of diffing HEAD~1
+- #1359 fix(receipts): _kill_process_tree reaches orphaned and re-sessioned descendants
+- #1361 fix(incidents): a gate keyword infers an incident only beside an incident verb
+- #1360 fix(gates): verify_gates_wired reads every nested tools/**/CLAUDE.md
+- #1315 fix(backup-fleet): scan the exact pushed range and fail closed on every listing, tree and push error
+- #1352 fix(cli): every runtime subcommand answers --help before its side effect
+- #1353 fix(cli): scaffold skips ignored artifact directories at any depth
+- #1351 fix(tests): tearDown retries rmtree on a lingering Windows handle
+- #1349 fix(claudemd_sync_gate): a dist-only ui/web rebuild is not drift
+- #1348 fix(cli): scaffold does not ship the aesop-only machinery map
+- #1347 fix(gen_suite_counts): retry one transient git failure, report stderr
+- #1345 fix(emit_receipt): docs-only owning shards for tools/*.py changes
+- #1343 fix(cli): init and doctor answer --help before any side effect
+- #1342 fix(claudemd_lint): count lines the way wc -l does
+- #1340 fix(event_store): anchor the day-file tail to a stored head hash so last-line edits fail verify (f-8049b579)
+- #1335 fix(metrics-gate): skip $N awk field refs inside HTML comments (f-91214b7d)
+- #1323 fix(ci): run hooks/claude node tests (dark node tests, R-AUDIT-TCI-4)
+- #1322 fix(watch): report non-zero when the watched child dies by signal (SEM-15)
+- #1318 fix(state-root): expand ~ in state_root and map dash signal exits (SEM-1)
+- #1317 fix(dash): trust only the bound loopback port for CSRF origin checks
+- #1316 fix(secret-scan): stop flagging subscript expressions as secret assignments
+- #1314 fix(secret-scan): report real-shaped keys carrying placeholder words; read non-ASCII staged paths
+- #1313 fix(portability): catch case and escaped home paths, add --tracked mode, scrub real path from reliability report
+- #1312 fix(deps): bump undici to 8.12.3 in ui/web lock (Dependabot #21)
+- #1310 fix(security): untrack bench jsonl with personal identifiers (SEC-1)
+- #1305 fix(tools): dispatch_lint UTF-8 output; record in tools/CLAUDE.md
+
 ## [0.11.0] - 2026-10-22
 
 Release carrying the hash-chained event store, the per-project event store plan, and a dated provenance record. This release covers 18 PRs merged since v0.10.4 (2026-10-22T00:54:37Z), #1264 through #1284. #1284 (event-store projections) landed on main after the first cut and is included.
