@@ -111,6 +111,8 @@ The terminal receipts were paraphrased for the briefs. For example, the characte
 
 As a separate dispatch check, `aesop ask` at upstream commit `ece51950` sent the six scored 30B rows to local Ollama with the aggregate withheld. The 27B worker returned four baseline matches, five candidate matches, one gain on the exit claim, and zero losses. A deterministic comparison of its JSON answer against the six rows matched exactly. This dispatch is excluded from the 36 adjudications.
 
+For decisions about which integration branch or lane owns a finding, contact the live project orchestrator. The Windows runbook includes a tested console-input example and instructions for verifying the reply. [Contacting the live orchestrator](../../docs/guides/contact-live-orchestrator.md)
+
 ### Confirming the 30B transfer
 
 **The instruction failed the next infrastructure transfer check.** With evidence alone, Qwen3-Coder 30B scored 8/8 using 5,218 tokens. With the same instruction it scored 7/8 using 5,888 tokens. All 16 decisions were schema-valid. The candidate retained the four genuine defects, lost one of the four refuted claims and gained zero cases. Keep the instruction experimental.
