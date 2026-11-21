@@ -91,7 +91,7 @@ export function assertProviderAllowed(provider, model) {
  *            notices: string[], defaultSelection: {provider: string, model: string}|null}}
  */
 export function loadRegistry(configPath) {
-  const registry = { providers: new Map(), notices: [], defaultSelection: null, aliases: new Map() };
+  const registry = { providers: new Map(), notices: [], defaultSelection: null, aliases: new Map(), routes: new Map() };
   if (!configPath || !existsSync(configPath)) return registry;
   let cfg;
   try {
@@ -134,6 +134,7 @@ export function loadRegistry(configPath) {
     const resolved = resolveAliasChain(rawAliases, name, registry.notices);
     if (resolved !== null) registry.aliases.set(name, resolved);
   }
+  registry.routes = parseRoutes(cfg.routes, registry);
   if (typeof cfg.default === 'string') {
     const picked = resolveSelection(registry, cfg.default);
     if (picked.error) registry.notices.push(`error: config: default: ${picked.error}`);
@@ -214,81 +215,360 @@ export function validateProviderConfig(config) {
 }
 
 /**
- * Parses one SSE line. Returns DONE on the terminal frame, the text delta ('' when the frame has none),
- * or '' for comments, keepalives and blank lines.
- * @param {string} line
- * @param {string} id provider id, used in the error text only
+ * Parses one stream line. SSE (`data: {json}`, `data: [DONE]`) and NDJSON (`{json}` per line) are both
+ * accepted; comments, keepalives and other lines yield ''. Returns DONE on the SSE terminal frame.
+ * @param {string} line line without its trailing CR
+ * @returns {string|typeof DONE}
+ * @throws {TurnFailure} bad-response when a frame is not JSON
  */
-function parseSseLine(line, id) {
-  if (!line.startsWith('data:')) return '';
-  const payload = line.slice(5).trim();
-  if (payload === '[DONE]') return DONE;
+function parseStreamLine(line) {
+  const text = line.trim();
+  if (text === '' || text.startsWith(':')) return '';
+  let payload;
+  if (text.startsWith('data:')) {
+    payload = text.slice(5).trim();
+    if (payload === '[DONE]') return DONE;
+  } else if (text.startsWith('{')) {
+    payload = text;
+  } else {
+    return '';
+  }
   let obj;
   try {
     obj = JSON.parse(payload);
   } catch {
-    throw new Error(`${id}: bad-response: malformed stream frame`);
+    throw new TurnFailure('bad-response', 'malformed stream frame');
   }
-  const content = obj?.choices?.[0]?.delta?.content;
+  const content = obj?.choices?.[0]?.delta?.content ?? obj?.message?.content ?? obj?.response;
   return typeof content === 'string' ? content : '';
 }
 
 /**
- * Backend source for plain turns in harness mode. Re-checks the provider with assertProviderAllowed
- * at request time, then streams OpenAI-compatible SSE deltas. Redirects are never followed.
+ * Parses the `routes` block. Each task class maps to a "provider/model" (or alias) string, or to an
+ * object: `target`, `candidates` (ordered list, replaces the primary), `fallback` (list), `fallback_on`
+ * ("any" lets non-retryable failures fall back too) and `strategy` ("cheapest" or "fastest").
+ * A target that does not resolve is a config error line and drops that route.
+ * @param {unknown} rawRoutes
+ * @param {ReturnType<typeof loadRegistry>} registry
+ * @returns {Map<string, {target: object|null, candidates: object[]|null, fallback: object[], fallbackOn: string, strategy: string|null}>}
+ */
+function parseRoutes(rawRoutes, registry) {
+  const routes = new Map();
+  if (!rawRoutes || typeof rawRoutes !== 'object' || Array.isArray(rawRoutes)) return routes;
+  for (const [task, value] of Object.entries(rawRoutes)) {
+    const spec = typeof value === 'string' ? { target: value } : value;
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+      registry.notices.push(`error: config: route ${task} must be a string or an object`);
+      continue;
+    }
+    const bad = [];
+    const pick = (v) => {
+      const picked = resolveSelection(registry, String(v));
+      if (picked.error) {
+        registry.notices.push(`error: config: route ${task}: ${picked.error}`);
+        bad.push(v);
+        return null;
+      }
+      return picked;
+    };
+    const target = spec.target === undefined ? null : pick(spec.target);
+    const candidates = Array.isArray(spec.candidates) ? spec.candidates.map(pick) : null;
+    const fallback = Array.isArray(spec.fallback) ? spec.fallback.map(pick) : [];
+    if (bad.length > 0) continue;
+    routes.set(task, {
+      target,
+      candidates,
+      fallback,
+      fallbackOn: spec.fallback_on === 'any' ? 'any' : 'retryable',
+      strategy: spec.strategy === 'cheapest' || spec.strategy === 'fastest' ? spec.strategy : null,
+    });
+  }
+  return routes;
+}
+
+/**
+ * Matches a slash-prefixed route turn such as `/code write x` against the registry's routes.
+ * `/chat` is never a route prefix; a bare `/code` with no body is not a route turn.
+ * @param {ReturnType<typeof loadRegistry>} registry
+ * @param {string} text
+ * @returns {{task: string, body: string}|null}
+ */
+export function matchRoute(registry, text) {
+  const m = /^\/([a-z][a-z0-9_-]*) +(\S[\s\S]*)$/.exec(String(text));
+  if (!m || m[1] === 'chat' || !registry.routes.has(m[1])) return null;
+  return { task: m[1], body: m[2] };
+}
+
+/** A classified request failure. `cls` is one of the H-R19 error classes; `reason` is short and key-free. */
+class TurnFailure extends Error {
+  /**
+   * @param {string} cls
+   * @param {string} reason
+   */
+  constructor(cls, reason) {
+    super(`${cls}: ${reason}`);
+    this.name = 'TurnFailure';
+    this.cls = cls;
+    this.reason = reason;
+  }
+}
+
+/** Failure classes that may fall back to the next candidate without fallback_on "any" (H-R12, H-R13). */
+const RETRYABLE = new Set(['connect', 'timeout', 'rate-limit', 'server']);
+const BREAKER_THRESHOLD = 3;
+const BREAKER_COOLDOWN_MS = 30000;
+const DEFAULT_TIMEOUT_MS = 60000;
+
+/**
+ * Maps a non-2xx status to a classified failure.
+ * @param {number} status
+ * @returns {TurnFailure}
+ */
+function statusFailure(status) {
+  if (status === 401 || status === 403) return new TurnFailure('auth', `HTTP ${status}`);
+  if (status === 429) return new TurnFailure('rate-limit', 'HTTP 429');
+  if (status >= 500) return new TurnFailure('server', `HTTP ${status}`);
+  if (status >= 300 && status < 400) return new TurnFailure('bad-response', `redirect ${status} not followed`);
+  return new TurnFailure('bad-response', `HTTP ${status}`);
+}
+
+/**
+ * Clock for latency and the circuit breaker. Tests inject a fake clock via globalThis.__AESOP_CHAT_NOW.
+ * @returns {number} milliseconds
+ */
+function clockNow() {
+  const hook = globalThis.__AESOP_CHAT_NOW;
+  return typeof hook === 'function' ? hook() : Date.now();
+}
+
+/**
+ * Backend source for turns in harness mode. Each turn runs the route plan (the selected model for
+ * plain turns, or the task route for a `/task` prefix): candidates are ordered by strategy, skipped while
+ * their circuit breaker is open, and tried in order. Every failure becomes one `error: <provider>:
+ * <class>: <reason>` line through `options.notify`; the turn never throws except when no provider is
+ * selected. Each candidate's request is gated by assertProviderAllowed again at request time. Redirects
+ * are never followed. Node stdlib only.
  * @param {ReturnType<typeof loadRegistry>} registry
  * @param {() => {provider: string|null, model: string|null}} getSelection live status selection
  * @param {Record<string, string|undefined>} [env] source of key env vars (api_key_env)
- * @returns {(line: string) => AsyncGenerator<string>}
+ * @param {{notify?: (text: string) => void}} [options] receives transcript system lines
+ * @returns {(line: string, opts?: {task?: string}) => AsyncGenerator<string>}
  */
-export function harnessSource(registry, getSelection, env = process.env) {
-  return async function* harnessTurn(line) {
-    const { provider, model } = getSelection();
-    if (!provider) throw new Error('no provider configured (see /help)');
-    const entry = registry.providers.get(provider);
-    if (!entry) throw new Error(`unknown provider: ${provider}`);
-    assertProviderAllowed({ ...entry.raw, id: provider }, model ?? undefined);
+export function harnessSource(registry, getSelection, env = process.env, options = {}) {
+  const notify = typeof options.notify === 'function' ? options.notify : () => {};
+  const breakers = new Map();
+  const latency = new Map();
+  const breaker = (id) => {
+    if (!breakers.has(id)) breakers.set(id, { fails: 0, openUntil: 0, announced: false });
+    return breakers.get(id);
+  };
+  const recordFailure = (id) => {
+    const b = breaker(id);
+    b.fails += 1;
+    if (b.fails >= BREAKER_THRESHOLD) {
+      b.openUntil = clockNow() + BREAKER_COOLDOWN_MS;
+      b.announced = false;
+    }
+  };
+  const recordSuccess = (id) => {
+    const b = breaker(id);
+    b.fails = 0;
+    b.openUntil = 0;
+    b.announced = false;
+  };
+  const costOf = (id) => {
+    const entry = registry.providers.get(id);
+    if (!entry) return Infinity;
+    if (entry.raw.is_local === true) return 0;
+    const c = entry.raw.cost_per_mtok;
+    if (typeof c === 'number') return c;
+    if (c && typeof c === 'object') return (Number(c.input) || 0) + (Number(c.output) || 0);
+    return Infinity;
+  };
+  const orderCandidates = (list, strategy) => {
+    const indexed = list.map((c, i) => ({ c, i }));
+    if (strategy === 'cheapest') {
+      indexed.sort((x, y) => (costOf(x.c.provider) - costOf(y.c.provider)) || x.i - y.i);
+    } else if (strategy === 'fastest') {
+      indexed.sort((x, y) => ((latency.get(x.c.provider) ?? 0) - (latency.get(y.c.provider) ?? 0)) || x.i - y.i);
+    }
+    const seen = new Set();
+    const out = [];
+    for (const { c } of indexed) {
+      const key = `${c.provider}/${c.model}`;
+      if (!seen.has(key)) { seen.add(key); out.push(c); }
+    }
+    return out;
+  };
+
+  // One request to one candidate. Returns {ok, yielded, failure}; yields each text delta as it arrives.
+  async function* streamOnce(entry, model, line) {
+    const id = entry.id;
+    const outcome = { ok: false, yielded: 0, failure: null };
+    try {
+      assertProviderAllowed({ ...entry.raw, id }, model);
+    } catch (err) {
+      if (!(err instanceof ProviderRefused)) throw err;
+      outcome.failure = new TurnFailure('refused', err.reason);
+      return outcome;
+    }
+    const keyName = entry.raw.api_key_env;
+    const keyed = typeof keyName === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(keyName);
+    if (keyed && !env[keyName] && entry.raw.is_local !== true) {
+      outcome.failure = new TurnFailure('no-key', `env ${keyName} is unset`);
+      return outcome;
+    }
     const base = String(entry.raw.base_url).replace(/\/+$/, '');
     const body = JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: String(line) }] });
     const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), accept: 'text/event-stream' };
-    const keyName = entry.raw.api_key_env;
-    if (typeof keyName === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(keyName) && env[keyName]) {
-      headers.authorization = `Bearer ${env[keyName]}`;
-    }
-    const res = await new Promise((resolve, reject) => {
-      const req = http.request(`${base}/chat/completions`, { method: 'POST', headers }, resolve);
-      req.on('error', (err) => reject(new Error(`${provider}: connect: ${err.code ?? 'error'}`)));
-      req.end(body);
-    });
-    if (res.statusCode >= 300 && res.statusCode < 400) {
-      res.resume();
-      throw new Error(`${provider}: redirect ${res.statusCode} not followed`);
+    if (keyed && env[keyName]) headers.authorization = `Bearer ${env[keyName]}`;
+    const timeoutMs = Number(entry.raw.timeout_ms) > 0 ? Number(entry.raw.timeout_ms) : DEFAULT_TIMEOUT_MS;
+    const started = clockNow();
+    let req = null;
+    let timedOut = false;
+    let timer = null;
+    // Idle timer: armed before the response and re-armed on every body chunk.
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { timedOut = true; if (req) req.destroy(); }, timeoutMs);
+      timer.unref?.();
+    };
+    const timeoutFailure = () => new TurnFailure('timeout', `no response within ${timeoutMs} ms`);
+    let res;
+    try {
+      res = await new Promise((resolve, reject) => {
+        req = http.request(`${base}/chat/completions`, { method: 'POST', headers }, resolve);
+        req.on('error', (err) => reject(timedOut ? timeoutFailure() : new TurnFailure('connect', err.code ?? 'error')));
+        arm();
+        req.end(body);
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      outcome.failure = err instanceof TurnFailure ? err : new TurnFailure('connect', 'error');
+      return outcome;
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       res.resume();
-      throw new Error(`${provider}: HTTP ${res.statusCode}`);
+      clearTimeout(timer);
+      outcome.failure = statusFailure(res.statusCode);
+      return outcome;
     }
+    const noteFirst = () => {
+      if (outcome.yielded === 0) {
+        const sample = clockNow() - started;
+        const prev = latency.get(id);
+        latency.set(id, prev === undefined ? sample : 0.5 * prev + 0.5 * sample);
+      }
+    };
+    const ctype = String(res.headers['content-type'] ?? '');
+    const wholeJson = /application\/json/i.test(ctype) && !/ndjson/i.test(ctype);
     const decoder = new StringDecoder('utf8');
     let pending = '';
-    for await (const chunk of res) {
-      pending += decoder.write(chunk);
-      let nl = pending.indexOf('\n');
-      while (nl >= 0) {
-        const delta = parseSseLine(pending.slice(0, nl).replace(/\r$/, ''), provider);
-        pending = pending.slice(nl + 1);
-        if (delta === DONE) {
-          res.destroy();
-          return;
+    let done = false;
+    try {
+      if (wholeJson) {
+        let whole = '';
+        for await (const chunk of res) { arm(); whole += decoder.write(chunk); }
+        whole += decoder.end();
+        let obj;
+        try {
+          obj = JSON.parse(whole);
+        } catch {
+          throw new TurnFailure('bad-response', 'malformed JSON reply');
         }
-        if (delta !== '') yield delta;
-        nl = pending.indexOf('\n');
+        const text = obj?.choices?.[0]?.message?.content ?? obj?.message?.content;
+        if (typeof text === 'string' && text !== '') {
+          noteFirst();
+          outcome.yielded += 1;
+          yield text;
+        }
+      } else {
+        for await (const chunk of res) {
+          arm();
+          pending += decoder.write(chunk);
+          let nl = pending.indexOf('\n');
+          while (nl >= 0) {
+            const delta = parseStreamLine(pending.slice(0, nl).replace(/\r$/, ''));
+            pending = pending.slice(nl + 1);
+            if (delta === DONE) { done = true; break; }
+            if (delta !== '') {
+              noteFirst();
+              outcome.yielded += 1;
+              yield delta;
+            }
+            nl = pending.indexOf('\n');
+          }
+          if (done) break;
+        }
+        if (!done) {
+          pending += decoder.end();
+          if (pending.trim() !== '') {
+            const delta = parseStreamLine(pending.replace(/\r$/, ''));
+            if (delta !== DONE && delta !== '') {
+              noteFirst();
+              outcome.yielded += 1;
+              yield delta;
+            }
+          }
+        }
       }
+      clearTimeout(timer);
+      outcome.ok = true;
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof TurnFailure) outcome.failure = err;
+      else outcome.failure = timedOut ? timeoutFailure() : new TurnFailure('connect', 'stream cut');
     }
-    pending += decoder.end();
-    if (pending !== '') {
-      const delta = parseSseLine(pending.replace(/\r$/, ''), provider);
-      if (delta !== DONE && delta !== '') yield delta;
+    return outcome;
+  }
+
+  return async function* harnessTurn(line, opts = {}) {
+    const sel = getSelection();
+    if (!sel.provider) throw new Error('no provider configured (see /help)');
+    const task = opts.task ?? 'chat';
+    const route = registry.routes.get(task) ?? null;
+    const primary = task === 'chat' ? { provider: sel.provider, model: sel.model } : route?.target ?? null;
+    const list = route?.candidates ?? [primary, ...(route?.fallback ?? [])].filter(Boolean);
+    if (list.length === 0) throw new Error(`route ${task} has no target`);
+    const fallbackOn = route?.fallbackOn ?? 'retryable';
+    const ordered = orderCandidates(list, route?.strategy ?? null);
+    let attempted = 0;
+    for (let i = 0; i < ordered.length; i += 1) {
+      const cand = ordered[i];
+      const b = breaker(cand.provider);
+      if (b.openUntil > clockNow()) {
+        if (!b.announced) {
+          b.announced = true;
+          notify(`skipping ${cand.provider}: circuit open after ${BREAKER_THRESHOLD} failures, retry after cooldown`);
+        }
+        continue;
+      }
+      attempted += 1;
+      const entry = registry.providers.get(cand.provider);
+      if (!entry) {
+        notify(`error: ${cand.provider}: refused: unknown provider`);
+        return;
+      }
+      const outcome = yield* streamOnce(entry, cand.model, line);
+      if (outcome.ok) {
+        recordSuccess(cand.provider);
+        return;
+      }
+      const failure = outcome.failure;
+      if (outcome.yielded > 0) {
+        // A failure after the first chunk is never re-sent to another provider (H-R14).
+        recordFailure(cand.provider);
+        notify(`stream interrupted from ${cand.provider}`);
+        return;
+      }
+      const retryable = RETRYABLE.has(failure.cls);
+      if (retryable) recordFailure(cand.provider);
+      notify(`error: ${cand.provider}: ${failure.cls}: ${failure.reason}`);
+      const next = ordered[i + 1];
+      if (!next || !(retryable || fallbackOn === 'any')) return;
+      notify(`falling back: ${cand.provider} -> ${next.provider} (${failure.cls})`);
     }
+    if (attempted === 0) notify(`error: ${ordered[0].provider}: server: no candidate available, circuit open`);
   };
 }
 
@@ -322,6 +602,26 @@ export function probeProvider(entry, env = process.env, timeoutMs = 1000) {
     });
     req.on('error', () => resolve('unreachable'));
   });
+}
+
+/**
+ * Lines for /auth (H-R24): one per provider, `key: set (env NAME)`, `key: missing (env NAME)` or
+ * `key: not needed (local)`. Reads the environment only; never sends a request and never prints a key value.
+ * @param {ReturnType<typeof loadRegistry>} registry
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string[]}
+ */
+export function authLines(registry, env = process.env) {
+  const lines = [];
+  for (const entry of registry.providers.values()) {
+    const keyName = entry.raw.api_key_env;
+    let status;
+    if (entry.raw.is_local === true) status = 'key: not needed (local)';
+    else if (typeof keyName === 'string' && keyName !== '') status = env[keyName] ? `key: set (env ${keyName})` : `key: missing (env ${keyName})`;
+    else status = 'key: not needed (no api_key_env)';
+    lines.push(`auth ${entry.id}: ${status}`);
+  }
+  return lines;
 }
 
 /**

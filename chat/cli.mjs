@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
-import { harnessSource, listModelLines, loadRegistry, resolveSelection } from './harness.mjs';
+import { authLines, harnessSource, listModelLines, loadRegistry, matchRoute, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
 const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness']);
@@ -227,6 +227,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         return null;
       },
       listModels: () => listModelLines(registry, env),
+      auth: () => authLines(registry, env),
     }
     : {};
   const session = new Session({
@@ -247,7 +248,9 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     session.state.transcript.push({ role: 'system', text: `error: AESOP_CHAT_BACKEND: unknown value "${backendValue}" (use pipe, orchestrator or harness)` });
   }
   if (harness) {
-    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env);
+    // Fallback, skip and error lines go to the transcript as they happen (H-R12, H-R16, H-R19).
+    const notify = (text) => session.state.transcript.push({ role: 'system', text });
+    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env, { notify });
     for (const text of registry.notices) session.state.transcript.push({ role: 'system', text });
     if (!selection) session.state.transcript.push({ role: 'system', text: 'no provider configured (see /help)' });
   }
@@ -308,7 +311,10 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       }
       chain = chain.then(async () => {
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
-        const chunks = line.startsWith('/') ? undefined : backend.source(line);
+        // A harness route turn (`/code ...`) reaches the backend with its task class; other slash lines are commands.
+        const routed = harness ? matchRoute(registry, line) : null;
+        const chunks = routed ? backend.source(routed.body, { task: routed.task })
+          : line.startsWith('/') ? undefined : backend.source(line);
         await session.submit(line, chunks);
         // A failed history save is shown as one visible status line; the session keeps running.
         if (notice) {

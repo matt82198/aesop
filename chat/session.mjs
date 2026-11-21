@@ -191,7 +191,8 @@ export class Session {
    */
   async submit(line, chunks) {
     const text = String(line ?? '');
-    const cmd = parseSlash(text);
+    // A turn with an injected chunk (a harness route turn such as `/code ...`) is never a slash command.
+    const cmd = chunks === undefined ? parseSlash(text) : null;
     if (cmd !== null) {
       await this.runCommand(cmd);
       this.emit();
@@ -219,10 +220,11 @@ export class Session {
     } else if (cmd.command === 'clear') {
       this.state.transcript = [];
     } else if (cmd.command === 'auth') {
-      this.state.transcript.push({
-        role: 'system',
-        text: 'auth: no credentials are configured in this build; no network call is made',
-      });
+      // Harness mode: one status line per provider, computed offline (H-R24). Otherwise the fixed line.
+      const lines = this.hooks.auth
+        ? this.hooks.auth()
+        : ['auth: no credentials are configured in this build; no network call is made'];
+      for (const text of lines) this.state.transcript.push({ role: 'system', text });
     } else if (cmd.command === 'exit' || cmd.command === 'quit') {
       this.state.exit = true;
     }
