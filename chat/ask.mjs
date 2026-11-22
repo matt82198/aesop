@@ -3,6 +3,7 @@
 // child (chat/driver_source.mjs -> driver/turn.py --serve, spec H-R26). It holds no conversation state and
 // writes no history file.
 // Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider/model error, 5 timeout, 6 boundary refused.
+import { prepareChangeSummary } from './change_summary.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { driverSource } from './driver_source.mjs';
@@ -11,7 +12,7 @@ import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistr
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
 
-const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--timeout <s>] "<prompt>"';
+const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--change-summary] [--timeout <s>] "<prompt>"';
 const DEFAULT_TIMEOUT_S = 300;
 
 /**
@@ -26,6 +27,7 @@ export function parseAskArgs(argv) {
     const a = argv[i];
     if (a === '--') { words.push(...argv.slice(i + 1)); break; }
     if (a === '--json') out.json = true;
+    else if (a === '--change-summary') out.changeSummary = true;
     else if (a === '--model' || a === '--system' || a === '--from' || a === '--timeout') {
       const v = argv[i + 1];
       if (v === undefined) return { ...out, error: `${a} needs a value` };
@@ -155,11 +157,23 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   // are. The legacy harness takes a single user line, so that path joins the same parts in the same order.
   let context = '';
   if (stdin && !stdin.isTTY) context = await readAll(stdin);
+  // Change-summary mode: the packet on stdin is consumed by prepareChangeSummary and never sent as a context part;
+  // the model receives the prompt plus the summary instructions, and the serialized facts are emitted afterwards.
   const useHarness = backendFlag === 'harness';
+  let summary;
+  if (args.changeSummary) {
+    try {
+      summary = prepareChangeSummary(context);
+    } catch (err) {
+      return finish(EXIT.USAGE, { provider, model, error: `aesop ask: invalid change-summary input: ${err.message}` });
+    }
+  }
+  const promptText = summary ? `${args.prompt}\n\n${summary.prompt}` : args.prompt;
+  const partContext = summary ? '' : context;
   const line = useHarness
-    ? [args.system, context.trim() !== '' ? context.trimEnd() : '', args.prompt].filter(Boolean).join('\n\n')
-    : args.prompt;
-  const turnOptions = useHarness ? {} : { oneShot: { context, system: args.system } };
+    ? [args.system, partContext.trim() !== '' ? partContext.trimEnd() : '', promptText].filter(Boolean).join('\n\n')
+    : promptText;
+  const turnOptions = useHarness ? {} : { oneShot: { context: partContext, system: args.system } };
 
   activity.start({ provider, model }, context);
   const timeoutMs = Math.round(args.timeoutS * 1000);
@@ -176,11 +190,16 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   const source = makeSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
 
   let text = '';
+  let reply = '';
+  const emit = chunk => {
+    text += chunk;
+    activity.chunk(chunk);
+    if (!args.json) stdout.write(chunk);
+  };
   try {
     for await (const chunk of source(line, { signal: controller.signal, ...turnOptions })) {
-      text += chunk;
-      activity.chunk(chunk);
-      if (!args.json) stdout.write(chunk);
+      if (summary) reply += chunk;
+      else emit(chunk);
     }
   } catch (err) {
     clearTimeout(timer);
@@ -197,6 +216,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     const m = /^error: [^:]+: ([a-z-]+): /.exec(failed);
     return finish(m ? codeForClass(m[1]) : EXIT.PROVIDER, { provider, model, text, error: failed });
   }
+  if (summary) emit(summary.serialize(reply));
   if (!args.json && text !== '' && !text.endsWith('\n')) stdout.write('\n');
   return finish(EXIT.OK, { provider, model, text });
 }
