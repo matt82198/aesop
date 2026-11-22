@@ -30,6 +30,7 @@ DRIVER_DIR = Path(__file__).resolve().parent
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
+from activity_feed import ActivityFeed, prompt_and_context, status_for  # noqa: E402
 from backend_config import validate_base_url  # noqa: E402
 from openai_compatible_driver import make_openai_compatible_transport  # noqa: E402
 
@@ -156,9 +157,26 @@ def _fail(provider: TurnProvider, exit_code: int, message: str, started: float) 
 def run_turn(provider: TurnProvider, messages, *, transport=None, timeout_s=300) -> TurnResult:
     """Send one chat turn and return a TurnResult. Never raises for transport failures.
 
-    Refusal and the base-URL guard run before any transport is built or called.
-    `transport` is an injectable payload -> dict callable (FakeTransport in tests).
+    Every call is mirrored to the shared activity feed (driver/activity_feed.py): start
+    before the refusal guard, one chunk with the reply text, then end with the exit code
+    (a refused turn has start and end exit 6 only). A feed failure never changes the result.
     """
+    messages = list(messages)
+    feed = ActivityFeed()
+    prompt, context = prompt_and_context(messages)
+    feed.start(model=f"{provider.name}/{provider.model}", prompt=prompt, stdin=context)
+    result = _run_turn_core(provider, messages, transport=transport, timeout_s=timeout_s)
+    if result.ok:
+        feed.chunk(result.text)
+    feed.end(
+        status=status_for(result.exit_code), exit_code=result.exit_code,
+        elapsed_ms=result.elapsed_ms, error=result.error,
+    )
+    return result
+
+
+def _run_turn_core(provider: TurnProvider, messages, *, transport=None, timeout_s=300) -> TurnResult:
+    """The turn itself: refusal, base-URL guard, one transport call, reply mapping."""
     started = time.monotonic()
     reason = refusal_reason(provider.name, provider.model, provider.base_url)
     if reason:

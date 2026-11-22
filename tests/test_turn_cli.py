@@ -10,7 +10,12 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 
 import io
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity_feed_isolation  # noqa: E402
+activity_feed_isolation.pin()
 import unittest
 import urllib.error
 import socket

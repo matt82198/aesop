@@ -4,19 +4,24 @@
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync, watch } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
 
 export const ROTATE_BYTES = 5 * 1024 * 1024;
 export const PREVIEW_BYTES = 2048;
 const PROMPT_CAP = 1024;
 const CHUNK_SPLIT = 600; // chars per chunk line, so a line stays far below one atomic append
 
-/** Feed path: AESOP_ACTIVITY_FEED, else <AESOP_STATE_ROOT or repo state/>/chat/activity.jsonl. */
+/**
+ * Feed path: AESOP_ACTIVITY_FEED, else ONE per-user file shared by every checkout:
+ * <HOME || USERPROFILE || homedir()>/.aesop/state/chat/activity.jsonl.
+ * The same rule lives in driver/activity_feed.py (feed_path); keep the two in step. The directory
+ * is created lazily by the writer and the tail, never by this function.
+ */
 export function feedPath(env = process.env) {
   if (env.AESOP_ACTIVITY_FEED) return env.AESOP_ACTIVITY_FEED;
-  const root = env.AESOP_STATE_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', 'state');
-  return join(root, 'chat', 'activity.jsonl');
+  const home = env.HOME || env.USERPROFILE || homedir();
+  return join(home, '.aesop', 'state', 'chat', 'activity.jsonl');
 }
 
 const GENERIC = /^(node|nodejs|bash|sh|zsh|dash|fish|cmd|powershell|pwsh|conhost|python3?|env|npm|npx|git-bash|windowsterminal)(\.exe)?$/i;
