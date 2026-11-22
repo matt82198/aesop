@@ -8,7 +8,8 @@
       "tests": [
         "tests/test-run-watchdog.sh",
         "tests/test-run-watchdog-ingest.sh",
-        "tests/test-peer-push-sweep.sh"
+        "tests/test-peer-push-sweep.sh",
+        "tests/test-run-watchdog-lockguard.sh"
       ]
     },
     {

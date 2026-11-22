@@ -38,20 +38,63 @@ refresh_lock() {
 #                                                           dir itself is older than stale_threshold
 #   - no pid, timestamp empty or non-numeric             -> reclaimed (corrupt)
 #   - no pid, timestamp older than stale_threshold       -> reclaimed
+#
+# Serialization (lock-reclaim race fix): the whole judge/reclaim/create sequence runs under a
+# short-lived guard dir "$lock_dir.guard" taken with an atomic mkdir. Only one process at a time
+# can be inside, so the lock path being briefly absent during a reclaim can never be won by a
+# second acquirer, and a reclaimer can never remove a lock a rival just created. A contender that
+# cannot take the guard returns 1 (held; fail closed, the scheduler retries). A guard older than
+# GUARD_STALE_SECS (a holder SIGKILLed inside its microsecond window) is removed with rmdir.
 acquire_lock() {
   local lock_dir="$1"
   local stale_threshold="$2"
+  local guard="$lock_dir.guard"
+  local guard_stale_secs=60
+  local guard_wait_tries=200   # x 0.05s = ~10s bounded spin, then fail closed (return 1)
+  local rc=0 fd="" tries=0
 
-  # Ensure parent directory exists
   mkdir -p "$(dirname "$lock_dir")" 2>/dev/null || true
 
-  # Try to create lock directory atomically (this is atomic on all POSIX systems)
-  if mkdir "$lock_dir" 2>/dev/null; then
-    write_lock_owner "$lock_dir"
-    return 0
+  if command -v flock >/dev/null 2>&1; then
+    { exec {fd}>"$lock_dir.flk"; } 2>/dev/null || return 1
+    # Kernel-managed mutex: waits (bounded) for the previous occupant to leave the section and
+    # is released by the kernel if the occupant dies. Closed before returning so no child
+    # spawned later inherits it.
+    if flock -w 10 "$fd" 2>/dev/null; then
+      acquire_lock_guarded "$lock_dir" "$stale_threshold" || rc=$?
+    else
+      rc=1
+    fi
+    exec {fd}>&-
+    return "$rc"
   fi
 
-  [ -d "$lock_dir" ] || return 1
+  # uutils mkdir can report success on a racing EEXIST (uutils/coreutils#13970).
+  # Without flock, take the guard using the actual mkdir system call.
+  local python
+  python=$(command -v python3 || command -v python) || return 1
+  while ! "$python" -c 'import os, sys; os.mkdir(sys.argv[1])' "$guard" 2>/dev/null; do
+    if [ -n "$(find "$guard" -maxdepth 0 -mmin +$((guard_stale_secs / 60)) 2>/dev/null)" ]; then
+      rmdir "$guard" 2>/dev/null || true
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$guard_wait_tries" ]; then return 1; fi
+    sleep 0.05 2>/dev/null || sleep 1
+  done
+
+  acquire_lock_guarded "$lock_dir" "$stale_threshold" || rc=$?
+  rmdir "$guard" 2>/dev/null || true
+  return "$rc"
+}
+
+acquire_lock_guarded() {
+  local lock_dir="$1"
+  local stale_threshold="$2"
+
+  if [ ! -d "$lock_dir" ]; then
+    create_lock_guarded "$lock_dir"
+    return $?
+  fi
 
   local lock_pid="" lock_ts="" expect_pid="" reason="" reclaim=0 ts_corrupt=0
   if [ -f "$lock_dir/pid" ]; then
@@ -102,30 +145,30 @@ acquire_lock() {
   return 1
 }
 
-# Atomic reclaim: rename the stale dir aside with mv. Only one rename of a given dir can
-# succeed, so only one reclaimer proceeds. The moved dir's pid is re-checked against the
-# pid we judged stale; if a fresh holder slipped in, its lock is put back untouched.
+# Reclaim a stale lock. Runs only under acquire_lock's guard, so the window between removing
+# the stale dir and creating ours is invisible to every other acquirer. Fails closed: if the
+# owner record cannot be written the new lock is removed and the call returns non-zero.
+# AESOP_LOCK_TEST_PAUSE_AFTER_MV=<secs> (test hook, inert unless set) sleeps inside that window.
 reclaim_lock() {
   local lock_dir="$1"
   local expect_pid="$2"
-  local aside="$lock_dir.reclaim.$$"
 
-  rm -rf "$aside" 2>/dev/null || true
-  mv "$lock_dir" "$aside" 2>/dev/null || return 1
-  local moved_pid=""
-  if [ -f "$aside/pid" ]; then
-    moved_pid=$(cat "$aside/pid" 2>/dev/null)
-  fi
-  if [ "$moved_pid" != "$expect_pid" ]; then
-    [ -e "$lock_dir" ] || mv "$aside" "$lock_dir" 2>/dev/null || true
+  rm -rf -- "$lock_dir" 2>/dev/null || return 1
+  if [ -n "${AESOP_LOCK_TEST_PAUSE_AFTER_MV:-}" ]; then sleep "$AESOP_LOCK_TEST_PAUSE_AFTER_MV"; fi
+  create_lock_guarded "$lock_dir"
+}
+
+# The guard serializes acquirers, so check for an existing entry before mkdir:
+# a false success on EEXIST must never authorize writing another holder's pid.
+create_lock_guarded() {
+  local lock_dir="$1"
+  [ ! -e "$lock_dir" ] && [ ! -L "$lock_dir" ] || return 1
+  mkdir "$lock_dir" 2>/dev/null || return 1
+  if ! write_lock_owner "$lock_dir"; then
+    rm -rf -- "$lock_dir" 2>/dev/null || true
     return 1
   fi
-  rm -rf "$aside" 2>/dev/null || true
-  if mkdir "$lock_dir" 2>/dev/null; then
-    write_lock_owner "$lock_dir"
-    return 0
-  fi
-  return 1
+  return 0
 }
 
 # Release lock: verify ownership before removing (P0 fix)
