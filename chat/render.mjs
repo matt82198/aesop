@@ -13,6 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { formatDuration, peerOutcome } from './peer_format.mjs';
 
 const PACKAGE_JSON = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const VERSION = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8')).version;
@@ -284,6 +285,38 @@ function feedLines(msg, columns, color, unicode) {
   return out;
 }
 
+// Peer-bus row (chat/peer_bus.mjs): an outbound dispatch shows "-> peer job running <elapsed>", then the
+// full body (first PEER_BODY_LINES lines, then "(+N lines)"), then "<- peer job <outcome>" when it ends.
+// An inbound post shows "<- peer job <outcome>" and its body. Peer output is never part of a row.
+const PEER_BODY_LINES = 40;
+function peerLines(msg, columns, color) {
+  const paint = painter('dim', color);
+  const pad = '  ';
+  const out = [];
+  const ended = msg.status !== null && msg.status !== undefined;
+  const outcome = peerOutcome({ status: msg.status, exit: msg.exit, reason: msg.reason, elapsed_ms: msg.elapsedMs });
+  if (msg.dir === 'in') {
+    out.push(...block('', '', `<- ${msg.peer}  ${msg.job}  ${outcome}`, columns, painter(msg.status === 'ok' ? 'dim' : 'red', color)));
+  } else if (!ended) {
+    // runningMs is stamped by the TUI ticker (chat/cli.mjs): renderFrame reads no clock.
+    const elapsed = formatDuration(msg.runningMs ?? 0);
+    out.push(...block('', '', `-> ${msg.peer}  ${msg.job}  running ${elapsed}`, columns, paint));
+  } else {
+    out.push(...block('', '', `-> ${msg.peer}  ${msg.job}`, columns, paint));
+  }
+  const lines = String(msg.body ?? '').replace(/\n+$/, '').split('\n');
+  for (const l of lines.slice(0, PEER_BODY_LINES)) out.push(...block(pad, pad, l, columns, paint));
+  if (lines.length > PEER_BODY_LINES) {
+    const more = lines.length - PEER_BODY_LINES;
+    out.push(...block(pad, pad, `(+${more} lines)`, columns, paint));
+  }
+  if (msg.dir !== 'in' && ended) {
+    const sent = msg.sent ? `  SENT ${msg.sent}` : '';
+    out.push(...block('', '', `<- ${msg.peer}  ${msg.job}  ${outcome}${sent}`, columns, painter(msg.status === 'ok' ? 'green' : 'red', color)));
+  }
+  return out;
+}
+
 function transcriptLines(transcript, columns, color, unicode) {
   const lines = [];
   for (const msg of transcript) {
@@ -293,6 +326,8 @@ function transcriptLines(transcript, columns, color, unicode) {
       let text = msg.text ?? '';
       if (msg.streaming) text = `${text}${text ? ' ' : ''}${msg.spinnerGlyph ?? ''}`;
       lines.push(...block(ASSISTANT_PREFIX, ' '.repeat(ASSISTANT_PREFIX.length), text, columns, painter('green', color)));
+    } else if (msg.role === 'feed' && msg.kind === 'peer') {
+      lines.push(...peerLines(msg, columns, color));
     } else if (msg.role === 'feed') {
       lines.push(...feedLines(msg, columns, color, unicode));
     } else if (msg.role === 'tool') {

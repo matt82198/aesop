@@ -198,6 +198,41 @@ export function tailFeed({ file, onEvent, intervalMs = 1000 }) {
 }
 
 /**
+ * Peer-bus rows (kind 'peer'): outbound dispatches start running and end with an outcome; inbound posts
+ * arrive finished. Display-only, like ask rows.
+ */
+function applyPeerEvent(jobs, transcript, ev) {
+  let entry = jobs.get(ev.job);
+  if (ev.type === 'start') {
+    if (entry) return false;
+    const inbound = ev.dir === 'in';
+    entry = {
+      role: 'feed', kind: 'peer', dir: inbound ? 'in' : 'out', job: ev.job,
+      peer: (inbound ? ev.from : ev.to) ?? 'peer', body: ev.prompt ?? '', startedAt: ev.ts ?? Date.now(),
+      status: null, exit: null, elapsedMs: 0, sent: undefined, reason: undefined,
+    };
+    if (inbound) {
+      entry.status = ev.status ?? 'ok';
+      entry.exit = ev.exit ?? null;
+      entry.elapsedMs = ev.elapsed_ms ?? 0;
+    }
+    jobs.set(ev.job, entry);
+    transcript.push(entry);
+    return true;
+  }
+  if (!entry) return false;
+  if (ev.type === 'end') {
+    entry.status = ev.status ?? 'ok';
+    entry.exit = ev.exit ?? null;
+    entry.elapsedMs = ev.elapsed_ms ?? 0;
+    entry.sent = ev.sent;
+    entry.reason = ev.reason;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Applies a feed event to the transcript. Entries are `role: 'feed'` and live only in the display
  * transcript; they are never handed to a model source. Returns true when the transcript changed.
  * @param {Map<string, object>} jobs job id -> transcript entry
@@ -205,6 +240,7 @@ export function tailFeed({ file, onEvent, intervalMs = 1000 }) {
  * @param {object} ev
  */
 export function applyFeedEvent(jobs, transcript, ev) {
+  if (ev.kind === 'peer') return applyPeerEvent(jobs, transcript, ev);
   let entry = jobs.get(ev.job);
   if (ev.type === 'start') {
     if (entry) return false;
