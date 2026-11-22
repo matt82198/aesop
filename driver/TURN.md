@@ -8,6 +8,7 @@ The driver is the one turn engine (spec H-R26 in `docs/specs/chat-model-harness.
 
 - `turn_backend.py` (P1): `run_turn`, one non-streamed turn over `openai_compatible_driver`; `refusal_reason`; the exit-code constants.
 - `turn_stream.py` (P2): `stream_request`, `stream_once`, `run_stream_turn`, `CancelToken`, `TurnFailure`. One streamed request to one provider entry `{"id", "raw"}` (the chat registry shape).
+- `turn_context.py` (P3): `size_ollama_context`, `ContextSizer` (sticky window), `is_ollama`.
 - `turn_frames.py` (P2): `FrameWriter`, `encode_frame`, `encode_end`, `decode_stream` for the AESOP-PIPE/1 grammar that `stdio/frames.mjs` decodes.
 - `turn.py`: the CLI.
 
@@ -26,7 +27,7 @@ python -m driver.turn --serve [--model provider/model] [--base-url url]
 - `--base-url`: an OpenAI-compatible base URL instead of the built-in local provider. The provider id is the `--model` prefix, or `custom`. A loopback host is treated as local (no key).
 - `--timeout`: total wall-clock cap in seconds for the one-shot modes (default 300). When it fires the turn exits 5.
 
-Piped (non-TTY) stdin is appended to the prompt as context in the one-shot modes.
+Piped (non-TTY) stdin is context in the one-shot modes. One builder (`_build_messages` in `turn.py`) assembles every one-shot request, for this CLI and for `aesop ask`: a system message when `--system` is given, then one user message holding the stdin text (trailing whitespace trimmed), a blank line, and the prompt. No delimiter is added. `tests/chat-ask-parity.test.mjs` gives `aesop ask` and this CLI the same input and requires the same captured request; `stream: true` is the transport and is equal on both.
 
 ## Exit codes (same table as `aesop ask`)
 
@@ -60,9 +61,27 @@ E <exit>
 
 Requests are one JSON object per stdin line:
 
-- `{"op":"turn","id":<id>,"line":"text"}` or `{"op":"turn","id":<id>,"messages":[...]}`, optional `"model"`.
+- `{"op":"turn","id":<id>,"line":"text"}`: a routed turn through the session's engine (next section). Optional fields: `task` (default `chat`), `selection` `{"provider","model"}`, `registry`, `keys`, `now`, `model`.
+- `{"op":"turn","id":<id>,"prompt":"text","context":"stdin text","system":"text"}`: a one-shot turn (`aesop ask`). The messages come from the one-shot builder above; routing, fallback and the gate are the engine's, but no session context is sent and the turn is not remembered. `context` and `system` are optional; the routed fields (`selection`, `registry`, `keys`) apply.
+- `{"op":"turn","id":<id>,"messages":[...]}`: one stateless request with exactly these messages to the provider the child was started with. No context, no routing.
 - `{"op":"cancel","id":<id>}` closes that turn's socket; the turn ends with `cancelled` and the session keeps serving.
-- `{"op":"shutdown"}` or end of stdin cancels the turn in flight and ends the stream with `E 0`.
+- `{"op":"shutdown"}` lets queued turns finish, then ends the stream with `E 0`. End of stdin (the parent went away) cancels the turn in flight and any queued turns, then ends the stream with `E 0`.
+
+## The routed engine (P5, `turn_engine.py`)
+
+`TurnEngine.run_turn` is a port of the turn loop in `chat/harness.mjs`. One engine lives for a `--serve` session and holds what a session needs: the conversation, a circuit breaker and a latency average per provider, and the sticky Ollama window.
+
+- `registry` is data: `{"providers": {id: raw}, "routes": {task: {"target", "candidates", "fallback", "fallbackOn", "strategy"}}}` with targets already resolved to `{"provider","model"}`. The chat adapter sends it with every turn, so the engine acts on the registry as it is now. Without it the engine uses the one provider the child was started with.
+- `keys` is `{ENV_NAME: value}` for the key variables providers name in `api_key_env`. Keys travel on stdin with the turn, never on the command line. When `keys` is absent the child's own environment is read.
+- `now` (milliseconds) pins the clock for the turn; only tests send it.
+- Candidates: a `chat` turn starts from the selection; any other task starts from its route's `target`. `candidates` replaces the list; otherwise it is the primary plus `fallback`. `strategy` `cheapest` orders by `cost_per_mtok` (local is 0), `fastest` by the first-delta latency average; ties keep config order. Each candidate is tried at most once per turn.
+- Fallback: only `connect`, `timeout`, `rate-limit` and `server` failures fall back, unless the route says `fallbackOn: "any"`. A failure after the first delta never re-sends (`stream interrupted from <provider>`). A cancel never falls back.
+- Breaker: 3 consecutive retryable failures open a provider's breaker for 30 s; the skip is announced once as a `flash` event.
+- Context: completed `chat` turns are remembered; each chat turn sends the newest 20 messages or 24000 characters, never splitting a message, always starting on a user message. Failed and task-route turns are not remembered.
+- Events per turn: `notify` (system lines), `flash` (one-frame notices), `usage` (`{provider,total,prompt,completion,cost}`; local cost is 0, `cost_per_mtok` `{input,output}` prices the rest, otherwise `cost` is null).
+- A turn that cannot start (no provider selected, a route with no target) ends with a `done` frame carrying `"thrown": "<message>"`; the chat adapter raises that message, as the harness throws it.
+
+Parity with the harness is tested, not assumed: `tests/chat-driver-parity.test.mjs` runs the same scripted turns through `harnessSource` and through `chat/driver_source.mjs` and compares every delta, system line, usage report, thrown error and request.
 
 The session is ONE frames stream; every control frame of a turn carries its `id`, and a turn's `done` frame carries that turn's exit code. Turns run one at a time, in order. A line that is not a JSON object, or an unknown op, gets one `error: driver: bad-request: <reason>` notify event and the session continues.
 
@@ -72,7 +91,34 @@ The session is ONE frames stream; every control frame of a turn carries its `id`
 - The idle timeout is the provider's `timeout_ms` (default 60000; the built-in local provider uses 300000). It bounds the connect, the wait for the response head and each wait for more body bytes.
 - A key is read only from the env var named by `api_key_env`; a keyed provider with the variable unset and `is_local` not true is `no-key` and sends nothing.
 - A parent that must stop the child at once uses `proc_util.kill_process_tree`; the provider then sees the connection close.
+- A refused connect to a loopback host is reported at once. Windows re-sends the SYN to a closed port for about 2 s before it reports the refusal; for loopback hosts the driver turns that off (`SIO_TCP_INITIAL_RTO`, best effort, as Node does), so "is it running?" does not take seconds. Measured on this box: 2030 ms before, 0 ms after. <!-- metrics-verified: tests/test_turn_stream.py test_a_refused_loopback_connect_is_reported_at_once asserts under 1 s; the two figures are one local run of a socket connect to a closed 127.0.0.1 port -->
+
+## Callers
+
+- `aesop chat` with `AESOP_CHAT_BACKEND=driver` (P5): `chat/driver_source.mjs`, one `--serve` child per session.
+- `aesop ask` (P6): `chat/ask.mjs` uses the same adapter for its one turn and ends the child before it returns. Its arguments, selection and exit codes did not change; `AESOP_ASK_BACKEND=harness` keeps the in-process Node harness as a way back.
+
+## Ollama context window (P3, `turn_context.py`, finding f-db2dd2fa)
+
+Ollama's `/v1` route ignores `num_ctx` and runs at 4096 tokens, silently cutting the START of long input. So a provider with id or type `ollama` is sent to the native `POST {base_url minus /v1}/api/chat` (NDJSON, same deltas; the final frame's `prompt_eval_count` and `eval_count` become usage) with `options.num_ctx`. Every mode takes this route: the default mode and `--json` use the streamed path too, and only an injected test transport keeps the P1 `/v1` call.
+
+- Window: the smallest bucket of 8192 / 16384 / 32768 (override `num_ctx_buckets`), filtered to `num_ctx_max` (default 32768) and `model_max_ctx`, that holds the prompt estimate (UTF-16 length / 3.5, rounded up) plus a 1024 reply reserve. If no bucket fits the filter, the cap itself is used; if none is large enough, the largest is used.
+- Sticky: Ollama reloads the model when `num_ctx` changes, so per process and per (provider, base_url, model) the window never shrinks. A growth shows `growing model window to N (Ollama reloads the model; this can take ~20 s)`. A one-shot turn is one process, so it gets bucketing only; a `--serve` session gets the sticky behaviour.
+- Over the window: when the prompt alone exceeds the window, `warning: input ~N tokens exceeds the model window M; the start will be cut` is shown before the reply (a `notify` event in frames mode, stderr in the other modes). The exit code does not change.
+- Shared fixture: `tests/fixtures/num-ctx-cases.json` is run by `tests/test_turn_context.py` (this module) and by `tests/chat-num-ctx-fixture.test.mjs` (`sizeOllamaContext` and the sticky logic in `chat/harness.mjs`), so the two cannot drift.
+
+## The boundary gate (P4, `turn_gate.py`)
+
+Non-Anthropic only. `assert_provider_allowed(provider, model)` is the one gate, a port of `assertProviderAllowed` in `chat/harness.mjs` with the same reason texts. It does no I/O: no DNS lookup, no socket.
+
+- It runs twice. The CLI runs it on the ids and the URL text before stdin is read. Every request runs it again at send time on the entry as it is then (`stream_once`), so a config changed after load is still refused.
+- A refused turn exits 6 and shows `error: <provider>: refused: <reason>`. In `--serve` the turn's `done` carries exit 6 and the session keeps serving.
+- Refused: provider types `cli`, `exec`, `claude`, `anthropic`; a provider id that names Claude or Anthropic; a model id in which `claude` or `anthropic` is a whole token (bounded by start, end, whitespace or one of `/ : . _ -`), unless the type is `orchestrator`; a base_url whose host is `anthropic.com`, `claude.ai` or a subdomain (any case, trailing dot, userinfo tricks, percent-encoding); a scheme other than http or https; plain http to a non-loopback host without `allow_insecure: true`.
+- The provider-id rule is stricter than the Node harness, which checks only the type; where the two differ the driver wins. A `--base-url` that is not a URL at all is a usage error (exit 2), not a refusal.
+- Zero sockets is counted, not assumed: `tests/test_turn_gate.py` replaces `socket.socket` and `socket.getaddrinfo` with counting versions that also block anything that is not loopback, and asserts a count of 0 for every refused turn in every mode.
+- Shared fixture: `tests/fixtures/provider-config-cases.json` is run by the gate (`check_provider`), by `backend_config.validate_provider_entry` (which now applies the gate last) and by the Node suite (H-R26).
+- The P1 one-shot function `turn_backend.run_turn` keeps its own, broader substring check; it is reached only with an injected test transport.
 
 ## Tests
 
-`tests/test_turn_backend.py`, `tests/test_turn_cli.py` (P1), `tests/test_turn_stream.py`, `tests/test_turn_serve.py` (P2). The fake provider is `tests/turn_fake_server.py` on 127.0.0.1; nothing touches a real network.
+`tests/test_turn_backend.py`, `tests/test_turn_cli.py` (P1), `tests/test_turn_stream.py`, `tests/test_turn_serve.py` (P2), `tests/test_turn_context.py` (P3), `tests/test_turn_gate.py` (P4). The fake provider is `tests/turn_fake_server.py` on 127.0.0.1; nothing touches a real network.

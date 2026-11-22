@@ -7,6 +7,9 @@
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
 ## Invocation modes
+**CI failure excerpts** stream a UTF-8 log and print a JSON array in log order. Save `gh run view RUN --json jobs > jobs.json`, then run `gh run view RUN --log | aesop excerpt --log - --jobs jobs.json` for GitHub permalinks. Use the same run attempt for both commands. For a raw single-step log, supply `--job <id-or-name> --step <name>`. GitHub anchors use `<job.url>#step:<step.number>:<line>`. This assumes each supplied step starts at its first original line and includes every row in order, including blank lines. `--log-failed` may omit whole steps. The metadata supplies their actual numbers. Parent and assertion records keep the 1-based step-local line and verbatim input text including any timestamp and gh prefix.
+Each excerpt includes suite, subcase, test ID, parent, assertion and `source`. The pointer targets the assertion when unique, otherwise its failure heading or runner failure line. Without unique job and step metadata, it uses `<file>:<physical-line>` or `-:<physical-line>` for stdin. Save the input and pass its path to share a local pointer. Missing or ambiguous evidence is `"unknown"`. No failures yields `[]`. Exit 0 indicates success and exit 2 an argument or input error.
+
 **Stdio pipe** (`aesop pipe [stdio flags]`, and bare `aesop` with stdin or stdout not a TTY): runs `node stdio/cli.mjs <flags>` with `stdio: 'inherit'`, before any scaffolding. Flags such as `--input-format`/`--output-format` pass through untouched. Exit code propagates; a signal or spawn failure exits 2. Semantics are in stdio/CLAUDE.md. Without a TTY on stdin or stdout, bare `aesop` is the pipe and writes exactly one stderr line at entry: `aesop: no TTY detected, reading stdin as a pipe; run wizard to scaffold`. The decision is `detectMode` in `stdio/tty-decision.js`, re-exported by `stdio/tty.mjs`; `bin/cli.js` has no other TTY check. **Chat** (`aesop chat`, chat/CLAUDE.md): with a TTY on both, bare `aesop` runs the wizard unless `--chat-default` or `AESOP_DEFAULT=chat` opens chat. `shouldEnterChat` in chat/cli.mjs is the single chat-entry decider; `bin/cli.js` calls it once, from `bareTtyEntry`, before the scaffold steps (target dir, template copy) run.
 - **Ask** (`aesop ask [--model p/m] [--system t] [--json] [--timeout s] "<prompt>"`) dispatches to `chat/ask.mjs` (`runAsk`) before scaffolding, flags passed through untouched; works with no TTY; exit 0 ok, 2 usage, 3 provider unreachable, 4 provider error, 5 timeout, 6 boundary refused (chat/CLAUDE.md). Test: `tests/chat-ask.test.mjs`. **Post** (`aesop post --from <name> "<text>"`) dispatches to `chat/peer_bus.mjs` (`postCli`) before scaffolding and writes one inbound peer event to the activity feed; exit 0 posted, 1 feed not writable, 2 usage (chat/CLAUDE.md, peer bus). Test: `tests/chat-peer-bus.test.mjs`. Auth and model verbs (`auth login|status|logout`, `model list|use|current`) dispatch to `auth/cli.mjs` before scaffolding and never write into cwd; `status`, `list` and `current` print one JSON line when stdout is not a TTY; exit 0 ok, 2 usage, 3 no credential. Verbs: auth/CLAUDE.md.
 
@@ -142,9 +145,6 @@ undiscoverable and the orchestrator cannot be invoked.
 
 **Shell integration** (npm run test:sh): Pre-push hook tests + watchdog tests (separate domains, see hooks/ and daemons/)
 
-## Dropped (reason)
-- Post-scaffold user guidance steps (belongs in README/CLAUDE-TEMPLATE.md output, not scaffolder contract)
-- Repo discovery implementation details (discoverRepos function is simple, documented inline in code)
-- Port validation logic (validatePort function documented inline; accepts 1–65535)
+Post-scaffold guidance lives in README/CLAUDE-TEMPLATE.md. The inline documentation for `discoverRepos` and `validatePort` covers repo discovery and the accepted port range (1-65535).
 
 Map of all domains: /CLAUDE.md

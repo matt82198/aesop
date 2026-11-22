@@ -1,9 +1,12 @@
-// `aesop ask`: one-shot, non-interactive prompt to a local open-weight model. Reuses the chat harness
-// (registry, provider gate, streaming); holds no conversation state and writes no history file.
+// `aesop ask`: one-shot, non-interactive prompt to a local open-weight model. The registry, selection and
+// provider gate are the chat's (chat/harness.mjs); the turn itself runs in the aesop turn engine, the driver
+// child (chat/driver_source.mjs -> driver/turn.py --serve, spec H-R26). It holds no conversation state and
+// writes no history file.
 // Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider/model error, 5 timeout, 6 boundary refused.
 import { prepareChangeSummary } from './change_summary.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { driverSource } from './driver_source.mjs';
 import { callerLabel, createFeedWriter } from './activity_feed.mjs';
 import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistry, ProviderRefused, resolveSelection } from './harness.mjs';
 
@@ -104,6 +107,14 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     stderr.write(`aesop ask: ${args.error}\n${USAGE}\n`);
     return EXIT.USAGE;
   }
+  // The turn runs in the aesop turn engine (the driver child). AESOP_ASK_BACKEND=harness keeps the
+  // in-process Node harness as a way back; any other value is a usage error, never a silent default.
+  const backendFlag = env.AESOP_ASK_BACKEND;
+  if (backendFlag !== undefined && backendFlag !== '' && backendFlag !== 'driver' && backendFlag !== 'harness') {
+    stderr.write(`aesop ask: AESOP_ASK_BACKEND: unknown value "${backendFlag}" (use driver or harness)\n`);
+    return EXIT.USAGE;
+  }
+  const makeSource = backendFlag === 'harness' ? harnessSource : driverSource;
 
   let configPath = env.AESOP_CHAT_CONFIG;
   if (!configPath) {
@@ -141,10 +152,14 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   const entry = registry.providers.get(provider);
   if (entry?.refused) return finish(EXIT.REFUSED, { provider, model, error: `error: ${provider}: refused: ${entry.refused}` });
 
-  // Prompt = system text, the prompt, then piped stdin as context. The harness takes one user line.
+  // The driver assembles the messages (driver/turn.py _build_messages, the one builder): a system message,
+  // then one user message with piped stdin first and the prompt after it. ask sends the three parts as they
+  // are. The legacy harness takes a single user line, so that path joins the same parts in the same order.
   let context = '';
   if (stdin && !stdin.isTTY) context = await readAll(stdin);
-  let line = args.prompt;
+  // Change-summary mode: the packet on stdin is consumed by prepareChangeSummary and never sent as a context part;
+  // the model receives the prompt plus the summary instructions, and the serialized facts are emitted afterwards.
+  const useHarness = backendFlag === 'harness';
   let summary;
   if (args.changeSummary) {
     try {
@@ -152,11 +167,14 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     } catch (err) {
       return finish(EXIT.USAGE, { provider, model, error: `aesop ask: invalid change-summary input: ${err.message}` });
     }
-    line = `${line}\n\n${summary.prompt}`;
-  } else if (context.trim() !== '') {
-    line = `${line}\n\n--- context (stdin) ---\n${context}`;
   }
-  if (args.system) line = `${args.system}\n\n${line}`;
+  const promptText = summary ? `${args.prompt}\n\n${summary.prompt}` : args.prompt;
+  const partContext = summary ? '' : context;
+  const line = useHarness
+    ? [args.system, partContext.trim() !== '' ? partContext.trimEnd() : '', promptText].filter(Boolean).join('\n\n')
+    : promptText;
+  const turnOptions = useHarness ? {} : { oneShot: { context: partContext, system: args.system } };
+
   activity.start({ provider, model }, context);
   const timeoutMs = Math.round(args.timeoutS * 1000);
   const controller = new AbortController();
@@ -169,7 +187,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     if (/^warning: /.test(text)) stderr.write(`${text}\n`);
     else failures.push(text);
   };
-  const source = harnessSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
+  const source = makeSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
 
   let text = '';
   let reply = '';
@@ -179,13 +197,16 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     if (!args.json) stdout.write(chunk);
   };
   try {
-    for await (const chunk of source(line, { signal: controller.signal })) {
+    for await (const chunk of source(line, { signal: controller.signal, ...turnOptions })) {
       if (summary) reply += chunk;
       else emit(chunk);
     }
   } catch (err) {
     clearTimeout(timer);
     return finish(EXIT.PROVIDER, { provider, model, text, error: `error: ${provider}: ${err && err.message ? err.message : err}` });
+  } finally {
+    // One ask, one turn: end the driver child now so nothing outlives this process.
+    source.close?.();
   }
   clearTimeout(timer);
 

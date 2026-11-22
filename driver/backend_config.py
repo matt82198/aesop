@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import urlparse
 
+import turn_gate as _turn_gate
 from agent_driver import AgentDriver, ROLE_WORKER
 from claude_code_driver import ClaudeCodeDriver
 
@@ -945,6 +946,12 @@ def validate_provider_entry(entry) -> tuple:
             validate_api_key_env(entry["api_key_env"], where="providers")
         except ValueError:
             return False, "api_key_env is not an allowed key variable name"
+    # The turn engine's gate (turn_gate, a port of assertProviderAllowed) is applied last, so the
+    # seat reader can never accept an entry the turn engine refuses (percent-encoded Anthropic
+    # hosts, gateway model ids such as openrouter/anthropic/...). It does no I/O.
+    gate_ok, gate_reason = _turn_gate.check_provider(entry)
+    if not gate_ok:
+        return False, gate_reason
     return True, None
 
 

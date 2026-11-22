@@ -1,0 +1,65 @@
+{
+  "_comment": "Shared num_ctx fixture. Read by tests/chat-num-ctx-fixture.test.mjs (chat/harness.mjs) and tests/test_turn_context.py (driver/turn_context.py). 'chars' is one message of that many 'x' characters per entry; 'repeat' is one message of unit*count. Lengths are UTF-16 code units, as JavaScript counts them.",
+  "sizing": [
+    { "name": "short prompt takes the smallest bucket", "chars": [200], "raw": {}, "expect": { "numCtx": 8192, "promptTokens": 58, "truncates": false, "cap": 32768 } },
+    { "name": "several messages are summed", "chars": [100, 150], "raw": {}, "expect": { "numCtx": 8192, "promptTokens": 72, "truncates": false, "cap": 32768 } },
+    { "name": "exactly fills the first bucket with the reply reserve", "chars": [25088], "raw": {}, "expect": { "numCtx": 8192, "promptTokens": 7168, "truncates": false, "cap": 32768 } },
+    { "name": "one token over the first bucket moves to the second", "chars": [25089], "raw": {}, "expect": { "numCtx": 16384, "promptTokens": 7169, "truncates": false, "cap": 32768 } },
+    { "name": "30 KB paste fits the second bucket", "chars": [30720], "raw": {}, "expect": { "numCtx": 16384, "promptTokens": 8778, "truncates": false, "cap": 32768 } },
+    { "name": "long prompt takes the largest bucket", "chars": [60000], "raw": {}, "expect": { "numCtx": 32768, "promptTokens": 17143, "truncates": false, "cap": 32768 } },
+    { "name": "prompt fits the cap but not the reserve: largest bucket, no truncation", "chars": [112000], "raw": {}, "expect": { "numCtx": 32768, "promptTokens": 32000, "truncates": false, "cap": 32768 } },
+    { "name": "prompt over the cap truncates", "chars": [120000], "raw": {}, "expect": { "numCtx": 32768, "promptTokens": 34286, "truncates": true, "cap": 32768 } },
+    { "name": "num_ctx_max filters the buckets", "chars": [60000], "raw": { "num_ctx_max": 16384 }, "expect": { "numCtx": 16384, "promptTokens": 17143, "truncates": true, "cap": 16384 } },
+    { "name": "num_ctx_max as a numeric string", "chars": [60000], "raw": { "num_ctx_max": "20000", "model_max_ctx": 0 }, "expect": { "numCtx": 16384, "promptTokens": 17143, "truncates": true, "cap": 20000 } },
+    { "name": "model_max_ctx below every bucket falls back to the cap", "chars": [200], "raw": { "model_max_ctx": 4096 }, "expect": { "numCtx": 4096, "promptTokens": 58, "truncates": false, "cap": 4096 } },
+    { "name": "model_max_ctx lowers num_ctx_max", "chars": [200], "raw": { "num_ctx_max": 32768, "model_max_ctx": 9000.7 }, "expect": { "numCtx": 8192, "promptTokens": 58, "truncates": false, "cap": 9000 } },
+    { "name": "custom single bucket", "chars": [2], "raw": { "num_ctx_buckets": [12288] }, "expect": { "numCtx": 12288, "promptTokens": 1, "truncates": false, "cap": 32768 } },
+    { "name": "custom buckets: strings, duplicates, junk and negatives", "chars": [30000], "raw": { "num_ctx_buckets": ["16384", 8192, 8192, -5, "junk", 0] }, "expect": { "numCtx": 16384, "promptTokens": 8572, "truncates": false, "cap": 32768 } },
+    { "name": "custom buckets that are all junk fall back to the defaults", "chars": [200], "raw": { "num_ctx_buckets": ["junk", -1] }, "expect": { "numCtx": 8192, "promptTokens": 58, "truncates": false, "cap": 32768 } },
+    { "name": "astral characters count as two UTF-16 units each", "repeat": { "unit": "😀", "count": 7000 }, "raw": {}, "expect": { "numCtx": 8192, "promptTokens": 4000, "truncates": false, "cap": 32768 } }
+  ],
+  "sequences": [
+    {
+      "name": "num_ctx never shrinks; one notice when it grows",
+      "raw": {},
+      "steps": [
+        { "chars": 200, "num_ctx": 8192, "notes": [] },
+        { "chars": 20000, "num_ctx": 8192, "notes": [] },
+        { "chars": 5, "num_ctx": 8192, "notes": [] },
+        { "chars": 60000, "num_ctx": 32768, "notes": ["growing model window to 32768 (Ollama reloads the model; this can take ~20 s)"] },
+        { "chars": 5, "num_ctx": 32768, "notes": [] }
+      ]
+    },
+    {
+      "name": "a first large turn sets the window without a notice",
+      "raw": {},
+      "steps": [
+        { "chars": 35000, "num_ctx": 16384, "notes": [] },
+        { "chars": 4, "num_ctx": 16384, "notes": [] }
+      ]
+    },
+    {
+      "name": "input over the window warns before the reply",
+      "raw": {},
+      "steps": [
+        { "chars": 130000, "num_ctx": 32768, "notes": ["warning: input ~37143 tokens exceeds the model window 32768; the start will be cut"] }
+      ]
+    },
+    {
+      "name": "growing into an over-window input gives both lines, growth first",
+      "raw": {},
+      "steps": [
+        { "chars": 5, "num_ctx": 8192, "notes": [] },
+        { "chars": 130000, "num_ctx": 32768, "notes": ["growing model window to 32768 (Ollama reloads the model; this can take ~20 s)", "warning: input ~37143 tokens exceeds the model window 32768; the start will be cut"] }
+      ]
+    },
+    {
+      "name": "custom buckets on the wire",
+      "raw": { "num_ctx_buckets": [12288, 24576] },
+      "steps": [
+        { "chars": 2, "num_ctx": 12288, "notes": [] },
+        { "chars": 50000, "num_ctx": 24576, "notes": ["growing model window to 24576 (Ollama reloads the model; this can take ~20 s)"] }
+      ]
+    }
+  ]
+}

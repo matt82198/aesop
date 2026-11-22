@@ -43,5 +43,85 @@
     "config": { "type": "openai-compatible", "base_url": "not a url", "models": ["m"] },
     "expect": "reject",
     "reason": "an invalid base_url is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://API.ANTHROPIC.COM./v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "Anthropic host in upper case with a trailing dot is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://127.0.0.1@api.anthropic.com/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "userinfo that looks like loopback in front of an Anthropic host is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://api.%61nthropic.com/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "percent-encoded Anthropic host is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://sub.claude.ai/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "claude.ai subdomain is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://gateway.example.test/v1", "models": ["openrouter/anthropic/claude-3"] },
+    "expect": "reject",
+    "reason": "a gateway route to Claude is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://gateway.example.test/v1", "models": ["us.anthropic.claude-3"] },
+    "expect": "reject",
+    "reason": "a dotted gateway id naming Anthropic is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://gateway.example.test/v1", "models": ["m", "Claude-Opus"] },
+    "expect": "reject",
+    "reason": "a Claude model id in any case, anywhere in the list, is refused"
+  },
+  {
+    "config": { "type": "orchestrator", "base_url": "http://127.0.0.1:1/v1", "models": ["claude-seat"] },
+    "expect": "accept",
+    "reason": "the orchestrator type is the one allowed path to a Claude model id"
+  },
+  {
+    "config": { "type": "exec", "base_url": "http://127.0.0.1:1/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "exec provider type is refused"
+  },
+  {
+    "config": { "type": "claude", "base_url": "http://127.0.0.1:1/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "claude provider type is refused"
+  },
+  {
+    "config": { "type": "anthropic", "base_url": "http://127.0.0.1:1/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "anthropic provider type is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "ftp://127.0.0.1/v1", "models": ["m"] },
+    "expect": "reject",
+    "reason": "a scheme other than http or https is refused"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://localhost:8080/v1", "models": ["m"] },
+    "expect": "accept",
+    "reason": "http on localhost is accepted"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "http://[::1]:8080/v1", "models": ["m"] },
+    "expect": "accept",
+    "reason": "http on the IPv6 loopback is accepted"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://anthropic.com.example.test/v1", "models": ["m"] },
+    "expect": "accept",
+    "reason": "a host that only starts with anthropic.com is accepted"
+  },
+  {
+    "config": { "type": "openai-compatible", "base_url": "https://notanthropic.com/v1", "models": ["m"] },
+    "expect": "accept",
+    "reason": "a host that only ends with the letters anthropic.com is accepted"
   }
 ]
