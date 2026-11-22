@@ -99,6 +99,11 @@ With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the 
 | 5 | timeout |
 | 6 | boundary refused (Anthropic host, Claude model id, `cli`/`claude` provider type); no request is sent |
 
+`ask --proof-receipt` takes JSON stdin with `data.sha`, `data.shell` and `data.menu`.
+Each menu entry supplies a unique string ID, revision (`sha`), shell, scenario, exit code (`exit`) and elapsed seconds.
+The native Ollama request offers IDs proving a successful exit during a held stream on that revision and shell within three seconds, plus `"NONE"`.
+The pipe buffers the reply until it validates one JSON string from that enum. An invalid reply exits 4 with empty answer text.
+
 Failure classes come from the harness's `error: <provider>: <class>: <reason>` lines (connect=3, timeout=5, refused=6, else 4). Tests: `tests/chat-ask.test.mjs` (spawns the real CLI against a fake 127.0.0.1 server).
 
 ## Activity feed (`chat/activity_feed.mjs`)

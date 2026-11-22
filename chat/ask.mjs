@@ -4,17 +4,18 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { callerLabel, createFeedWriter } from './activity_feed.mjs';
+import { acceptsProofReceipt, proofReceiptSchema } from './proof_receipt.mjs';
 import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistry, ProviderRefused, resolveSelection } from './harness.mjs';
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
 
-const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--timeout <s>] "<prompt>"';
+const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--proof-receipt] [--timeout <s>] "<prompt>"';
 const DEFAULT_TIMEOUT_S = 300;
 
 /**
  * Parses ask argv. Everything after `--` is prompt text.
  * @param {string[]} argv
- * @returns {{error?: string, model?: string, system?: string, json: boolean, timeoutS: number, prompt: string}}
+ * @returns {{error?: string, model?: string, system?: string, proofReceipt?: boolean, json: boolean, timeoutS: number, prompt: string}}
  */
 export function parseAskArgs(argv) {
   const out = { json: false, timeoutS: DEFAULT_TIMEOUT_S, prompt: '' };
@@ -23,6 +24,7 @@ export function parseAskArgs(argv) {
     const a = argv[i];
     if (a === '--') { words.push(...argv.slice(i + 1)); break; }
     if (a === '--json') out.json = true;
+    else if (a === '--proof-receipt') out.proofReceipt = true;
     else if (a === '--model' || a === '--system' || a === '--from' || a === '--timeout') {
       const v = argv[i + 1];
       if (v === undefined) return { ...out, error: `${a} needs a value` };
@@ -91,7 +93,8 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   const finish = (code, fields) => {
     activity.end(code, fields);
     if (args.json) {
-      const obj = { ok: code === EXIT.OK, provider: fields.provider ?? null, model: fields.model ?? null, text: fields.text ?? '', elapsed_ms: Date.now() - started };
+      const ok = code === EXIT.OK;
+      const obj = { ok, provider: fields.provider ?? null, model: fields.model ?? null, text: !ok && args.proofReceipt ? '' : fields.text ?? '', elapsed_ms: Date.now() - started };
       if (fields.error) obj.error = fields.error;
       stdout.write(`${JSON.stringify(obj)}\n`);
     }
@@ -143,7 +146,15 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   let context = '';
   if (stdin && !stdin.isTTY) context = await readAll(stdin);
   let line = args.prompt;
-  if (context.trim() !== '') line = `${line}\n\n--- context (stdin) ---\n${context}`;
+  let schema;
+  if (args.proofReceipt) {
+    try {
+      schema = proofReceiptSchema(context);
+    } catch (err) {
+      return finish(EXIT.USAGE, { provider, model, error: `invalid proof-receipt input: ${err.message}` });
+    }
+    line += `\nReturn one eligible receipt ID as a JSON string. Choose "NONE" if there are no eligible IDs.\nResponse schema: ${JSON.stringify(schema)}`;
+  } else if (context.trim() !== '') line = `${line}\n\n--- context (stdin) ---\n${context}`;
   if (args.system) line = `${args.system}\n\n${line}`;
 
   activity.start({ provider, model }, context);
@@ -158,14 +169,16 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     if (/^warning: /.test(text)) stderr.write(`${text}\n`);
     else failures.push(text);
   };
-  const source = harnessSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
+  const source = harnessSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {}, responseSchema: schema });
 
   let text = '';
   try {
     for await (const chunk of source(line, { signal: controller.signal })) {
       text += chunk;
-      activity.chunk(chunk);
-      if (!args.json) stdout.write(chunk);
+      if (!schema) {
+        activity.chunk(chunk);
+        if (!args.json) stdout.write(chunk);
+      }
     }
   } catch (err) {
     clearTimeout(timer);
@@ -178,6 +191,13 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   if (failed) {
     const m = /^error: [^:]+: ([a-z-]+): /.exec(failed);
     return finish(m ? codeForClass(m[1]) : EXIT.PROVIDER, { provider, model, text, error: failed });
+  }
+  if (schema) {
+    if (!acceptsProofReceipt(schema, text)) {
+      return finish(EXIT.PROVIDER, { provider, model, error: 'invalid proof-receipt response: expected a JSON string from the eligible enum' });
+    }
+    activity.chunk(text);
+    if (!args.json) stdout.write(text);
   }
   if (!args.json && text !== '' && !text.endsWith('\n')) stdout.write('\n');
   return finish(EXIT.OK, { provider, model, text });
