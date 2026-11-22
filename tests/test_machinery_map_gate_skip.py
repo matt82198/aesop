@@ -44,8 +44,8 @@ def _make_tree(tmp: Path, *, aesop: bool, map_text=None) -> Path:
         (tmp / "bin").mkdir()
         (tmp / "bin" / "cli.js").write_text("// aesop scaffolder\n", encoding="utf-8", newline="\n")
     if map_text is not None:
-        (tmp / "docs").mkdir()
-        (tmp / "docs" / "MACHINERY-MAP.md").write_text(map_text, encoding="utf-8", newline="\n")
+        (tmp / "docs" / "archive").mkdir(parents=True)
+        (tmp / "docs" / "archive" / "MACHINERY-MAP.md").write_text(map_text, encoding="utf-8", newline="\n")
     return tmp
 
 

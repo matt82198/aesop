@@ -96,7 +96,7 @@ Every path below exists on the main branch.
 | You define | Domain map | `CLAUDE-TEMPLATE.md` | Your project map and per-domain rules. |
 | You define | Brain-side hooks | `~/.claude/hooks/` (not in this repo) | Hooks for your own environment. The kernel does not ship them. |
 | Example | Aesop's own root CLAUDE.md | `CLAUDE.md` | One layout for a domain map. Not in the package. |
-| Example | Machinery map | `docs/MACHINERY-MAP.md` | Maps this repo's gates and daemons. It does not describe your setup. |
+| Example | Machinery map | `docs/archive/MACHINERY-MAP.md` | Maps this repo's gates and daemons. It does not describe your setup. |
 | Example | First-wave replay | `examples/first-wave-baseline/` | A recorded wave to study. Not in the package. |
 | Example | Scanner template | `scan/fleet-scan.example.mjs` | An IOC scanner to copy and configure. |
 | Example | Lane contract | `LANE-CONTRACT.md` | One project's dispatch contract. Not in the package. |
@@ -127,7 +127,7 @@ Every path below exists on the main branch.
 - **[Quickstart](./docs/quickstart.md)** - the zero-key demo, then sign and verify a receipt.
 - **Concepts** - [receipts loop](./docs/concepts/receipts-loop.md), [signed receipts](./docs/concepts/signed-receipts.md), [event store](./docs/concepts/event-store.md), [per-project stores](./docs/concepts/per-project-stores.md), [stage lanes](./docs/concepts/stage-lanes.md), [crash-only operation](./docs/concepts/crash-only.md).
 - **Guides** - [verify a receipt](./docs/guides/verify-receipt.md), [verify an event store](./docs/guides/verify-event-store.md), [install](./docs/INSTALL.md), [first wave](./docs/FIRST-WAVE.md).
-- **Reference** - [receipt format](./docs/reference/receipt-format.md), [stage matrix](./docs/reference/stage-matrix.md), [machinery map](./docs/MACHINERY-MAP.md).
+- **Reference** - [receipt format](./docs/reference/receipt-format.md), [stage matrix](./docs/reference/stage-matrix.md), [machinery map](./docs/archive/MACHINERY-MAP.md).
 - **Trust** - [provenance and evidence](./docs/provenance/README.md), [releasing](./docs/RELEASING.md), [SECURITY.md](./SECURITY.md).
 - **History** - [CHANGELOG.md](./CHANGELOG.md).
 

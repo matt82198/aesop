@@ -16,6 +16,19 @@ TARGET_DOCS = (
     "docs/archive/WHY-CRASH-ONLY.md",
     "docs/case-study-portfolio.md",
     "docs/REMOTE-ACCESS.md",
+    "docs/README.md",
+    "docs/DECISIONS.md",
+    "docs/INSTALL.md",
+    "docs/concepts/claim-binding.md",
+    "docs/guides/install-hook.md",
+    "docs/provenance/refuted-ledger.md",
+)
+
+ARCHIVED_OVERLAP_DOCS = (
+    "THE-AESOP-HYPOTHESIS.md",
+    "MICROKERNEL.md",
+    "MACHINERY-MAP.md",
+    "RECEIPTS.md",
 )
 
 MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
@@ -60,6 +73,18 @@ class TestTrackerDocLinks(unittest.TestCase):
         self.assertEqual(failures, {}, "broken doc references:\n" + "\n".join(
             f"{rel}:\n  " + "\n  ".join(items) for rel, items in failures.items()
         ))
+
+
+class TestArchivedOverlapDocs(unittest.TestCase):
+    """Overlapping essays/maps (f-834ec381) live under docs/archive/, not docs/ root."""
+
+    def test_overlap_docs_are_archived(self):
+        at_root = [name for name in ARCHIVED_OVERLAP_DOCS if (REPO_ROOT / "docs" / name).exists()]
+        missing_archive = [
+            name for name in ARCHIVED_OVERLAP_DOCS if not (REPO_ROOT / "docs" / "archive" / name).exists()
+        ]
+        self.assertEqual(at_root, [], f"overlapping docs still at docs/ root: {at_root}")
+        self.assertEqual(missing_archive, [], f"overlapping docs missing from docs/archive/: {missing_archive}")
 
 
 if __name__ == "__main__":

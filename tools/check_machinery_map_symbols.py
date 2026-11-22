@@ -28,7 +28,7 @@ import re
 import sys
 from pathlib import Path
 
-MAP_RELPATH = "docs/MACHINERY-MAP.md"
+MAP_RELPATH = "docs/archive/MACHINERY-MAP.md"
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 EXT_RE = r"(?:py|sh|mjs|js|ps1|vbs|yml|yaml|md|json|txt|jsonl|ts)"
 PATH_RE = r"(?:\.?[\w.-]+/)*\.?[\w.-]+\." + EXT_RE
@@ -128,7 +128,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Check machinery-map citations name symbols, not line numbers.")
     parser.add_argument("--check", action="store_true", help="verify the map (exit 1 on drift)")
     parser.add_argument("--root", default=None, help="repository root (default: parent of tools/)")
-    parser.add_argument("--map", default=None, help="map file (default: <root>/docs/MACHINERY-MAP.md)")
+    parser.add_argument("--map", default=None, help="map file (default: <root>/docs/archive/MACHINERY-MAP.md)")
     parser.add_argument("--skip-if-scaffold", action="store_true",
                         help="exit 0 (skip token) only when the map is absent and bin/cli.js is absent (scaffold tree)")
     args = parser.parse_args(argv)

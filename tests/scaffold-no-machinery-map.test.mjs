@@ -21,7 +21,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'bin', 'cli.js');
 const SCAFFOLD_TIMEOUT_MS = 120000;
 
-const MACHINERY_MAP = 'docs/MACHINERY-MAP.md';
+const MACHINERY_MAP = 'docs/archive/MACHINERY-MAP.md';
 const POSITIVE_CONTROL = 'docs/ARCHITECTURE.md';
 
 function sandbox() {

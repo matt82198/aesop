@@ -108,7 +108,7 @@ counter raises an alert when more than a threshold of skip, opt-out and override
 ## 3. Register the Claude Code hooks
 
 The three files under `hooks/claude/` are not active until a Claude Code `settings.json` points at them. This
-repository registers exactly one, the model policy (`.claude/settings.json:3-14`; `docs/MACHINERY-MAP.md:288`). To
+repository registers exactly one, the model policy (`.claude/settings.json:3-14`; `docs/archive/MACHINERY-MAP.md:288`). To
 register all three, add to `.claude/settings.json` in your project, or to your user-level settings for every project:
 
 ```json
