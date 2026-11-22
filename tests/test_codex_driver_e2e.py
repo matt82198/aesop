@@ -23,6 +23,11 @@ No dependencies: no openai, no jsonschema, no pytest.
 import hashlib
 import json
 import os
+import sys as _sys_feed
+
+_sys_feed.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity_feed_isolation  # noqa: E402
+activity_feed_isolation.pin()
 import sys
 import tempfile
 import time

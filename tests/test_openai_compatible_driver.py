@@ -17,6 +17,10 @@ Windows + Linux safe. No dependencies: no openai, no requests, no pytest.
 import json
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity_feed_isolation  # noqa: E402
+activity_feed_isolation.pin()
 import tempfile
 import unittest
 import urllib.request

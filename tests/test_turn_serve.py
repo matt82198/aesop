@@ -13,6 +13,11 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 import io
 import json
 import os
+import sys as _sys_feed
+
+_sys_feed.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity_feed_isolation  # noqa: E402
+activity_feed_isolation.pin()
 import subprocess
 import sys
 import threading

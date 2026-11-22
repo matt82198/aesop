@@ -4,19 +4,24 @@
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync, watch } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
 
 export const ROTATE_BYTES = 5 * 1024 * 1024;
 export const PREVIEW_BYTES = 2048;
 const PROMPT_CAP = 1024;
 const CHUNK_SPLIT = 600; // chars per chunk line, so a line stays far below one atomic append
 
-/** Feed path: AESOP_ACTIVITY_FEED, else <AESOP_STATE_ROOT or repo state/>/chat/activity.jsonl. */
+/**
+ * Feed path: AESOP_ACTIVITY_FEED, else ONE per-user file shared by every checkout:
+ * <HOME || USERPROFILE || homedir()>/.aesop/state/chat/activity.jsonl.
+ * The same rule lives in driver/activity_feed.py (feed_path); keep the two in step. The directory
+ * is created lazily by the writer and the tail, never by this function.
+ */
 export function feedPath(env = process.env) {
   if (env.AESOP_ACTIVITY_FEED) return env.AESOP_ACTIVITY_FEED;
-  const root = env.AESOP_STATE_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', 'state');
-  return join(root, 'chat', 'activity.jsonl');
+  const home = env.HOME || env.USERPROFILE || homedir();
+  return join(home, '.aesop', 'state', 'chat', 'activity.jsonl');
 }
 
 const GENERIC = /^(node|nodejs|bash|sh|zsh|dash|fish|cmd|powershell|pwsh|conhost|python3?|env|npm|npx|git-bash|windowsterminal)(\.exe)?$/i;
@@ -198,6 +203,41 @@ export function tailFeed({ file, onEvent, intervalMs = 1000 }) {
 }
 
 /**
+ * Peer-bus rows (kind 'peer'): outbound dispatches start running and end with an outcome; inbound posts
+ * arrive finished. Display-only, like ask rows.
+ */
+function applyPeerEvent(jobs, transcript, ev) {
+  let entry = jobs.get(ev.job);
+  if (ev.type === 'start') {
+    if (entry) return false;
+    const inbound = ev.dir === 'in';
+    entry = {
+      role: 'feed', kind: 'peer', dir: inbound ? 'in' : 'out', job: ev.job,
+      peer: (inbound ? ev.from : ev.to) ?? 'peer', body: ev.prompt ?? '', startedAt: ev.ts ?? Date.now(),
+      status: null, exit: null, elapsedMs: 0, sent: undefined, reason: undefined,
+    };
+    if (inbound) {
+      entry.status = ev.status ?? 'ok';
+      entry.exit = ev.exit ?? null;
+      entry.elapsedMs = ev.elapsed_ms ?? 0;
+    }
+    jobs.set(ev.job, entry);
+    transcript.push(entry);
+    return true;
+  }
+  if (!entry) return false;
+  if (ev.type === 'end') {
+    entry.status = ev.status ?? 'ok';
+    entry.exit = ev.exit ?? null;
+    entry.elapsedMs = ev.elapsed_ms ?? 0;
+    entry.sent = ev.sent;
+    entry.reason = ev.reason;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Applies a feed event to the transcript. Entries are `role: 'feed'` and live only in the display
  * transcript; they are never handed to a model source. Returns true when the transcript changed.
  * @param {Map<string, object>} jobs job id -> transcript entry
@@ -205,6 +245,7 @@ export function tailFeed({ file, onEvent, intervalMs = 1000 }) {
  * @param {object} ev
  */
 export function applyFeedEvent(jobs, transcript, ev) {
+  if (ev.kind === 'peer') return applyPeerEvent(jobs, transcript, ev);
   let entry = jobs.get(ev.job);
   if (ev.type === 'start') {
     if (entry) return false;

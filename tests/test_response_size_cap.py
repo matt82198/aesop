@@ -12,6 +12,10 @@ Verifies that response reads are bounded BEFORE parsing, not after:
 import json
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity_feed_isolation  # noqa: E402
+activity_feed_isolation.pin()
 import unittest
 from io import BytesIO
 from unittest.mock import Mock, patch

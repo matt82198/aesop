@@ -27,6 +27,35 @@ fail() { echo "FAIL: $*"; FAILED=$((FAILED + 1)); }
 # A pid that is guaranteed dead: the pid of a bash process that has already exited.
 dead_pid() { bash -c 'echo $$'; }
 
+# Model mkdir returning success on EEXIST in just the specified contender.
+with_eexist_mkdir() (
+  mkdir() { command mkdir "$@" || [[ $# == 1 && -d "$1" ]]; }
+  export -f mkdir
+  "$@"
+)
+
+# show_trial <trial_dir> <summary>: print each driver's RC and stderr so a CI log shows the
+# interleaving (RC=1 held / RC=2 reclaimed / RC=0 fresh) and the reclaim reason.
+show_trial() {
+  echo "  trial $1: $2"
+  local d
+  for d in a b; do
+    echo "    driver $d: $(tr '\n' ' ' < "$1/$d.out" 2>/dev/null) stderr: $(tr '\n' '|' < "$1/$d.err" 2>/dev/null)"
+  done
+}
+
+# DRIVER (args: script, lock, barrier-file-or-empty, trial dir): optionally wait at the barrier,
+# acquire, print RC, then stay ALIVE until both drivers have finished acquiring (bounded 20s).
+# A fixed "sleep 1" hold let a slow-starting contender arrive after the winner had exited, which
+# is a legitimate dead-holder reclaim, not a double acquisition; the holder must outlive the race.
+DRIVER='source "$1"
+if [ -n "$3" ]; then while [ ! -f "$3" ]; do sleep 0.01; done; fi
+acquire_lock "$2" 300
+echo "RC=$?"
+: > "$4/done.$$"
+n=0
+while [ "$(find "$4" -maxdepth 1 -name "done.*" | wc -l)" -lt 2 ] && [ "$n" -lt 400 ]; do sleep 0.05; n=$((n + 1)); done'
+
 CYCLE_MOCK="$TMP_DIR/mock-cycle.sh"
 printf '%s\n' '#!/bin/bash' 'COUNT=$(cat "$1" 2>/dev/null || echo 0)' 'echo $((COUNT + 1)) > "$1"' > "$CYCLE_MOCK"
 chmod +x "$CYCLE_MOCK"
@@ -81,6 +110,24 @@ else
   fail "live pid + stale timestamp: lock was reclaimed by a second daemon (exit $rc, count $(cat "$ROOT/counter"))"; cat "$ROOT/out.log"
 fi
 
+echo "=== Test 2b: mkdir success on EEXIST must preserve the live holder ==="
+ROOT="$TMP_DIR/t2b"; mkdir -p "$ROOT"
+LOCK="$ROOT/lock"
+(
+  source "$RW"
+  acquire_lock "$LOCK" 300 || exit 1
+  with_eexist_mkdir bash -c 'source "$1"; acquire_lock "$2" 300' _ "$RW" "$LOCK"
+  rc=$?
+  owner=$(cat "$LOCK/pid")
+  echo "  second acquire rc=$rc, owner=$owner, holder=$$"
+  [[ "$rc" == 1 && "$owner" == "$$" ]]
+)
+if [ "$?" -eq 0 ]; then
+  pass "mkdir success on EEXIST: second acquire returned 1 and preserved the live PID"
+else
+  fail "mkdir success on EEXIST: expected a held lock and the original live PID"
+fi
+
 echo "=== Test 3: dead holder with a FRESH timestamp is reclaimed ==="
 ROOT="$TMP_DIR/t3"; new_fixture "$ROOT"
 LOCK="$ROOT/state/.watchdog-lock"; mkdir -p "$LOCK"
@@ -104,13 +151,13 @@ for i in $(seq 1 15); do
   LOCK="$ROOT/$i/lock"; mkdir "$LOCK"
   echo "$(dead_pid)" > "$LOCK/pid"
   echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
-  ( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/$i/a.out" 2>/dev/null ) &
-  ( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/$i/b.out" 2>/dev/null ) &
+  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT/$i" > "$ROOT/$i/a.out" 2> "$ROOT/$i/a.err" ) &
+  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT/$i" > "$ROOT/$i/b.out" 2> "$ROOT/$i/b.err" ) &
   wait
   winners=$(grep -hE '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$winners" != "1" ]; then
     bad=$((bad + 1))
-    echo "  trial $i: winners=$winners"; cat "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null
+    show_trial "$ROOT/$i" "winners=$winners"
   fi
 done
 if [ "$bad" -eq 0 ]; then
@@ -132,21 +179,60 @@ for i in $(seq 1 40); do
   LOCK="$ROOT/$i/lock"; mkdir "$LOCK"
   echo "$(dead_pid)" > "$LOCK/pid"
   echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
+  # Force the EEXIST false-success outcome in one trial on every platform.
+  # The remaining trials use the host mkdir to exercise natural interleavings.
+  runner=()
+  if [ "$i" -eq 1 ]; then runner=(with_eexist_mkdir); fi
   GO="$ROOT/$i/go"
-  ( bash -c 'source "$1"; while [ ! -f "$3" ]; do sleep 0.01; done; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" "$GO" > "$ROOT/$i/a.out" 2>/dev/null ) &
-  ( bash -c 'source "$1"; while [ ! -f "$3" ]; do sleep 0.01; done; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" "$GO" > "$ROOT/$i/b.out" 2>/dev/null ) &
+  ( "${runner[@]}" bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/a.out" 2> "$ROOT/$i/a.err" ) &
+  ( "${runner[@]}" bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/b.out" 2> "$ROOT/$i/b.err" ) &
   touch "$GO"
   wait
   acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$acquirers" != "1" ]; then
+  held=$(grep -hx "RC=1" "$ROOT/$i/a.out" "$ROOT/$i/b.out" | wc -l)
+  if [ "$acquirers" != "1" ] || [ "$held" -ne 1 ]; then
     bad4b=$((bad4b + 1))
-    echo "  trial $i: acquirers=$acquirers"; cat "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null
+    show_trial "$ROOT/$i" "acquirers=$acquirers"
   fi
 done
 if [ "$bad4b" -eq 0 ]; then
   pass "40/40 barrier-released reclaim trials produced exactly one acquirer"
 else
   fail "$bad4b/40 barrier-released reclaim trials did not produce exactly one acquirer"
+fi
+
+echo "=== Test 4c: fresh acquirer arriving inside the forced reclaim gap -> exactly one acquirer ==="
+# AESOP_LOCK_TEST_PAUSE_AFTER_MV (inert unless set) makes the reclaimer sleep right after it
+# removed the stale lock from the lock path. Driver A reclaims with a 3s pause; once the lock
+# path is observed absent, driver B (no pause) starts a fresh acquire inside that gap. Exactly
+# one of A/B may acquire (RC 0 or 2); the other must report RC=1.
+ROOT="$TMP_DIR/t4c"; mkdir -p "$ROOT"
+LOCK="$ROOT/lock"; mkdir "$LOCK"
+echo "$(dead_pid)" > "$LOCK/pid"
+echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
+( AESOP_LOCK_TEST_PAUSE_AFTER_MV=3 bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT" > "$ROOT/a.out" 2> "$ROOT/a.err" ) &
+gap_seen=0
+for _ in $(seq 1 200); do
+  if [ ! -e "$LOCK" ]; then gap_seen=1; break; fi
+  sleep 0.02
+done
+( bash -c "$DRIVER" _ "$RW" "$LOCK" "" "$ROOT" > "$ROOT/b.out" 2> "$ROOT/b.err" ) &
+wait
+acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/a.out" "$ROOT/b.out" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$gap_seen" = "1" ] && [ "$acquirers" = "1" ]; then
+  pass "fresh acquirer during the forced reclaim gap: exactly one acquirer"
+else
+  fail "forced reclaim gap: gap_seen=$gap_seen acquirers=$acquirers (expected gap_seen=1 acquirers=1)"; cat "$ROOT/a.out" "$ROOT/b.out" 2>/dev/null
+fi
+
+echo "=== Test 4d: write_lock_owner failure fails closed (lock released, non-zero) ==="
+ROOT="$TMP_DIR/t4d"; mkdir -p "$ROOT"
+LOCK="$ROOT/lock"
+out=$(bash -c 'source "$1"; write_lock_owner() { return 1; }; acquire_lock "$2" 300; echo "RC=$?"' _ "$RW" "$LOCK" 2>/dev/null)
+if [ "$out" = "RC=1" ] && [ ! -e "$LOCK" ]; then
+  pass "owner-write failure: acquire returned 1 and left no lock behind"
+else
+  fail "owner-write failure: out='$out' lock_exists=$([ -e "$LOCK" ] && echo yes || echo no)"
 fi
 
 echo "=== Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ==="

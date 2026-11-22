@@ -215,7 +215,10 @@ test('one-shot: no history file and no files written into cwd', async () => {
     const r = await ask(['hi'], { cwd: dir, config, env: { HOME: home, USERPROFILE: home } });
     assert.equal(r.code, 0, r.stderr);
     assert.deepEqual(readdirSync(dir).sort(), before);
-    assert.deepEqual(readdirSync(home), []);
+    // The one write allowed under HOME is the shared activity feed (chat/activity_feed.mjs feedPath).
+    assert.deepEqual(readdirSync(home), ['.aesop']);
+    assert.deepEqual(readdirSync(join(home, '.aesop')), ['state']);
+    assert.deepEqual(readdirSync(join(home, '.aesop', 'state', 'chat')), ['activity.jsonl']);
     rmSync(home, { recursive: true, force: true });
   });
 });

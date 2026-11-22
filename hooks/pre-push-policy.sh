@@ -376,6 +376,75 @@ check_gate_tamper() {
   return 0
 }
 
+_stage_now_ms() {
+  local rt="${EPOCHREALTIME:-}"
+  if [ -n "$rt" ]; then
+    local sec="${rt%%.*}"
+    local frac="${rt#*.}000"
+    frac="${frac:0:3}"
+    printf '%s\n' "$(( sec * 1000 + 10#$frac ))"
+  else
+    printf '%s000\n' "$(date +%s)"
+  fi
+}
+
+_stage_fmt_elapsed() {
+  local start_ms="$1"
+  local end_ms
+  end_ms=$(_stage_now_ms)
+  local diff_ms=$(( end_ms - start_ms ))
+  [ "$diff_ms" -lt 0 ] && diff_ms=0
+  printf '%d.%ds' "$(( diff_ms / 1000 ))" "$(( (diff_ms % 1000) / 100 ))"
+}
+
+check_installed_hook_sync() {
+  # Verify installed .git/hooks/pre-push matches repo source hooks/pre-push-policy.sh.
+  # On mismatch or absence, print byte counts and the manual cp fix command; NEVER auto-overwrite.
+  local aesop_root src_hook inst_hook src_bytes inst_bytes
+  aesop_root=$(resolve_aesop_root)
+  src_hook="$aesop_root/hooks/pre-push-policy.sh"
+  [ -f "$src_hook" ] || return 0
+  inst_hook=$(git -C "$aesop_root" rev-parse --git-path hooks/pre-push 2>/dev/null) || return 0
+  [ -n "$inst_hook" ] || return 0
+  case "$inst_hook" in
+    /*|[A-Za-z]:/*) ;;
+    *) inst_hook="$aesop_root/$inst_hook" ;;
+  esac
+  src_bytes=$(wc -c < "$src_hook" 2>/dev/null | tr -d '[:space:]')
+  if [ ! -f "$inst_hook" ]; then
+    printf 'WARN: [pre-push] installed hook missing at %s (repo source %s is %s bytes). Fix: cp "%s" "%s"\n' \
+      "$inst_hook" "$src_hook" "$src_bytes" "$src_hook" "$inst_hook" >&2
+    return 0
+  fi
+  if ! cmp -s "$src_hook" "$inst_hook"; then
+    inst_bytes=$(wc -c < "$inst_hook" 2>/dev/null | tr -d '[:space:]')
+    printf 'WARN: [pre-push] installed hook (%s, %s bytes) differs from repo source (%s, %s bytes). Fix: cp "%s" "%s"\n' \
+      "$inst_hook" "$inst_bytes" "$src_hook" "$src_bytes" "$src_hook" "$inst_hook" >&2
+    return 0
+  fi
+  return 0
+}
+
+_STAGE_T0=0
+
+_stage_begin() {
+  _STAGE_T0=$(_stage_now_ms)
+}
+
+_stage_ok() {
+  printf '[pre-push] stage %s ok (%s)\n' "$1" "$(_stage_fmt_elapsed "$_STAGE_T0")" >&2
+}
+
+_stage_blocked() {
+  local stage_name="$1" block_reason="$2" audit_reason="${3:-}"
+  printf '[pre-push] BLOCKED stage %s (%s): %s\n' "$stage_name" "$(_stage_fmt_elapsed "$_STAGE_T0")" "$block_reason" >&2
+  printf 'Error: %s\n' "$block_reason" >&2
+  if [ -n "$audit_reason" ]; then
+    log_block "$audit_reason"
+  fi
+  exit 1
+}
+
 gate_no_python_block() {
   # Shared fail-closed message for a gate whose interpreter is unavailable.
   # The top-of-file guard already requires python, so reaching this means the
@@ -2610,13 +2679,14 @@ check_emit_receipt() {
 
   if [ -n "$timeout_bin" ]; then
     # Use timeout with --kill-after to ensure process group cleanup on both Linux and macOS.
-    # Redirect to temp file instead of command substitution to avoid bash subshell hanging
-    # when the process group is killed but the pipe reader doesn't get EOF notification.
+    # Redirect stdout to temp file while letting stderr stream live so per-shard progress and
+    # immediate BLOCKED lines print as each part finishes instead of buffering until the end.
     # Unset GIT_* environment variables to prevent matrix parts from committing to this repo
     # via inherited GIT_DIR/GIT_WORK_TREE (see docs/archive/RECEIPT-GATE.md for the mechanism).
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      PYTHONUNBUFFERED=1 \
       "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post "${receipt_flags[@]}" \
-      < /dev/null > "$receipt_tmpfile" 2>&1
+      < /dev/null > "$receipt_tmpfile"
     receipt_exit_code=$?
   else
     # No `timeout` on this box: use background job with explicit deadline.
@@ -2625,8 +2695,9 @@ check_emit_receipt() {
     log_event "receipt_emit_unbounded_no_timeout_bin"
     # Unset GIT_* environment variables to prevent matrix parts from committing to this repo.
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      PYTHONUNBUFFERED=1 \
       "$py_bin" "$receipt_script" --repo "$aesop_root" --post "${receipt_flags[@]}" \
-      < /dev/null > "$receipt_tmpfile" 2>&1 &
+      < /dev/null > "$receipt_tmpfile" &
     local receipt_pid=$!
     local elapsed=0
     local timed_out=0
@@ -3993,6 +4064,10 @@ main() {
     exit 1
   fi
 
+  _stage_begin hook_sync
+  check_installed_hook_sync
+  _stage_ok hook_sync
+
   # Box fence push-time re-check (tools/box_fence.py): when an earlier fence run could not reach
   # origin it left a marker in the git dir. Before any push, re-verify BOX_PROTOCOL; still offline
   # or behind means the push is blocked (an offline box could not collide until now).
@@ -4000,11 +4075,11 @@ main() {
   fence_root=$(resolve_aesop_root)
   fence_gitdir=$(git rev-parse --absolute-git-dir 2>/dev/null || true)
   if [ -n "$fence_gitdir" ] && [ -f "$fence_gitdir/aesop-box-fence-offline" ] && [ -f "$fence_root/tools/box_fence.py" ]; then
+    _stage_begin box_fence
     if ! "$_AESOP_PY_BIN" "$fence_root/tools/box_fence.py" --repo "$fence_root" --push-check < /dev/null >&2; then
-      printf 'Error: box fence: this box could not prove it is current; push blocked (fail-closed)\n' >&2
-      log_block "box_fence_push_check_failed"
-      exit 1
+      _stage_blocked box_fence "box fence: this box could not prove it is current; push blocked (fail-closed)" box_fence_push_check_failed
     fi
+    _stage_ok box_fence
   fi
 
   # git pre-push provides ref info on stdin, and BOTH check_branch_policy and
@@ -4024,11 +4099,11 @@ main() {
     BACKUP_PUSH=1
   fi
 
+  _stage_begin branch_policy
   if ! check_branch_policy <<< "$prepush_stdin"; then
-    printf 'Error: Push to main/master is blocked by policy\n' >&2
-    log_block "push_to_protected_branch"
-    exit 1
+    _stage_blocked branch_policy "Push to main/master is blocked by policy" push_to_protected_branch
   fi
+  _stage_ok branch_policy
 
   # BOOTSTRAP: no trunk on origin yet (fresh remote); the base is HEAD. Printed once per push.
   if ! gate_trunk_ref >/dev/null 2>&1; then
@@ -4037,141 +4112,150 @@ main() {
   fi
 
   # Base gate copies must be readable before any gate runs (fail-closed; see gate_base_dir).
+  _stage_begin gate_base
   if ! gate_base_dir >/dev/null; then
     printf 'FATAL: the base gate copies cannot run (trunk or HEAD tools/ unreadable). Push blocked (fail-closed).\n' >&2
-    log_block "gate_base_unavailable"
-    exit 1
+    _stage_blocked gate_base "the base gate copies cannot run (trunk or HEAD tools/ unreadable). Push blocked (fail-closed)." gate_base_unavailable
   fi
+  _stage_ok gate_base
 
   # GATE-CHANGED banner for pushes that edit gate files (non-blocking; see check_gate_tamper).
   check_gate_tamper <<< "$prepush_stdin"
 
+  _stage_begin secret_scan
   if ! check_secret_scan <<< "$prepush_stdin"; then
-    printf 'Error: Secret scan failed. Push blocked.\n' >&2
-    log_block "secret_scan_failure"
-    exit 1
+    _stage_blocked secret_scan "Secret scan failed. Push blocked." secret_scan_failure
   fi
+  _stage_ok secret_scan
 
   # Feed the SAME captured stdin: this gate reads the pushed ref range via
   # get_commit_range(), exactly like check_secret_scan above. Calling it without
   # stdin is what made it vacuously green (empty index at push time).
+  _stage_begin import_resolution
   if ! check_import_resolution <<< "$prepush_stdin"; then
-    printf 'Error: Python import resolution check failed. Push blocked.\n' >&2
-    log_block "import_check_failure"
-    exit 1
+    _stage_blocked import_resolution "Python import resolution check failed. Push blocked." import_check_failure
   fi
+  _stage_ok import_resolution
 
   # Same captured stdin, same reason as above: reads the pushed ref range.
+  _stage_begin conflict_markers
   if ! check_conflict_markers <<< "$prepush_stdin"; then
-    printf 'Error: Literal conflict marker found in pushed content. Push blocked.\n' >&2
-    log_block "conflict_marker_check_failure"
-    exit 1
+    _stage_blocked conflict_markers "Literal conflict marker found in pushed content. Push blocked." conflict_marker_check_failure
   fi
+  _stage_ok conflict_markers
 
   # G13 symbol survival (BLOCKING). Same captured stdin, same range mechanism.
+  _stage_begin symbol_survival
   if ! check_symbol_survival <<< "$prepush_stdin"; then
-    printf 'Error: PR symbol survival check failed (a merge commit dropped a symbol this branch added). Push blocked.\n' >&2
-    log_block "symbol_survival_failure"
-    exit 1
+    _stage_blocked symbol_survival "PR symbol survival check failed (a merge commit dropped a symbol this branch added). Push blocked." symbol_survival_failure
   fi
+  _stage_ok symbol_survival
 
+  _stage_begin tracker_guard
   if ! check_tracker_guard; then
-    printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
-    log_block "tracker_guard_failure"
-    exit 1
+    _stage_blocked tracker_guard "Tracker zombie-resurrection gate failed. Push blocked." tracker_guard_failure
   fi
+  _stage_ok tracker_guard
 
+  _stage_begin claudemd_sync
   if ! check_claudemd_sync; then
-    printf 'Error: CLAUDE.md synchronization gate failed. Push blocked.\n' >&2
-    log_block "claudemd_sync_failure"
-    exit 1
+    _stage_blocked claudemd_sync "CLAUDE.md synchronization gate failed. Push blocked." claudemd_sync_failure
   fi
+  _stage_ok claudemd_sync
 
+  _stage_begin gen_tool_index
   if ! check_gen_tool_index; then
-    printf 'Error: Tool index synchronization gate failed. Push blocked.\n' >&2
-    log_block "gen_tool_index_failure"
-    exit 1
+    _stage_blocked gen_tool_index "Tool index synchronization gate failed. Push blocked." gen_tool_index_failure
   fi
+  _stage_ok gen_tool_index
 
+  _stage_begin machinery_map_symbols
   if ! check_machinery_map_symbols; then
-    printf 'Error: Machinery map symbol gate failed. Push blocked.\n' >&2
-    log_block "machinery_map_symbols_failure"
-    exit 1
+    _stage_blocked machinery_map_symbols "Machinery map symbol gate failed. Push blocked." machinery_map_symbols_failure
   fi
+  _stage_ok machinery_map_symbols
 
   # Same captured stdin as the other range gates: check_metrics scans the pushed refs,
   # not the current branch (v0.10.1 incident).
-  if ! backup_ref_skip metrics && ! check_metrics <<< "$prepush_stdin"; then
-    printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
-    log_block "metrics_gate_failure"
-    exit 1
+  if backup_ref_skip metrics; then
+    printf '[pre-push] stage metrics skipped (0.0s)\n' >&2
+  else
+    _stage_begin metrics
+    if ! check_metrics <<< "$prepush_stdin"; then
+      _stage_blocked metrics "Metrics verification gate failed. Push blocked." metrics_gate_failure
+    fi
+    _stage_ok metrics
   fi
 
+  _stage_begin claudemd_headroom
   if ! check_claudemd_headroom; then
-    printf 'Error: CLAUDE.md merge-union line cap busted. Push blocked.\n' >&2
-    log_block "claudemd_headroom_failure"
-    exit 1
+    _stage_blocked claudemd_headroom "CLAUDE.md merge-union line cap busted. Push blocked." claudemd_headroom_failure
   fi
+  _stage_ok claudemd_headroom
 
+  _stage_begin test_suite_count
   if ! check_test_suite_count; then
-    printf 'Error: CI shard matrix would silently drop tracked test file(s). Push blocked.\n' >&2
-    log_block "test_suite_count_drift"
-    exit 1
+    _stage_blocked test_suite_count "CI shard matrix would silently drop tracked test file(s). Push blocked." test_suite_count_drift
   fi
+  _stage_ok test_suite_count
 
+  _stage_begin pyflakes_ratchet
   if ! check_pyflakes_ratchet; then
-    printf 'Error: Pyflakes ratchet check failed (new or stale findings). Push blocked.\n' >&2
-    log_block "pyflakes_ratchet_failure"
-    exit 1
+    _stage_blocked pyflakes_ratchet "Pyflakes ratchet check failed (new or stale findings). Push blocked." pyflakes_ratchet_failure
   fi
+  _stage_ok pyflakes_ratchet
 
   # Escape main-full-windows-shard2-ui-acceptance-timeout: in-process HTTP test timeout lint.
+  _stage_begin inprocess_http_timeout
   if ! check_inprocess_http_timeout; then
-    printf 'Error: In-process HTTP timeout lint failed (short client timeout on an in-process server). Push blocked.\n' >&2
-    log_block "inprocess_http_timeout_failure"
-    exit 1
+    _stage_blocked inprocess_http_timeout "In-process HTTP timeout lint failed (short client timeout on an in-process server). Push blocked." inprocess_http_timeout_failure
   fi
+  _stage_ok inprocess_http_timeout
 
   # G6 subprocess ratchet: the same invocation ci.yml runs, judged locally (see check_subprocess_guard_ratchet).
+  _stage_begin subprocess_guard_ratchet
   if ! check_subprocess_guard_ratchet; then
-    printf 'Error: Subprocess anti-pattern ratchet failed (new finding above baseline). Push blocked.\n' >&2
-    log_block "subprocess_guard_ratchet_failure"
-    exit 1
+    _stage_blocked subprocess_guard_ratchet "Subprocess anti-pattern ratchet failed (new finding above baseline). Push blocked." subprocess_guard_ratchet_failure
   fi
+  _stage_ok subprocess_guard_ratchet
 
+  _stage_begin encoding_lint
   if ! check_encoding_lint; then
-    printf 'Error: Encoding lint check failed. Push blocked.\n' >&2
-    log_block "encoding_lint_failure"
-    exit 1
+    _stage_blocked encoding_lint "Encoding lint check failed. Push blocked." encoding_lint_failure
+  fi
+  _stage_ok encoding_lint
+
+  if backup_ref_skip test_coverage; then
+    printf '[pre-push] stage test_coverage skipped (0.0s)\n' >&2
+  else
+    _stage_begin test_coverage
+    if ! check_test_coverage; then
+      _stage_blocked test_coverage "Test coverage check failed. Push blocked." test_coverage_failure
+    fi
+    _stage_ok test_coverage
   fi
 
-  if ! backup_ref_skip test_coverage && ! check_test_coverage; then
-    printf 'Error: Test coverage check failed. Push blocked.\n' >&2
-    log_block "test_coverage_failure"
-    exit 1
-  fi
-
+  _stage_begin generated_paths
   if ! check_generated_paths <<< "$prepush_stdin"; then
-    printf 'Error: Push touches a machine-generated path. Push blocked.\n' >&2
-    log_block "generated_path_hand_edit"
-    exit 1
+    _stage_blocked generated_paths "Push touches a machine-generated path. Push blocked." generated_path_hand_edit
   fi
+  _stage_ok generated_paths
 
   ensure_merge_drivers
 
   # Same captured stdin: verifies the pushed TIP's generated artifacts against
   # their generators (committed bytes, not the working tree).
+  _stage_begin generated_regen
   if ! check_generated_regen <<< "$prepush_stdin"; then
-    printf 'Error: A generated artifact is stale in the pushed commit. Push blocked.\n' >&2
-    log_block "generated_artifact_stale"
-    exit 1
+    _stage_blocked generated_regen "A generated artifact is stale in the pushed commit. Push blocked." generated_artifact_stale
   fi
+  _stage_ok generated_regen
 
+  _stage_begin linux_shape
   if ! check_linux_shape; then
-    printf 'Error: Linux shape check failed. Push blocked.\n' >&2
-    log_block "linux_shape_check_failure"
-    exit 1
+    _stage_blocked linux_shape "Linux shape check failed. Push blocked." linux_shape_check_failure
   fi
+  _stage_ok linux_shape
 
   # Empty ref list on stdin (up-to-date push: nothing to push) is not a push. No ref
   # reaches origin, so there is no pushed head to receipt; exit 0 before any receipt
@@ -4184,10 +4268,11 @@ main() {
   # Receipt conclusion gate: runs last, after every gate has passed. A red
   # required part or an unreadable conclusion blocks (see check_emit_receipt);
   # check_emit_receipt has already logged the block reason to the audit log.
+  _stage_begin emit_receipt
   if ! check_emit_receipt; then
-    printf 'Error: receipt gate blocked the push (a required part is red, or the conclusion is unreadable).\n' >&2
-    exit 1
+    _stage_blocked emit_receipt "receipt gate blocked the push (a required part is red, or the conclusion is unreadable)." ""
   fi
+  _stage_ok emit_receipt
 
   exit 0
 }

@@ -22,6 +22,10 @@ import { runPipe } from '../stdio/pipe.mjs';
 const HELP_LINES = [
   'Slash commands:',
   '  /help                  list these commands',
+  '  /codex <task>          Codex CLI task in a visible window; start and end shown in the feed',
+  '  /codex-app <msg>       send one message to the Codex app thread from peers config',
+  '  /agy <msg>             send one printable ASCII line to the agy CLI pid from peers config',
+  '  /peers                 peers config and the last status per peer',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
   '  /models                list configured providers and models',
   '  /auth                  show credential status (no network call)',
