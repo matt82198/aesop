@@ -247,3 +247,31 @@ test('ollama oversized input: warning on stderr, exit 0, answer still on stdout'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('claudemd-lint returns a capped lossless repair without calling a model', async () => {
+  await withFake((req, body, res) => sse(res, ['unexpected model call']), async ({ fake, dir, config }) => {
+    const first = 'é'.repeat(510) + '.';
+    const last = 'Done.';
+    const r = await ask(['--split-claudemd-line', '--json', 'repair'], {
+      cwd: dir, config, stdin: JSON.stringify({ data: { line: first + ' ' + last } }),
+    });
+    assert.equal(fake.posts().length, 0);
+    assert.equal(r.code, 0, r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.model, null);
+    assert.deepEqual(JSON.parse(result.text), [first, last]);
+  });
+});
+
+test('claudemd-lint refuses unsplittable input without a provider fallback', async () => {
+  await withFake((req, body, res) => sse(res, ['unexpected model call']), async ({ fake, dir, config }) => {
+    const r = await ask(['--split-claudemd-line', '--json'], {
+      cwd: dir, config, stdin: JSON.stringify({ data: { line: 'x'.repeat(1025) } }),
+    });
+    assert.equal(r.code, 2);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.text, '');
+    assert.match(result.error, /no safe sentence split/);
+    assert.equal(fake.posts().length, 0);
+  });
+});
