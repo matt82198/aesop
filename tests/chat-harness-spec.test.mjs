@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sse, startFake } from './helpers/fake_openai_server.mjs';
+import { seen, waitUntil } from './helpers/wait-until.mjs';
 
 // Durable spec tests for docs/specs/chat-model-harness.md. One test per requirement, named "H-R<n>: ...".
 // Do not rename, remove or skip them: tools/chat_harness_drift.mjs reports that as weakened.
@@ -74,12 +75,35 @@ async function startChat({ config, env = {}, source, columns = 100, rows = 40, c
   const done = runChat(opts);
   const press = (str, key) => stdin.emit('keypress', str, key);
   const k = (name, x = {}) => press(x.sequence ?? '', { name, ctrl: false, meta: false, sequence: '', ...x });
+  const lastFrameDetail = () => `last frame:\n${strip(writes[writes.length - 1] ?? '')}`;
   const api = {
     writes, stderr, stateRoot, histFile: e.AESOP_CHAT_HISTORY, cfgPath,
     raw: () => writes.join(''),
     text: () => strip(writes.join('')),
     lastFrame: () => strip(writes[writes.length - 1] ?? ''),
-    submit: async (s, wait = 150) => { for (const c of s) press(c, undefined); k('return', { sequence: '\r' }); await sleep(wait); },
+    // Types the line, presses Enter, then waits until every named condition holds (bounded; a timeout
+    // names what never showed up and prints the last frame). With no condition it yields one tick only,
+    // for callers that wait on their own observable.
+    submit: async (s, ...conds) => {
+      for (const c of s) press(c, undefined);
+      k('return', { sequence: '\r' });
+      const mark = writes.length;
+      if (conds.length === 0) { await sleep(0); return; }
+      await waitUntil(conds, { args: [mark], label: `after submitting ${JSON.stringify(s)}`, detail: lastFrameDetail });
+    },
+    until: (...conds) => waitUntil(conds, { args: [writes.length], detail: lastFrameDetail }),
+    // The submitted turn ran to its end: a frame drawn after Enter showed the streaming reply line
+    // (every turn draws one before its first chunk), and the newest frame shows none. This is what makes
+    // a "nothing else happened" assertion (zero posts, no fallback, exact counts) safe to read: the turn
+    // is over, not merely started.
+    settled: seen('the submitted turn to finish (a streaming frame after Enter, then a frame with no spinner)',
+      (mark) => writes.slice(mark).some(isStreaming) && !isStreaming(writes[writes.length - 1] ?? '')),
+    // The slash command ran: the session repaints once after every command, and the key presses
+    // themselves repaint before `mark` is taken.
+    ran: seen('the slash command to run (a repaint after Enter)', (mark) => writes.length > mark),
+    idle: seen('no reply streaming in the last frame', () => !isStreaming(writes[writes.length - 1] ?? '')),
+    shows: (re) => seen(`the transcript to match ${re}`, () => new RegExp(re.source, re.flags.replace(/[gy]/g, '')).test(api.text())),
+    frameShows: (re) => seen(`the last frame to match ${re}`, () => new RegExp(re.source, re.flags.replace(/[gy]/g, '')).test(api.lastFrame())),
     ctrlC: () => k('c', { ctrl: true, sequence: '\x03' }),
     quit: async () => { api.ctrlC(); api.ctrlC(); await Promise.race([done, sleep(1500)]); },
   };
@@ -87,6 +111,11 @@ async function startChat({ config, env = {}, source, columns = 100, rows = 40, c
   return api;
 }
 const count = (text, re) => (text.match(re) ?? []).length;
+// A frame whose assistant line ends in the spinner glyph is a reply still streaming (chat/render.mjs
+// draws the glyph on the streaming assistant line only). No reply in this file ends in a glyph character.
+const isStreaming = (frame) => /^aesop > (?:.* )?[|/\\-]$/m.test(strip(frame));
+// Wait conditions on a fake server, named the way the assertion after them reads it.
+const posted = (name, srv, n) => seen(`${name} to have received exactly ${n} POST(s)`, () => srv.posts().length === n);
 
 // ---- Boundary and safety
 test('H-R1: Anthropic and claude.ai hosts are refused, fail closed', async () => {
@@ -96,8 +125,8 @@ test('H-R1: Anthropic and claude.ai hosts are refused, fail closed', async () =>
   try {
     for (const u of bad) {
       const chat = await startChat({ config: { providers: { evil: prov(u, { is_local: false }), ok: prov(fake.url) }, default: 'evil/m' } });
-      await chat.submit('/model evil/m');
-      await chat.submit('hi', 200);
+      await chat.submit('/model evil/m', chat.ran);
+      await chat.submit('hi', chat.settled, chat.shows(/refused/i), chat.shows(/evil/));
       assert.match(chat.text(), /refused/i, `no refusal for ${u}`);
       assert.match(chat.text(), /evil/, `refusal must name provider for ${u}`);
       await chat.quit();
@@ -117,8 +146,8 @@ test('H-R2: command-style providers and claude model ids are refused; nothing sp
     } };
     const chat = await startChat({ config: cfg });
     for (const p of ['a/m', 'b/m', 'c/m', 'd/m', 'e/claude-sonnet', 'f/anthropic/claude-x']) {
-      await chat.submit(`/model ${p}`);
-      await chat.submit('hi', 80);
+      await chat.submit(`/model ${p}`, chat.ran);
+      await chat.submit('hi', chat.settled, chat.shows(/refused/i));
     }
     assert.ok(count(chat.text(), /refused/gi) >= 6, 'each bad provider must be refused');
     assert.equal(fake.posts().length, 0);
@@ -133,7 +162,7 @@ test('H-R3: no config -> no provider, status line, one system line per turn, no 
     const chat = await startChat({});
     assert.match(chat.text(), /no provider configured \(see \/help\)/);
     assert.doesNotMatch(chat.text(), /anthropic/i);
-    await chat.submit('hi');
+    await chat.submit('hi', chat.settled, chat.frameShows(/no provider configured \(see \/help\)/));
     assert.equal(count(chat.lastFrame(), /no provider configured \(see \/help\)/g) >= 1, true);
     assert.equal(fake.requests.length, 0);
     await chat.quit();
@@ -147,7 +176,7 @@ test('H-R4: redirects to another host or to Anthropic are not followed', async (
   try {
     for (const f of [a, c]) {
       const chat = await startChat({ config: { providers: { p: prov(f.url) }, default: 'p/m' } });
-      await chat.submit('hi', 250);
+      await chat.submit('hi', chat.settled, chat.shows(/error: p:/));
       assert.match(chat.text(), /error: p:/);
       await chat.quit();
     }
@@ -163,15 +192,15 @@ test('H-R5: non-loopback http is refused unless allow_insecure; loopback http ac
       lo: prov(fake.url), lh: prov(`http://localhost:${fake.port}/v1`),
       ins: prov('http://example.test/v1', { is_local: false, allow_insecure: true }),
     } } });
-    await chat.submit('/model bad/m');
+    await chat.submit('/model bad/m', chat.ran, chat.shows(/refused/i));
     assert.match(chat.text(), /refused/i);
-    await chat.submit('/model lo/m');
-    await chat.submit('hi', 200);
+    await chat.submit('/model lo/m', chat.ran);
+    await chat.submit('hi', chat.settled, chat.shows(/hello/));
     assert.match(chat.text(), /hello/);
-    await chat.submit('/model lh/m');
-    await chat.submit('hi', 200);
+    await chat.submit('/model lh/m', chat.ran);
+    await chat.submit('hi', chat.settled, seen('the fake to have received at least 2 POSTs', () => fake.posts().length >= 2));
     assert.ok(fake.posts().length >= 2);
-    await chat.submit('/model ins/m');
+    await chat.submit('/model ins/m', chat.ran, chat.shows(/NOTICE/));
     assert.match(chat.text(), /NOTICE/);
     await chat.quit();
   } finally { await fake.close(); }
@@ -182,16 +211,16 @@ test('H-R6: /model switches only to registered provider+model; unchanged otherwi
   const A = await startFake(); const B = await startFake((q, b, res) => sse(res, ['from-b']), ['m2']);
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url), B: prov(B.url, { models: ['m2'] }) }, default: 'A/m' } });
-    await chat.submit('hi', 200);
+    await chat.submit('hi', chat.settled, seen('A to have received the first POST', () => A.posts().length >= 1));
     const lenBefore = A.posts().length;
-    await chat.submit('/model nope/m');
+    await chat.submit('/model nope/m', chat.ran, chat.shows(/unknown provider: nope/));
     assert.match(chat.text(), /unknown provider: nope/);
-    await chat.submit('/model A/zzz');
+    await chat.submit('/model A/zzz', chat.ran, chat.shows(/unknown model: zzz for A/));
     assert.match(chat.text(), /unknown model: zzz for A/);
-    await chat.submit('hi', 200);
+    await chat.submit('hi', chat.settled, posted('A', A, lenBefore + 1));
     assert.equal(A.posts().length, lenBefore + 1, 'selection unchanged after bad switches');
-    await chat.submit('/model B/m2');
-    await chat.submit('yo', 200);
+    await chat.submit('/model B/m2', chat.ran);
+    await chat.submit('yo', chat.settled, seen('B\'s first POST to carry model m2', () => B.posts()[0].body.model === 'm2'), chat.shows(/hello/));
     assert.equal(B.posts()[0].body.model, 'm2');
     assert.match(chat.text(), /hello/, 'transcript kept across /model');
     await chat.quit();
@@ -202,7 +231,7 @@ test('H-R7: config loads providers; unknown keys NOTICE; malformed JSON -> one e
   const fake = await startFake();
   try {
     const good = await startChat({ config: { providers: { A: prov(fake.url, { bogus_key: 1 }) }, default: 'A/m' } });
-    await good.submit('hi', 200);
+    await good.submit('hi', good.settled, good.shows(/NOTICE/), good.shows(/hello/));
     assert.match(good.text(), /NOTICE/);
     assert.match(good.text(), /hello/);
     await good.quit();
@@ -218,8 +247,8 @@ test('H-R8: aliases resolve up to depth 3; cycles rejected', async () => {
   try {
     const chat = await startChat({ config: { providers: { A: prov(fake.url, { models: ['real'] }) },
       aliases: { fast: 'A/real', f2: 'fast', f3: 'f2' } } });
-    await chat.submit('/model f3');
-    await chat.submit('hi', 200);
+    await chat.submit('/model f3', chat.ran);
+    await chat.submit('hi', chat.settled, seen('the fake\'s first POST to carry model real', () => fake.posts()[0].body.model === 'real'));
     assert.equal(fake.posts()[0].body.model, 'real');
     await chat.quit();
     const cyc = await startChat({ config: { providers: { A: prov(fake.url) }, aliases: { x: 'y', y: 'x' } } });
@@ -232,7 +261,7 @@ test('H-R9: /models lists providers, models, status with no chat request', async
   const A = await startFake(); const B = await startFake();
   try {
     const chat = await startChat({ config: { providers: { alpha: prov(A.url), beta: prov(B.url) }, aliases: { fast: 'alpha/m' } } });
-    await chat.submit('/models', 300);
+    await chat.submit('/models', chat.ran, ...['alpha', 'beta', 'fast', 'reachable'].map((w) => chat.shows(new RegExp(w))));
     const t = chat.text();
     for (const w of ['alpha', 'beta', 'fast', 'reachable']) assert.match(t, new RegExp(w));
     assert.equal(A.posts().length + B.posts().length, 0);
@@ -246,13 +275,13 @@ test('H-R10: selection persists across /clear and restarts; state file has no ke
     const cfg = cfgFile({ providers: { A: prov(A.url, { api_key_env: 'H_KEY' }), B: prov(B.url) }, default: 'A/m' });
     const env = { H_KEY: KEY };
     const s1 = await startChat({ config: undefined, env: { ...env, AESOP_CHAT_CONFIG: cfg } });
-    await s1.submit('/model B/m');
-    await s1.submit('/clear');
-    await s1.submit('x', 200);
+    await s1.submit('/model B/m', s1.ran);
+    await s1.submit('/clear', s1.ran);
+    await s1.submit('x', s1.settled, posted('B', B, 1));
     assert.equal(B.posts().length, 1);
     await s1.quit();
     const s2 = await startChat({ env: { ...env, AESOP_CHAT_CONFIG: cfg, AESOP_STATE_ROOT: s1.stateRoot } });
-    await s2.submit('y', 200);
+    await s2.submit('y', s2.settled, posted('B', B, 2));
     assert.equal(B.posts().length, 2, 'restart restores B');
     await s2.quit();
     const files = existsSync(s1.stateRoot) ? readdirSync(s1.stateRoot, { recursive: true }) : [];
@@ -266,8 +295,8 @@ test('H-R11: per-task routes: /code hits B, plain hits A', async () => {
   const A = await startFake(); const B = await startFake((q, b, res) => sse(res, ['bee']), ['bm']);
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url), B: prov(B.url, { models: ['bm'] }) }, default: 'A/m', routes: { code: 'B/bm' } } });
-    await chat.submit('plain', 200);
-    await chat.submit('/code write x', 200);
+    await chat.submit('plain', chat.settled, posted('A', A, 1));
+    await chat.submit('/code write x', chat.settled, posted('B', B, 1), seen('B\'s first POST to carry model bm', () => B.posts()[0].body.model === 'bm'));
     assert.equal(A.posts().length, 1);
     assert.equal(B.posts().length, 1);
     assert.equal(B.posts()[0].body.model, 'bm');
@@ -279,7 +308,7 @@ test('H-R12: retryable failure falls back once with a transcript line', async ()
   const A = await startFake((q, b, res) => { res.writeHead(503); res.end('x'); }); const B = await startFake((q, b, res) => sse(res, ['bee']));
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url), B: prov(B.url) }, default: 'A/m', routes: { chat: { target: 'A/m', fallback: ['B/m'] } } } });
-    await chat.submit('hi', 300);
+    await chat.submit('hi', chat.settled, chat.shows(/falling back: A -> B/), chat.shows(/bee/), posted('A', A, 1), posted('B', B, 1));
     assert.match(chat.text(), /falling back: A -> B/);
     assert.match(chat.text(), /bee/);
     assert.equal(A.posts().length, 1);
@@ -294,12 +323,12 @@ test('H-R13: 401 does not fall back unless fallback_on any', async () => {
   const A = await startFake((q, b, res) => { res.writeHead(401); res.end('no'); }); const B = await startFake();
   try {
     const c1 = await startChat({ config: mk({}) });
-    await c1.submit('hi', 250);
+    await c1.submit('hi', c1.settled, c1.shows(/error: A: auth/));
     assert.equal(B.posts().length, 0);
     assert.match(c1.text(), /error: A: auth/);
     await c1.quit();
     const c2 = await startChat({ config: mk({ fallback_on: 'any' }) });
-    await c2.submit('hi', 250);
+    await c2.submit('hi', c2.settled, posted('B', B, 1));
     assert.equal(B.posts().length, 1);
     await c2.quit();
   } finally { await A.close(); await B.close(); }
@@ -313,7 +342,7 @@ test('H-R14: failure after first chunk never re-sends; partial kept', async () =
   const B = await startFake();
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url), B: prov(B.url) }, default: 'A/m', routes: { chat: { target: 'A/m', fallback: ['B/m'] } } } });
-    await chat.submit('hi', 400);
+    await chat.submit('hi', chat.settled, chat.shows(/one two/), chat.shows(/stream interrupted from A/));
     assert.equal(B.posts().length, 0);
     assert.match(chat.text(), /one two/);
     assert.match(chat.text(), /stream interrupted from A/);
@@ -328,13 +357,16 @@ test('H-R15: cheapest and fastest strategies order candidates', async () => {
     const cfg = (strategy) => ({ providers: { A: prov(A.url, { cost_per_mtok: { input: 0, output: 0 } }), B: prov(B.url, { is_local: false, allow_insecure: true, cost_per_mtok: { input: 2, output: 3 } }) },
       default: 'A/m', routes: { chat: { strategy, candidates: ['A/m', 'B/m'] } } });
     const c1 = await startChat({ config: cfg('cheapest') });
-    await c1.submit('hi', 300);
+    await c1.submit('hi', c1.settled, posted('A', A, 1));
     assert.equal(A.posts().length, 1, 'cheapest picks A');
     await c1.quit();
     const c2 = await startChat({ config: cfg('fastest') });
-    for (let i = 0; i < 3; i += 1) await c2.submit(`w${i}`, 300);
+    const warm = A.posts().length + B.posts().length;
+    for (let i = 0; i < 3; i += 1) {
+      await c2.submit(`w${i}`, c2.settled, seen(`warmup turn ${i} to have reached A or B`, () => A.posts().length + B.posts().length >= warm + i + 1));
+    }
     const bBefore = B.posts().length;
-    await c2.submit('final', 300);
+    await c2.submit('final', c2.settled, seen('B to have received the final turn', () => B.posts().length > bBefore));
     assert.ok(B.posts().length > bBefore, 'fastest picks B after warmup');
     await c2.quit();
   } finally { await A.close(); await B.close(); }
@@ -346,13 +378,13 @@ test('H-R16: circuit breaker skips a failing provider for a cooldown', async () 
     let now = 1_000_000;
     globalThis.__AESOP_CHAT_NOW = () => now;
     const chat = await startChat({ config: { providers: { A: prov(A.url), B: prov(B.url) }, default: 'A/m', routes: { chat: { target: 'A/m', fallback: ['B/m'] } } } });
-    for (let i = 0; i < 3; i += 1) await chat.submit(`t${i}`, 250);
+    for (let i = 0; i < 3; i += 1) await chat.submit(`t${i}`, chat.settled, seen(`A to have received failing turn ${i}`, () => A.posts().length >= i + 1));
     const aCount = A.posts().length;
-    await chat.submit('skip', 250);
+    await chat.submit('skip', chat.settled, seen('the skip of A to be announced exactly once', () => count(chat.text(), /skipping A/g) === 1));
     assert.equal(A.posts().length, aCount, 'A skipped while tripped');
     assert.equal(count(chat.text(), /skipping A/g), 1, 'skip announced once');
     now += 31_000;
-    await chat.submit('again', 250);
+    await chat.submit('again', chat.settled, posted('A', A, aCount + 1));
     assert.equal(A.posts().length, aCount + 1, 'A tried again after cooldown');
     await chat.quit();
   } finally { delete globalThis.__AESOP_CHAT_NOW; await A.close(); await B.close(); }
@@ -371,7 +403,8 @@ test('H-R17: SSE normalised: split frames, split multibyte, CRLF, comments, stre
   });
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url) }, default: 'A/m' } });
-    await chat.submit('hi', 400);
+    // Not `settled`: the server holds the stream open until release(), so the text must show while it streams.
+    await chat.submit('hi', chat.shows(/h\u20acllo/));
     assert.match(chat.text(), /h\u20acllo/, 'text framed before the server finished');
     release();
     await chat.quit();
@@ -388,7 +421,7 @@ test('H-R18: JSON, SSE and NDJSON replies normalise to the same transcript', asy
     const A = await startFake(h);
     try {
       const chat = await startChat({ config: { providers: { A: prov(A.url) }, default: 'A/m' } });
-      await chat.submit('hi', 300);
+      await chat.submit('hi', chat.settled, chat.shows(/same text/));
       assert.match(chat.text(), /same text/, name);
       assert.doesNotMatch(chat.text(), /null|undefined/, name);
       await chat.quit();
@@ -408,18 +441,19 @@ test('H-R19: every failure is one visible classified error line; session continu
     for (const [m, cls] of [['401', 'auth'], ['429', 'rate-limit'], ['500', 'server'], ['bad', 'bad-response'], ['hang', 'timeout']]) {
       mode = m;
       const before = count(strip(chat.raw()), /error: A: /g);
-      await chat.submit(`t-${m}`, m === 'hang' ? 600 : 250);
+      await chat.submit(`t-${m}`, chat.settled, chat.shows(new RegExp(`error: A: ${cls}: `)),
+        seen(`one more "error: A: " line than before turn ${m}`, () => count(strip(chat.raw()), /error: A: /g) > before));
       assert.match(chat.text(), new RegExp(`error: A: ${cls}: `), m);
       assert.ok(count(strip(chat.raw()), /error: A: /g) > before, m);
     }
     assert.match(chat.raw(), /\x1b\[[0-9;]*31m[^\n]*error: A:/, 'error lines are red');
     assert.ok(!chat.raw().includes(KEY) && !/Authorization/i.test(chat.raw()));
     mode = 'ok';
-    await chat.submit('fine', 250);
+    await chat.submit('fine', chat.settled, chat.shows(/ok/));
     assert.match(chat.text(), /ok/);
     await chat.quit();
     const c2 = await startChat({ config: { providers: { D: prov('http://127.0.0.1:1/v1') }, default: 'D/m' } });
-    await c2.submit('x', 250);
+    await c2.submit('x', c2.settled, c2.shows(/error: D: connect: /));
     assert.match(c2.text(), /error: D: connect: /);
     await c2.quit();
   } finally { await A.close(); }
@@ -431,7 +465,7 @@ test('H-R20: orchestrator provider routes plain turns (waits on F1)', { skip: 'H
     const fakeOrch = async function* () { yield 'orch-reply'; };
     const chat = await startChat({ config: { providers: { orchestrator: { type: 'orchestrator', models: ['seat'] } }, default: 'orchestrator/seat' },
       env: { AESOP_CHAT_BACKEND: 'harness' }, source: fakeOrch });
-    await chat.submit('hi', 200);
+    await chat.submit('hi', chat.settled, chat.shows(/orch-reply/));
     assert.match(chat.text(), /orch-reply/);
     assert.equal(fake.requests.length, 0);
     await chat.quit();
@@ -443,10 +477,11 @@ test('H-R21: ctrl-c aborts the in-flight request, shows cancelled, no fallback',
   const B = await startFake();
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url), B: prov(B.url) }, default: 'A/m', routes: { chat: { target: 'A/m', fallback: ['B/m'] } } } });
-    await chat.submit('hi', 150);
+    // Ctrl-C only aborts a reply that is streaming, so wait for A's first chunk to be drawn as one.
+    await chat.submit('hi', posted('A', A, 1), seen('the reply from A to be streaming with its first chunk drawn', () => /^aesop > x [|/\\-]$/m.test(chat.lastFrame())));
     const t0 = Date.now();
     chat.ctrlC();
-    await sleep(900);
+    await chat.until(seen('server A to see the aborted request close', () => A.closed.length >= 1), chat.shows(/cancelled/), chat.idle);
     assert.ok(A.closed.length >= 1 && A.closed[0] - t0 < 1000, 'server saw close within 1s');
     assert.match(chat.text(), /cancelled/);
     assert.equal(B.posts().length, 0);
@@ -470,10 +505,10 @@ test('ctrl-c cancels the active stream and preserves a queued turn', async () =>
   });
   const chat = await startChat({ config: { providers: { local: prov(server.url) }, default: 'local/m' } });
   try {
-    await chat.submit('first', 0);
+    await chat.submit('first');
     await Promise.race([firstStarted, sleep(2000)]);
     assert.ok(firstResponse, 'the first request started');
-    await chat.submit('second', 0);
+    await chat.submit('second');
     chat.ctrlC();
     const deadline = Date.now() + 2000;
     while (!chat.lastFrame().includes('second completed') && Date.now() < deadline) await sleep(10);
@@ -482,7 +517,7 @@ test('ctrl-c cancels the active stream and preserves a queued turn', async () =>
     assert.deepEqual(server.posts().map(({ body }) => body.messages.at(-1).content), ['first', 'second']);
   } finally {
     firstResponse?.end();
-    await chat.submit('/exit', 0);
+    await chat.submit('/exit');
     await server.close();
   }
 });
@@ -610,11 +645,11 @@ test('H-R22: tokens from usage or chars/4 estimate marked ~; local cost 0', asyn
   const A = await startFake((q, b, res) => sse(res, ['abcdefgh'], withUsage ? { usage: { prompt_tokens: 11, completion_tokens: 7 } } : {}));
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url) }, default: 'A/m' } });
-    await chat.submit('hi', 250);
+    await chat.submit('hi', chat.settled, chat.frameShows(/\b18\b/), chat.frameShows(/cost:? ?\$?0\b/));
     assert.match(chat.lastFrame(), /\b18\b/, 'usage total 11+7');
     assert.match(chat.lastFrame(), /cost:? ?\$?0\b/);
     withUsage = false;
-    await chat.submit('hi', 250);
+    await chat.submit('hi', chat.settled, chat.frameShows(/~\d+/));
     assert.match(chat.lastFrame(), /~\d+/, 'estimate carries ~');
     await chat.quit();
   } finally { await A.close(); }
@@ -628,7 +663,9 @@ test('H-R23: /detect probes loopback candidates only, only on request', async ()
     const cfg = { detect_candidates: [F1.port, F2.port, closedPort, 'http://example.test:11434'], providers: {} };
     const chat = await startChat({ config: cfg });
     assert.equal(F1.requests.length + F2.requests.length, 0, 'no probe by default');
-    await chat.submit('/detect', 1500);
+    await chat.submit('/detect', chat.ran,
+      seen('F1 to have been probed exactly once', () => F1.requests.length === 1), seen('F2 to have been probed exactly once', () => F2.requests.length === 1),
+      chat.shows(new RegExp(String(F1.port))), chat.shows(new RegExp(String(F2.port))), chat.shows(/absent|not found|unreachable/i));
     assert.ok(F1.requests.every((r) => r.method === 'GET' && r.url.startsWith('/v1/models')) && F1.requests.length === 1);
     assert.equal(F2.requests.length, 1);
     assert.match(chat.text(), new RegExp(String(F1.port)));
@@ -646,10 +683,10 @@ test('H-R24: keys from env only, never leaked, /auth makes no network call', asy
     assert.match(lit.text(), /NOTICE/);
     await lit.quit();
     const chat = await startChat({ config: { providers: { A: prov(A.url, { api_key_env: 'H_KEY', is_local: false, allow_insecure: true }), N: prov(A.url) }, default: 'A/m' }, env: { H_KEY: KEY } });
-    await chat.submit('hi', 250);
+    await chat.submit('hi', chat.settled, seen('A\'s first POST to carry the bearer key', () => A.posts()[0].headers.authorization === `Bearer ${KEY}`));
     assert.equal(A.posts()[0].headers.authorization, `Bearer ${KEY}`);
     const n = A.requests.length;
-    await chat.submit('/auth', 150);
+    await chat.submit('/auth', chat.ran, chat.shows(/key: set \(env H_KEY\)/), chat.shows(/key: not needed \(local\)/));
     assert.equal(A.requests.length, n, '/auth is offline');
     assert.match(chat.text(), /key: set \(env H_KEY\)/);
     assert.match(chat.text(), /key: not needed \(local\)/);
@@ -664,9 +701,9 @@ test('H-R25: a key is sent only to its own provider', async () => {
   const A = await startFake(); const B = await startFake((q, b, res) => sse(res, ['bee']));
   try {
     const chat = await startChat({ config: { providers: { A: prov(A.url, { api_key_env: 'H_KEY' }), B: prov(B.url) }, default: 'A/m' }, env: { H_KEY: KEY } });
-    await chat.submit('one', 200);
-    await chat.submit('/model B/m');
-    await chat.submit('two', 200);
+    await chat.submit('one', chat.settled, seen('A\'s first POST to carry the bearer key', () => A.posts()[0].headers.authorization === `Bearer ${KEY}`));
+    await chat.submit('/model B/m', chat.ran);
+    await chat.submit('two', chat.settled, posted('B', B, 1));
     assert.equal(A.posts()[0].headers.authorization, `Bearer ${KEY}`);
     assert.equal(B.posts().length, 1);
     assert.equal(B.posts()[0].headers.authorization, undefined);
@@ -692,7 +729,7 @@ test('H-R27: an old config with no providers block starts byte-identically (pipe
   const old = { seats: {}, unrelated: true };
   const a = await startChat({ config: old, env: { AESOP_CHAT_BACKEND: undefined }, source: echo });
   const b = await startChat({ config: undefined, env: { AESOP_CHAT_BACKEND: undefined }, source: echo });
-  await a.submit('hello', 100); await b.submit('hello', 100);
+  await a.submit('hello', a.settled, a.shows(/hello/)); await b.submit('hello', b.settled, b.shows(/hello/));
   assert.equal(a.text(), b.text());
   assert.doesNotMatch(a.text(), /no provider configured/);
   assert.match(a.text(), /hello/);
@@ -705,7 +742,7 @@ test('H-R27: an old config with no providers block starts byte-identically (pipe
 test('H-R28: AESOP_CHAT_BACKEND values: pipe default unchanged, harness selects registry, bogus is an error line', async () => {
   const echo = async function* (line) { yield `echo:${line}`; };
   const pipe = await startChat({ env: { AESOP_CHAT_BACKEND: undefined }, source: echo });
-  await pipe.submit('hey', 100);
+  await pipe.submit('hey', pipe.settled, pipe.shows(/echo:hey/));
   assert.match(pipe.text(), /echo:hey/);
   assert.doesNotMatch(pipe.text(), /no provider configured/);
   await pipe.quit();
@@ -713,7 +750,7 @@ test('H-R28: AESOP_CHAT_BACKEND values: pipe default unchanged, harness selects 
   assert.match(harness.text(), /no provider configured/);
   await harness.quit();
   const bogus = await startChat({ env: { AESOP_CHAT_BACKEND: 'bogus-backend' }, source: echo });
-  await bogus.submit('hey', 100);
+  await bogus.submit('hey', bogus.settled, bogus.shows(/error: .*AESOP_CHAT_BACKEND/));
   assert.match(bogus.text(), /error: .*AESOP_CHAT_BACKEND/);
   assert.doesNotMatch(bogus.text(), /echo:hey/);
   await bogus.quit();
