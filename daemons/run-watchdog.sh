@@ -91,16 +91,10 @@ acquire_lock_guarded() {
   local lock_dir="$1"
   local stale_threshold="$2"
 
-  # Try to create lock directory atomically (this is atomic on all POSIX systems)
-  if mkdir "$lock_dir" 2>/dev/null; then
-    if ! write_lock_owner "$lock_dir"; then
-      rm -rf -- "$lock_dir" 2>/dev/null || true
-      return 1
-    fi
-    return 0
+  if [ ! -d "$lock_dir" ]; then
+    create_lock_guarded "$lock_dir"
+    return $?
   fi
-
-  [ -d "$lock_dir" ] || return 1
 
   local lock_pid="" lock_ts="" expect_pid="" reason="" reclaim=0 ts_corrupt=0
   if [ -f "$lock_dir/pid" ]; then
@@ -161,6 +155,14 @@ reclaim_lock() {
 
   rm -rf -- "$lock_dir" 2>/dev/null || return 1
   if [ -n "${AESOP_LOCK_TEST_PAUSE_AFTER_MV:-}" ]; then sleep "$AESOP_LOCK_TEST_PAUSE_AFTER_MV"; fi
+  create_lock_guarded "$lock_dir"
+}
+
+# The guard serializes acquirers, so check for an existing entry before mkdir:
+# a false success on EEXIST must never authorize writing another holder's pid.
+create_lock_guarded() {
+  local lock_dir="$1"
+  [ ! -e "$lock_dir" ] && [ ! -L "$lock_dir" ] || return 1
   mkdir "$lock_dir" 2>/dev/null || return 1
   if ! write_lock_owner "$lock_dir"; then
     rm -rf -- "$lock_dir" 2>/dev/null || true

@@ -27,6 +27,13 @@ fail() { echo "FAIL: $*"; FAILED=$((FAILED + 1)); }
 # A pid that is guaranteed dead: the pid of a bash process that has already exited.
 dead_pid() { bash -c 'echo $$'; }
 
+# Model mkdir returning success on EEXIST in just the specified contender.
+with_eexist_mkdir() (
+  mkdir() { command mkdir "$@" || [[ $# == 1 && -d "$1" ]]; }
+  export -f mkdir
+  "$@"
+)
+
 # show_trial <trial_dir> <summary>: print each driver's RC and stderr so a CI log shows the
 # interleaving (RC=1 held / RC=2 reclaimed / RC=0 fresh) and the reclaim reason.
 show_trial() {
@@ -103,6 +110,24 @@ else
   fail "live pid + stale timestamp: lock was reclaimed by a second daemon (exit $rc, count $(cat "$ROOT/counter"))"; cat "$ROOT/out.log"
 fi
 
+echo "=== Test 2b: mkdir success on EEXIST must preserve the live holder ==="
+ROOT="$TMP_DIR/t2b"; mkdir -p "$ROOT"
+LOCK="$ROOT/lock"
+(
+  source "$RW"
+  acquire_lock "$LOCK" 300 || exit 1
+  with_eexist_mkdir bash -c 'source "$1"; acquire_lock "$2" 300' _ "$RW" "$LOCK"
+  rc=$?
+  owner=$(cat "$LOCK/pid")
+  echo "  second acquire rc=$rc, owner=$owner, holder=$$"
+  [[ "$rc" == 1 && "$owner" == "$$" ]]
+)
+if [ "$?" -eq 0 ]; then
+  pass "mkdir success on EEXIST: second acquire returned 1 and preserved the live PID"
+else
+  fail "mkdir success on EEXIST: expected a held lock and the original live PID"
+fi
+
 echo "=== Test 3: dead holder with a FRESH timestamp is reclaimed ==="
 ROOT="$TMP_DIR/t3"; new_fixture "$ROOT"
 LOCK="$ROOT/state/.watchdog-lock"; mkdir -p "$LOCK"
@@ -154,13 +179,18 @@ for i in $(seq 1 40); do
   LOCK="$ROOT/$i/lock"; mkdir "$LOCK"
   echo "$(dead_pid)" > "$LOCK/pid"
   echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
+  # Force the EEXIST false-success outcome in one trial on every platform.
+  # The remaining trials use the host mkdir to exercise natural interleavings.
+  runner=()
+  if [ "$i" -eq 1 ]; then runner=(with_eexist_mkdir); fi
   GO="$ROOT/$i/go"
-  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/a.out" 2> "$ROOT/$i/a.err" ) &
-  ( bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/b.out" 2> "$ROOT/$i/b.err" ) &
+  ( "${runner[@]}" bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/a.out" 2> "$ROOT/$i/a.err" ) &
+  ( "${runner[@]}" bash -c "$DRIVER" _ "$RW" "$LOCK" "$GO" "$ROOT/$i" > "$ROOT/$i/b.out" 2> "$ROOT/$i/b.err" ) &
   touch "$GO"
   wait
   acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$acquirers" != "1" ]; then
+  held=$(grep -hx "RC=1" "$ROOT/$i/a.out" "$ROOT/$i/b.out" | wc -l)
+  if [ "$acquirers" != "1" ] || [ "$held" -ne 1 ]; then
     bad4b=$((bad4b + 1))
     show_trial "$ROOT/$i" "acquirers=$acquirers"
   fi
