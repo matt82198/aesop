@@ -1,6 +1,7 @@
 // `aesop ask`: one-shot, non-interactive prompt to a local open-weight model. Reuses the chat harness
 // (registry, provider gate, streaming); holds no conversation state and writes no history file.
 // Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider/model error, 5 timeout, 6 boundary refused.
+import { prepareChangeSummary } from './change_summary.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { callerLabel, createFeedWriter } from './activity_feed.mjs';
@@ -8,7 +9,7 @@ import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistr
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
 
-const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--timeout <s>] "<prompt>"';
+const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--change-summary] [--timeout <s>] "<prompt>"';
 const DEFAULT_TIMEOUT_S = 300;
 
 /**
@@ -23,6 +24,7 @@ export function parseAskArgs(argv) {
     const a = argv[i];
     if (a === '--') { words.push(...argv.slice(i + 1)); break; }
     if (a === '--json') out.json = true;
+    else if (a === '--change-summary') out.changeSummary = true;
     else if (a === '--model' || a === '--system' || a === '--from' || a === '--timeout') {
       const v = argv[i + 1];
       if (v === undefined) return { ...out, error: `${a} needs a value` };
@@ -143,9 +145,18 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   let context = '';
   if (stdin && !stdin.isTTY) context = await readAll(stdin);
   let line = args.prompt;
-  if (context.trim() !== '') line = `${line}\n\n--- context (stdin) ---\n${context}`;
+  let summary;
+  if (args.changeSummary) {
+    try {
+      summary = prepareChangeSummary(context);
+    } catch (err) {
+      return finish(EXIT.USAGE, { provider, model, error: `aesop ask: invalid change-summary input: ${err.message}` });
+    }
+    line = `${line}\n\n${summary.prompt}`;
+  } else if (context.trim() !== '') {
+    line = `${line}\n\n--- context (stdin) ---\n${context}`;
+  }
   if (args.system) line = `${args.system}\n\n${line}`;
-
   activity.start({ provider, model }, context);
   const timeoutMs = Math.round(args.timeoutS * 1000);
   const controller = new AbortController();
@@ -161,11 +172,16 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   const source = harnessSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
 
   let text = '';
+  let reply = '';
+  const emit = chunk => {
+    text += chunk;
+    activity.chunk(chunk);
+    if (!args.json) stdout.write(chunk);
+  };
   try {
     for await (const chunk of source(line, { signal: controller.signal })) {
-      text += chunk;
-      activity.chunk(chunk);
-      if (!args.json) stdout.write(chunk);
+      if (summary) reply += chunk;
+      else emit(chunk);
     }
   } catch (err) {
     clearTimeout(timer);
@@ -179,6 +195,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     const m = /^error: [^:]+: ([a-z-]+): /.exec(failed);
     return finish(m ? codeForClass(m[1]) : EXIT.PROVIDER, { provider, model, text, error: failed });
   }
+  if (summary) emit(summary.serialize(reply));
   if (!args.json && text !== '' && !text.endsWith('\n')) stdout.write('\n');
   return finish(EXIT.OK, { provider, model, text });
 }
