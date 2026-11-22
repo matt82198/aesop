@@ -662,7 +662,18 @@ def run_matrix(repo, names, registry=None, jobs=1, wsl_status_fn=None):
                                 part_log_path(repo, log_dir_sha, n) if log_dir_sha else None): n
                     for n in runnable}
             for fut in concurrent.futures.as_completed(futs):
-                parts.append(fut.result())
+                part = fut.result()
+                parts.append(part)
+                if part["exit_code"] == 0:
+                    tests_note = " tests=%s" % part["test_count"] if part.get("test_count") is not None else ""
+                    print("[pre-push] shard %-26s ok%s (%.1fs)" % (part["name"], tests_note, part["duration_s"]),
+                          file=sys.stderr, flush=True)
+                else:
+                    log = part_log_path(repo, log_dir_sha, part["name"]) if log_dir_sha else None
+                    log_note = " log=%s" % log if (log is not None and log.is_file()) else ""
+                    print("[pre-push] BLOCKED shard %s (%.1fs): exit=%d%s"
+                          % (part["name"], part["duration_s"], part["exit_code"], log_note),
+                          file=sys.stderr, flush=True)
         parts.sort(key=lambda p: names.index(p["name"]))
     finally:
         # Cleanup: remove the throwaway worktree
