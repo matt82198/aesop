@@ -12,6 +12,7 @@ import stat
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from claudemd_lint import (LINE_CAP_BASELINE, MAX_LINE_BYTES,
                            _load_line_cap_baseline, find_over_cap_lines)
 
