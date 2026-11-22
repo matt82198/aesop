@@ -1,5 +1,4 @@
 # bin/ — CLI scaffolder, runtime commands, and Python dispatch table
-
 **Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce/init), and Python tools dispatch table (lint/gate/verify/wave/state/tracker/cost/bench/health/transcript).
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
