@@ -28,6 +28,7 @@ from backend_config import (  # noqa: E402
     validate_base_url,
     validate_is_local_base_url,
 )
+from activity_feed import observe_transport  # noqa: E402
 from codex_driver import CodexDriver  # noqa: E402
 from openai_transport import _AuthStripRedirectHandler, MAX_RESPONSE_SIZE  # noqa: E402
 
@@ -224,6 +225,9 @@ class OpenAICompatibleDriver(CodexDriver):
             max_retries=max_retries,
             timeout_s=timeout_s,
         )
+        # Mirror every model call to the shared activity feed (driver/activity_feed.py).
+        # Wrapping the transport keeps the reply and any raised exception unchanged.
+        self._transport = observe_transport(self._transport)
 
     def probe_capabilities(self) -> DriverCapabilities:
         """Honest capability matrix for OpenAI-compatible backend.

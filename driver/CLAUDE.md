@@ -7,6 +7,7 @@
 - **agent_driver.py** — the `AgentDriver` ABC + capability/request/result dataclasses. The contract. stdlib-only, no provider SDKs.
 - **claude_code_driver.py** — reference adapter (Claude Code parity): two ops concrete Python, three serviced by the harness.
 - **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend: dispatch_worker (file injection, JSON retry), run_command (own `command_timeout_s` knob, defaults to timeout_s), worker_status, get_tokens_spent. Transport injectable.
+- **activity_feed.py** — the shared one-feed emitter: `ActivityFeed` writes the `chat/activity_feed.mjs` JSONL schema to `<HOME>/.aesop/state/chat/activity.jsonl` (`AESOP_ACTIVITY_FEED` overrides); never raises. `run_turn` and `OpenAICompatibleDriver` emit start/chunk/end through it. Tests: `tests/test_activity_feed.py`.
 - **proc_util.py** — `run_shell_bounded()`: shared run_command backing (RS-A F1/F7). Timeout
   truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree is killed
   (taskkill /T /F Windows, killpg POSIX), exit 124 promptly, partial output preserved. Never

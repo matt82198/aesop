@@ -411,6 +411,10 @@ python -m unittest tests.test_codex_driver_e2e
 python -m unittest tests.test_openai_compatible_driver
 ```
 
+## Activity feed (one shared feed for every local-model call)
+
+Every call through the driver transport (`turn_backend.run_turn`, `OpenAICompatibleDriver`) appends start, chunk and end events to the one per-user feed `<HOME>/.aesop/state/chat/activity.jsonl` (override `AESOP_ACTIVITY_FEED`), which `aesop chat` tails. Set `AESOP_FROM` to label the caller (default `driver`). Bench and eval callers get the feed by calling through the driver transport, or by using `aesop ask --from <name>`.
+
 ## Design constraints
 
 - **stdlib-only** at this layer (`abc`, `dataclasses`, `typing`, `subprocess`).

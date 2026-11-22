@@ -10,7 +10,11 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 
 import io
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import activity_feed_isolation  # noqa: E402,F401  (pins AESOP_ACTIVITY_FEED; see that module)
 import threading
 import unittest
 from pathlib import Path
