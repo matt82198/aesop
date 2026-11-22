@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# INDEX: Bash port of check-ps1-syntax.ps1: validates all tracked *.ps1 files using PowerShell AST Parser when pwsh/powershell is present and a deterministic Python structural lexer (strings, here-strings, comments, balanced delimiters) on POSIX/Linux hosts without PowerShell; CLI: `bash tools/check-ps1-syntax.sh [REPO_ROOT]`; exit 0=valid, 1=syntax/parse error
+# INDEX: Local non-gating convenience port of check-ps1-syntax.ps1 (CI ps1-syntax-check stays on pwsh + check-ps1-syntax.ps1 AST parser): validates tracked *.ps1 files via PowerShell AST Parser when pwsh/powershell is present and a deterministic Python structural lexer on POSIX hosts without PowerShell; CLI: `bash tools/check-ps1-syntax.sh [REPO_ROOT]`; exit 0=valid, 1=syntax/parse error
 set -uo pipefail
 
 repo_root="."

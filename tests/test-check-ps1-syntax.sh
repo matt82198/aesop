@@ -111,15 +111,48 @@ PSEOF
 )
 record_result $?
 
-printf '\n=== Test 4: real repo tracked *.ps1 files pass under POSIX Linux parser and old .ps1 stays retained ===\n'
+printf '\n=== Test 4: real repo *.ps1 passes POSIX check, and ci.yml ps1-syntax-check stays on pwsh + check-ps1-syntax.ps1 AST parser ===\n'
 (
   [ -f "$CHECK_SH" ] || { printf 'FAIL: %s does not exist\n' "$CHECK_SH"; exit 1; }
-  [ -f "$CHECK_PS1" ] || { printf 'FAIL: old %s must stay retained until port merges green\n' "$CHECK_PS1"; exit 1; }
+  [ -f "$CHECK_PS1" ] || { printf 'FAIL: %s must stay retained for the CI AST gate\n' "$CHECK_PS1"; exit 1; }
   out=$(CHECK_PS1_FORCE_POSIX=1 bash "$CHECK_SH" "$REPO_ROOT" 2>&1)
   rc=$?
   [ "$rc" -eq 0 ] || { printf 'FAIL: real repo *.ps1 failed POSIX Linux check (rc=%s):\n%s\n' "$rc" "$out"; exit 1; }
-  grep -q 'check-ps1-syntax\.sh' "$CI_YML" || { printf 'FAIL: ci.yml ps1-syntax-check does not invoke check-ps1-syntax.sh\n'; exit 1; }
-  printf 'PASS: real repo *.ps1 passes POSIX Linux check, old .ps1 retained, ci.yml wired\n'
+
+  py_bin="python3"
+  command -v python3 >/dev/null 2>&1 || py_bin="python"
+  "$py_bin" - "$CI_YML" "$CHECK_PS1" <<'PYEOF'
+import pathlib
+import sys
+import yaml
+
+ci_doc = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+ps1_src = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+
+job = (ci_doc.get("jobs") or {}).get("ps1-syntax-check")
+if not isinstance(job, dict):
+    sys.exit("FAIL: jobs.ps1-syntax-check missing from ci.yml")
+if job.get("runs-on") != "windows-latest":
+    sys.exit(f"FAIL: ps1-syntax-check runs-on must be 'windows-latest', got {job.get('runs-on')!r}")
+if job.get("continue-on-error"):
+    sys.exit("FAIL: ps1-syntax-check must not set continue-on-error")
+
+steps = [s for s in (job.get("steps") or []) if s.get("name") == "Check PowerShell syntax"]
+if len(steps) != 1:
+    sys.exit(f"FAIL: expected 1 'Check PowerShell syntax' step, got {len(steps)}")
+step = steps[0]
+if step.get("shell") != "pwsh":
+    sys.exit(f"FAIL: ps1-syntax-check step must use shell: pwsh, got {step.get('shell')!r}")
+run_norm = (step.get("run") or "").replace("\\", "/")
+if "tools/check-ps1-syntax.ps1" not in run_norm:
+    sys.exit(f"FAIL: ps1-syntax-check step must invoke tools/check-ps1-syntax.ps1, got {step.get('run')!r}")
+if "check-ps1-syntax.sh" in run_norm:
+    sys.exit("FAIL: ps1-syntax-check CI gate must not substitute check-ps1-syntax.sh for PowerShell AST parser")
+if "[System.Management.Automation.Language.Parser]::ParseInput" not in ps1_src:
+    sys.exit("FAIL: tools/check-ps1-syntax.ps1 missing native PowerShell AST Parser::ParseInput")
+PYEOF
+  [ "$?" -eq 0 ] || exit 1
+  printf 'PASS: real repo *.ps1 passes POSIX check and ci.yml ps1-syntax-check uses pwsh + check-ps1-syntax.ps1 AST parser\n'
 )
 record_result $?
 

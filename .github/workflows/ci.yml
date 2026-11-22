@@ -578,9 +578,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check PowerShell syntax
-        shell: bash
+        shell: pwsh
         run: |
-          bash ./tools/check-ps1-syntax.sh .
+          & ".\tools\check-ps1-syntax.ps1" -RepoRoot "."
 
   browser-proofs:
     needs: docs-only-gate

@@ -1598,3 +1598,63 @@ class PipInstallSingleSourceTest(unittest.TestCase):
         # Control: packages outside requirements-ci.txt (playwright) stay inline by design.
         exit_code, findings = self._lint_run("pip install playwright && playwright install chromium")
         self.assertEqual((exit_code, findings), (0, []))
+
+
+class Ps1SyntaxCheckGateStrengthTest(unittest.TestCase):
+    """ps1-syntax-check in ci.yml must invoke the real PowerShell AST parser via pwsh.
+
+    tools/check-ps1-syntax.sh is a local non-gating convenience for POSIX hosts without
+    PowerShell; substituting it into the windows-latest CI gate weakens a gate under an
+    unchanged name.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+    CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
+    PS1_PARSER = ROOT / "tools" / "check-ps1-syntax.ps1"
+
+    @staticmethod
+    def _validate_ps1_syntax_job(ci_doc, ps1_source):
+        job = (ci_doc.get("jobs") or {}).get("ps1-syntax-check")
+        if not isinstance(job, dict):
+            return "jobs.ps1-syntax-check missing"
+        if job.get("runs-on") != "windows-latest":
+            return f"expected runs-on 'windows-latest', got {job.get('runs-on')!r}"
+        if job.get("continue-on-error"):
+            return "ps1-syntax-check must not set continue-on-error"
+        steps = [s for s in (job.get("steps") or []) if s.get("name") == "Check PowerShell syntax"]
+        if len(steps) != 1:
+            return f"expected 1 'Check PowerShell syntax' step, got {len(steps)}"
+        step = steps[0]
+        if step.get("shell") != "pwsh":
+            return f"expected shell 'pwsh', got {step.get('shell')!r}"
+        if step.get("continue-on-error"):
+            return "step must not set continue-on-error"
+        run_norm = (step.get("run") or "").replace("\\", "/")
+        if "tools/check-ps1-syntax.ps1" not in run_norm:
+            return f"expected tools/check-ps1-syntax.ps1 invocation, got {step.get('run')!r}"
+        if "check-ps1-syntax.sh" in run_norm:
+            return "must not substitute check-ps1-syntax.sh for PowerShell AST parser"
+        if "[System.Management.Automation.Language.Parser]::ParseInput" not in ps1_source:
+            return "tools/check-ps1-syntax.ps1 missing PowerShell AST Parser::ParseInput"
+        return None
+
+    def test_ci_ps1_syntax_check_invokes_pwsh_ast_parser(self):
+        import yaml
+        ci_doc = yaml.safe_load(self.CI_YML.read_text(encoding="utf-8"))
+        self.assertTrue(self.PS1_PARSER.is_file(), "tools/check-ps1-syntax.ps1 missing")
+        ps1_source = self.PS1_PARSER.read_text(encoding="utf-8")
+        err = self._validate_ps1_syntax_job(ci_doc, ps1_source)
+        self.assertIsNone(err, f"ps1-syntax-check gate weakened: {err}")
+
+    def test_validator_rejects_bash_approximation_substitution(self):
+        import yaml
+        ci_doc = yaml.safe_load(self.CI_YML.read_text(encoding="utf-8"))
+        ps1_source = self.PS1_PARSER.read_text(encoding="utf-8")
+        mutated = json.loads(json.dumps(ci_doc))
+        for step in mutated["jobs"]["ps1-syntax-check"]["steps"]:
+            if step.get("name") == "Check PowerShell syntax":
+                step["shell"] = "bash"
+                step["run"] = "bash ./tools/check-ps1-syntax.sh .\n"
+        err = self._validate_ps1_syntax_job(mutated, ps1_source)
+        self.assertIsNotNone(err)
+        self.assertIn("pwsh", err)
