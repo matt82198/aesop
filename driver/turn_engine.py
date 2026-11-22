@@ -186,8 +186,12 @@ class TurnEngine:
         }
 
     def run_turn(self, registry, selection, line, *, task="chat", cancel=None, on_delta=None,
-                 notify=None, flash=None, usage=None, now=None, env=None) -> EngineResult:
-        """Run one turn through the route plan. Raises EngineError when the turn cannot start."""
+                 notify=None, flash=None, usage=None, now=None, env=None, messages=None) -> EngineResult:
+        """Run one turn through the route plan. Raises EngineError when the turn cannot start.
+
+        `messages`, when given, is the whole request (a one-shot turn such as `aesop ask`): it is sent
+        as it is, with no session context before it, and the turn is not remembered.
+        """
         notify = notify or (lambda text: None)
         flash = flash or notify
         report_usage = usage or (lambda report: None)
@@ -196,11 +200,11 @@ class TurnEngine:
         started = time.monotonic()
         self._now_override = now
         try:
-            return self._run(registry, selection, str(line), task, cancel, on_delta, notify, flash, report_usage, env, started)
+            return self._run(registry, selection, str(line), task, cancel, on_delta, notify, flash, report_usage, env, started, messages)
         finally:
             self._now_override = None
 
-    def _run(self, registry, selection, line, task, cancel, on_delta, notify, flash, report_usage, env, started):
+    def _run(self, registry, selection, line, task, cancel, on_delta, notify, flash, report_usage, env, started, preset=None):
         providers = registry.get("providers") if isinstance(registry.get("providers"), dict) else {}
         routes = registry.get("routes") if isinstance(registry.get("routes"), dict) else {}
         selection = selection or {}
@@ -246,8 +250,11 @@ class TurnEngine:
                 line_text = f"error: {provider_id}: refused: unknown provider"
                 notify(line_text)
                 return result(False, exit_code_for("refused"), candidate, error=first_error or line_text)
-            prior = bound_context(self.convo) if task == "chat" else []
-            messages = prior + [{"role": "user", "content": line}]
+            if preset is not None:
+                messages = list(preset)
+            else:
+                prior = bound_context(self.convo) if task == "chat" else []
+                messages = prior + [{"role": "user", "content": line}]
             began = self._now()
 
             def note_first(provider_id=provider_id, began=began):
@@ -261,7 +268,7 @@ class TurnEngine:
             )
             if outcome.ok:
                 self._record_success(provider_id)
-                if task == "chat" and outcome.text != "":
+                if preset is None and task == "chat" and outcome.text != "":
                     self.convo.append({"role": "user", "content": line})
                     self.convo.append({"role": "assistant", "content": outcome.text})
                 if outcome.usage:

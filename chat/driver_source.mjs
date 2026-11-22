@@ -83,7 +83,7 @@ function keysFor(registry, env) {
  * @param {Record<string, string|undefined>} [env] source of key env vars (api_key_env) and AESOP_PYTHON
  * @param {{notify?: (text: string) => void, flash?: (text: string) => void, usage?: (u: object) => void,
  *          spawn?: typeof spawn}} [options]
- * @returns {((line: string, opts?: {task?: string, signal?: AbortSignal}) => AsyncGenerator<string>) & {close: () => void}}
+ * @returns {((line: string, opts?: {task?: string, signal?: AbortSignal, oneShot?: {context?: string, system?: string}}) => AsyncGenerator<string>) & {close: () => void}}
  */
 export function driverSource(registry, getSelection, env = process.env, options = {}) {
   const notify = typeof options.notify === 'function' ? options.notify : () => {};
@@ -175,10 +175,18 @@ export function driverSource(registry, getSelection, env = process.env, options 
     turns.set(turn.id, turn);
     setRef(true);
     const request = {
-      op: 'turn', id: turn.id, line: String(line), task: opts.task ?? 'chat',
+      op: 'turn', id: turn.id, task: opts.task ?? 'chat',
       selection: { provider: sel.provider, model: sel.model },
       registry: registryPayload(registry), keys: keysFor(registry, env),
     };
+    if (opts.oneShot) {
+      // A one-shot turn (aesop ask) sends its parts; the driver assembles the messages (driver/TURN.md).
+      request.prompt = String(line);
+      request.context = String(opts.oneShot.context ?? '');
+      if (opts.oneShot.system) request.system = String(opts.oneShot.system);
+    } else {
+      request.line = String(line);
+    }
     // Tests pin the clock through globalThis.__AESOP_CHAT_NOW (the same hook the harness reads).
     if (typeof globalThis.__AESOP_CHAT_NOW === 'function') request.now = globalThis.__AESOP_CHAT_NOW();
     const onAbort = () => send({ op: 'cancel', id: turn.id });

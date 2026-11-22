@@ -150,12 +150,16 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   const entry = registry.providers.get(provider);
   if (entry?.refused) return finish(EXIT.REFUSED, { provider, model, error: `error: ${provider}: refused: ${entry.refused}` });
 
-  // Prompt = system text, the prompt, then piped stdin as context. The harness takes one user line.
+  // The driver assembles the messages (driver/turn.py _build_messages, the one builder): a system message,
+  // then one user message with piped stdin first and the prompt after it. ask sends the three parts as they
+  // are. The legacy harness takes a single user line, so that path joins the same parts in the same order.
   let context = '';
   if (stdin && !stdin.isTTY) context = await readAll(stdin);
-  let line = args.prompt;
-  if (context.trim() !== '') line = `${line}\n\n--- context (stdin) ---\n${context}`;
-  if (args.system) line = `${args.system}\n\n${line}`;
+  const useHarness = backendFlag === 'harness';
+  const line = useHarness
+    ? [args.system, context.trim() !== '' ? context.trimEnd() : '', args.prompt].filter(Boolean).join('\n\n')
+    : args.prompt;
+  const turnOptions = useHarness ? {} : { oneShot: { context, system: args.system } };
 
   activity.start({ provider, model }, context);
   const timeoutMs = Math.round(args.timeoutS * 1000);
@@ -173,7 +177,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
 
   let text = '';
   try {
-    for await (const chunk of source(line, { signal: controller.signal })) {
+    for await (const chunk of source(line, { signal: controller.signal, ...turnOptions })) {
       text += chunk;
       activity.chunk(chunk);
       if (!args.json) stdout.write(chunk);

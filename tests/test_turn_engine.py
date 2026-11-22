@@ -245,6 +245,32 @@ class ServeProtocolTests(unittest.TestCase):
             self.assertEqual(a.posts()[0]["headers"]["authorization"], "Bearer " + key_value)
             self.assertNotIn(key_value, json.dumps(control))
 
+    def test_a_one_shot_prompt_turn_uses_the_cli_builder_and_no_session_context(self):
+        """The `aesop ask` request form: parts in, the one builder assembles them (finding f-ce0779b1)."""
+        with FakeServer(echo_count) as a:
+            registry = {"providers": {"A": raw_for(a.url)}, "routes": {}}
+            base = {"op": "turn", "registry": registry, "selection": pick("A")}
+            code, _, control, data = self.serve([
+                {**base, "id": 1, "line": "remembered"},
+                {**base, "id": 2, "prompt": "which line?", "context": "line one\nline two\n", "system": "be brief"},
+                {**base, "id": 3, "prompt": "bare"},
+                {**base, "id": 4, "line": "after"},
+                {**base, "id": 5},
+                {"op": "shutdown"},
+            ])
+            self.assertEqual(code, 0)
+            bodies = [post["body"]["messages"] for post in a.posts()]
+            self.assertEqual(bodies[1], turn_cli._build_messages("which line?", "line one\nline two\n", "be brief"))
+            self.assertEqual(bodies[1], [
+                {"role": "system", "content": "be brief"},
+                {"role": "user", "content": "line one\nline two\n\nwhich line?"},
+            ])
+            self.assertEqual(bodies[2], [{"role": "user", "content": "bare"}])
+            # One-shot turns are not remembered: the next chat turn sees only the first chat turn.
+            self.assertEqual(data, ["reply to 1 message(s)", "reply to 2 message(s)", "reply to 1 message(s)", "reply to 3 message(s)"])
+            self.assertEqual([c["text"] for c in control if c.get("event") == "notify"],
+                             ["error: driver: bad-request: a turn needs a line, a prompt or a messages list"])
+
     def test_shutdown_lets_a_queued_turn_finish(self):
         with FakeServer(echo_count) as a:
             registry = {"providers": {"A": raw_for(a.url)}, "routes": {}}

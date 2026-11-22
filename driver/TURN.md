@@ -27,7 +27,7 @@ python -m driver.turn --serve [--model provider/model] [--base-url url]
 - `--base-url`: an OpenAI-compatible base URL instead of the built-in local provider. The provider id is the `--model` prefix, or `custom`. A loopback host is treated as local (no key).
 - `--timeout`: total wall-clock cap in seconds for the one-shot modes (default 300). When it fires the turn exits 5.
 
-Piped (non-TTY) stdin is appended to the prompt as context in the one-shot modes.
+Piped (non-TTY) stdin is context in the one-shot modes. One builder (`_build_messages` in `turn.py`) assembles every one-shot request, for this CLI and for `aesop ask`: a system message when `--system` is given, then one user message holding the stdin text (trailing whitespace trimmed), a blank line, and the prompt. No delimiter is added. `tests/chat-ask-parity.test.mjs` gives `aesop ask` and this CLI the same input and requires the same captured request; `stream: true` is the transport and is equal on both.
 
 ## Exit codes (same table as `aesop ask`)
 
@@ -62,6 +62,7 @@ E <exit>
 Requests are one JSON object per stdin line:
 
 - `{"op":"turn","id":<id>,"line":"text"}`: a routed turn through the session's engine (next section). Optional fields: `task` (default `chat`), `selection` `{"provider","model"}`, `registry`, `keys`, `now`, `model`.
+- `{"op":"turn","id":<id>,"prompt":"text","context":"stdin text","system":"text"}`: a one-shot turn (`aesop ask`). The messages come from the one-shot builder above; routing, fallback and the gate are the engine's, but no session context is sent and the turn is not remembered. `context` and `system` are optional; the routed fields (`selection`, `registry`, `keys`) apply.
 - `{"op":"turn","id":<id>,"messages":[...]}`: one stateless request with exactly these messages to the provider the child was started with. No context, no routing.
 - `{"op":"cancel","id":<id>}` closes that turn's socket; the turn ends with `cancelled` and the session keeps serving.
 - `{"op":"shutdown"}` lets queued turns finish, then ends the stream with `E 0`. End of stdin (the parent went away) cancels the turn in flight and any queued turns, then ends the stream with `E 0`.

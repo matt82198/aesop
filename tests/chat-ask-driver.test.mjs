@@ -78,7 +78,7 @@ test('through the driver: the answer streams to stdout, the request is the same,
     assert.equal(r.stderr, '');
     const post = fake.posts()[0];
     assert.equal(post.url, '/v1/chat/completions');
-    assert.deepEqual(post.body, { model: 'm1', stream: true, messages: [{ role: 'user', content: 'be brief\n\nsay pineapple\n\n--- context (stdin) ---\nctx line\n' }] });
+    assert.deepEqual(post.body, { model: 'm1', stream: true, messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'ctx line\n\nsay pineapple' }] });
   });
 });
 

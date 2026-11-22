@@ -114,6 +114,11 @@ def _read_context(stdin) -> str:
 
 
 def _build_messages(prompt: str, context: str, system):
+    """The one message assembly for a one-shot turn, shared by the CLI and by `aesop ask` (serve mode).
+
+    A system message when system text is given, then one user message: the piped context first, a blank
+    line, then the prompt. No delimiter is added around the context.
+    """
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -375,10 +380,15 @@ def _serve(entry, default_model, stdin, stdout) -> int:
             # Keys travel on stdin with the turn, never on the command line or in the child's environment.
             env = {str(name): str(value) for name, value in raw["keys"].items()}
         now = raw.get("now") if isinstance(raw.get("now"), (int, float)) and not isinstance(raw.get("now"), bool) else None
+        preset = None
+        if "prompt" in request:
+            # A one-shot turn (aesop ask): the same builder the one-shot CLI uses, sent as it is.
+            preset = _build_messages(request["prompt"], request["context"], request["system"])
         try:
             result = engine.run_turn(
-                registry, selection, request["line"], task=raw.get("task") if isinstance(raw.get("task"), str) else "chat",
-                cancel=request["token"], on_delta=writer.data, now=now, env=env,
+                registry, selection, request.get("line", request.get("prompt")),
+                task=raw.get("task") if isinstance(raw.get("task"), str) else "chat",
+                cancel=request["token"], on_delta=writer.data, now=now, env=env, messages=preset,
                 notify=lambda text: writer.control(_event("notify", turn_id, text=text)),
                 flash=lambda text: writer.control(_event("flash", turn_id, text=text)),
                 usage=lambda report: writer.control(_event("usage", turn_id, usage=report)),
@@ -440,8 +450,9 @@ def _serve(entry, default_model, stdin, stdout) -> int:
         if messages is not None and (not isinstance(messages, list) or not messages):
             bad_request("messages must be a non-empty list", turn_id)
             continue
-        if messages is None and not isinstance(line, str):
-            bad_request("a turn needs a line or a messages list", turn_id)
+        prompt = request.get("prompt")
+        if messages is None and not isinstance(line, str) and not isinstance(prompt, str):
+            bad_request("a turn needs a line, a prompt or a messages list", turn_id)
             continue
         _, model = _split_model_spec(request.get("model") if isinstance(request.get("model"), str) else None)
         token = CancelToken()
@@ -450,8 +461,12 @@ def _serve(entry, default_model, stdin, stdout) -> int:
         job = {"id": turn_id, "token": token, "model": model or default_model, "raw": request}
         if messages is not None:
             job["messages"] = messages
-        else:
+        elif isinstance(line, str):
             job["line"] = line
+        else:
+            job["prompt"] = prompt
+            job["context"] = request["context"] if isinstance(request.get("context"), str) else ""
+            job["system"] = request["system"] if isinstance(request.get("system"), str) else None
         pending.put(job)
     # `shutdown` lets queued turns finish. End of input (the parent went away) cancels whatever is
     # running or queued. Either way the stream then closes with `E 0`.
