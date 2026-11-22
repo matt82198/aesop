@@ -17,6 +17,7 @@ Run: `bash tools/run_shell_tests.sh` or `npm run test:sh`
 **Node**: Discovered dynamically from `tests/*.test.mjs`.
 Organized by category: CLI scaffolding, config management, signal collection, drift detection, dashboard UI, fleet/MCP APIs, test templating, orchestration core.
 Run: `npm run test:node` or `node --import ./tests/helpers/isolated-env.mjs --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
+CI failure excerpts: `tests/ci-excerpt.test.mjs` checks the public CLI against ten sanitized frozen log windows in `tests/fixtures/ci-excerpt.json`, restoring omitted leading lines to verify original positions. It checks all 50 adjudicated fields (suite, subcase, assertion, physical line, timestamp) plus job, step, full ID and parent heading.
 **HOME isolation (GAP fixed 2026-10-06)**: every Node test invocation MUST load `tests/helpers/isolated-env.mjs` via `--import` (wired into `npm run test:node`/`npm test` and `.github/workflows/ci.yml`'s Node steps, both wrapped with `python tools/test_isolation_tripwire.py` for behavioral proof). `tests/isolated-home-tripwire.test.mjs` is the red-first tripwire: it fails under plain `node --test` (no `--import`) and passes only via the wired command -- proving the fixture is actually loaded, not just present on disk (PR #831 shipped the fixture but never wired it into any invocation).
 
 **Python**: Discovered dynamically from `tests/test_*.py`.
