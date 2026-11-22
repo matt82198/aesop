@@ -23,7 +23,8 @@ import os from 'node:os';
 import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
-import { PASTE_IDLE_MS, applyKey, createInputState } from './input.mjs';
+import { PASTE_IDLE_MS, applyKey, createInputState, parseSlash } from './input.mjs';
+import { applyFeedEvent, feedPath, lastJobs, tailFeed } from './activity_feed.mjs';
 import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
@@ -113,9 +114,11 @@ const HELP_TEXT = [
   'Slash commands:',
   '  /help                  list these commands',
   '  /model <prov>/<model>  switch provider and model (transcript is kept)',
+  '  /models                list configured providers and models',
   '  /auth                  show credential status (no network call)',
   '  /detect                probe loopback candidates only, on request',
   '  /clear                 clear the transcript',
+  '  /feed on|off|<N>       show background `aesop ask` jobs (N: replay the last N jobs)',
   '  /exit, /quit           leave chat (ctrl-c twice also quits)',
   '',
   'Keys: enter submits; end a line with a backslash then enter to continue it;',
@@ -241,6 +244,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       detect: () => detectLines(registry, env),
     }
     : {};
+  let restored = false;
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
@@ -249,6 +253,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     status,
     hooks,
     onFrame: (frame) => {
+      if (restored) return;
       const rows = physicalRows(drawnPlain, stdout.columns || 80);
       const up = rows > 1 ? CURSOR_UP(rows - 1) : '';
       drawnPlain = frame.split('\n').map((l) => l.replace(SGR_PATTERN, ''));
@@ -275,7 +280,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       // the session stays usable and never falls back to echo.
       const entry = registry.providers.get('ollama');
       probeProvider(entry, env, 1500).then((status) => {
-        if (status === 'reachable') return;
+        if (restored || status === 'reachable') return;
         notify('error: ollama: connect: cannot reach ollama at http://127.0.0.1:11434 — is it running?');
         session.emit();
       }).catch(() => {});
@@ -287,9 +292,34 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     let input = { ...createInputState(), history, historyIndex: history.length };
     let chain = Promise.resolve();
 
+    // Activity feed: background `aesop ask` jobs appended by other processes (chat/activity_feed.mjs).
+    // Tailing starts at the current end of the file. Entries are display-only transcript rows
+    // (role 'feed'); they never reach backend.source, so they are never part of the model context.
+    const feedFile = feedPath(env);
+    const feedJobs = new Map();
+    let feedOn = true;
+    const feedEvent = (ev) => {
+      if (!feedOn) return;
+      if (applyFeedEvent(feedJobs, session.state.transcript, ev)) session.emit();
+    };
+    let feedTail = tailFeed({ file: feedFile, onEvent: feedEvent });
+    const stopFeed = () => { if (feedTail) { feedTail.stop(); feedTail = null; } };
+    const feedCommand = (arg) => {
+      const sys = (text) => session.state.transcript.push({ role: 'system', text });
+      if (arg === 'off') { feedOn = false; sys('activity feed off (/feed on to resume)'); }
+      else if (arg === 'on') { feedOn = true; sys('activity feed on'); }
+      else if (/^\d+$/.test(arg ?? '')) {
+        const events = lastJobs(feedFile, Number(arg));
+        const shown = new Map();
+        for (const ev of events) applyFeedEvent(shown, session.state.transcript, ev);
+        for (const [id, entry] of shown) feedJobs.set(id, entry);
+        if (shown.size === 0) sys('activity feed: no jobs recorded');
+      } else sys(`activity feed is ${feedOn ? 'on' : 'off'}; usage: /feed on|off|<N>`);
+      session.emit();
+    };
+
     // The terminal is restored exactly once, whichever exit path runs first: finish (/exit, ctrl-c
     // twice, ctrl-d), a process 'exit' (written synchronously), or SIGTERM / SIGHUP / SIGINT. Later calls are no-ops.
-    let restored = false;
     let pasteFlushTimer = null;
     const clearPasteFlush = () => {
       if (pasteFlushTimer !== null) {
@@ -300,6 +330,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const restoreTerminal = () => {
       if (restored) return;
       restored = true;
+      stopFeed();
       clearPasteFlush();
       stdin.removeListener('keypress', onKeypress);
       if (typeof stdout.removeListener === 'function') stdout.removeListener('resize', onResize);
@@ -341,6 +372,18 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     // the request (H-R21); the pipe backend keeps the hint-then-quit behaviour.
     let turnAbort = null;
     const submit = (line) => {
+      const slash = harness && matchRoute(registry, line) ? null : parseSlash(line);
+      if (
+        slash &&
+        !slash.error &&
+        (slash.command === 'exit' || slash.command === 'quit') &&
+        (turnAbort || session.state.mode === 'streaming')
+      ) {
+        if (turnAbort) turnAbort.abort();
+        session.state.exit = true;
+        finish(0);
+        return;
+      }
       let notice = null;
       // Consecutive duplicates store one entry, matching the reducer.
       if (line.trim() !== '') {
@@ -349,6 +392,10 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
         if (failure) notice = `history not saved: ${failure}`;
       }
       chain = chain.then(async () => {
+        if (/^\/feed(\s|$)/.test(line.trim())) {
+          feedCommand(line.trim().split(/\s+/)[1]);
+          return;
+        }
         // Only the turn at the front of the queue owns Ctrl-C.
         turnAbort = harness ? new AbortController() : null;
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
@@ -382,7 +429,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const onKeypress = (str, key) => {
       const before = input;
       try {
-        if (turnAbort && session.state.mode === 'streaming' && key && key.ctrl && key.name === 'c') {
+        if (turnAbort && !turnAbort.signal.aborted && session.state.mode === 'streaming' && key && key.ctrl && key.name === 'c') {
           // Ctrl-c during a streamed harness reply aborts that request; the turn shows "cancelled".
           turnAbort.abort();
           return;
