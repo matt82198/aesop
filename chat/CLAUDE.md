@@ -107,6 +107,11 @@ Every `aesop ask` appends JSONL events to ONE per-user file shared by every chec
 
 `aesop chat` tails the feed from its current end (`tailFeed`: `fs.watch` on the directory plus a 1 s unref'd interval; no fd held between polls; stopped in the single terminal restore). Each job is a display-only `role: 'feed'` transcript entry (`applyFeedEvent`, drawn by `render.mjs` `feedLines`): dim header, prompt, stdin preview collapsed to 3 lines, streamed answer, status line. Entries never reach `backend.source`, so they are never model context. Slash: `/feed on`, `/feed off`, `/feed N` (replay the last N jobs). Tests: `tests/chat-activity-feed.test.mjs`.
 
+## Peer bus (`chat/peer_bus.mjs`, `chat/peer_format.mjs`)
+
+Slash commands send work to peers and show it in the feed. `/codex <task>` writes the task text as a handoff in `codex_handoff_dir` and opens a visible window via `launch_tui.py` (run script, then `launch.sh`, which records codex's exit to `<job>.exit`; END fires from that file via `fs.watch`, with a timeout). `/codex-app <msg>` runs `codex_send.py --thread <codex_app_thread>` (never the newest-thread default; an empty thread refuses). `/agy <msg>` runs `console_send.py send <agy_pid> <file>` and accepts one printable ASCII line only. `/peers` prints the config and the last status per peer. 
+Config: `AESOP_PEERS`, else `~/.aesop/peers.json`, created with defaults on first use; a bad file is an error naming it. Sender paths are overridable (`AESOP_PEER_PYTHON`, `AESOP_PEER_CODEX_SEND`, `AESOP_PEER_CONSOLE_SEND`, `AESOP_PEER_LAUNCH_TUI`, `AESOP_PEER_CODEX_TIMEOUT_MS`) so tests stub them. Feed rows use `kind: "peer"` with `to` (or `dir: "in"` plus `from` for posts); the TUI draws a `->` header with elapsed time, the full body (40 lines, then `(+N lines)`), then a `<-` outcome line. Peer stdout is captured for the SENT id only and is never rendered or written to the feed. `aesop post --from <name> "<text>"` (bin/cli.js, `postCli`) writes one inbound peer event. Tests: `tests/chat-peer-bus.test.mjs`.
+
 ## Spec
 
 `chat/SPEC.md` is the durable improvement spec (R1..R24). `chat/SPEC.original.md` is its frozen original and never changes. `tests/chat-spec.test.mjs` has one `R<n>:` test per requirement.
