@@ -109,6 +109,8 @@ Use `aesop ask --split-claudemd-line` for a single line already reported in exce
 | 5 | timeout |
 | 6 | boundary refused (Anthropic host, Claude model id, `cli`/`claude` provider type); no request is sent |
 
+`--change-summary` reads a JSON packet from stdin. `data.title` is copied verbatim, `data.diff_headers` supplies ordered `diff --git a/... b/...` headers, and `data.evidence` supplies individual output lines. The answer is JSON with `title`, `paths`, and all literal `# pass N` and `# fail N` lines in `counts`, including repeats. Optional `data.why_options` supplies author-approved purpose sentences. Only an exact selection can add `why`. Stdout and feed chunks carry the same serialized answer. Malformed input exits 2.
+
 Failure classes come from the engine's `error: <provider>: <class>: <reason>` lines (connect=3, timeout=5, refused=6, else 4). Tests: `tests/chat-ask.test.mjs` (spawns the real CLI against a fake 127.0.0.1 server; unchanged by the move to the driver) and `tests/chat-ask-driver.test.mjs` (the turn goes through the driver, the flag, no process left behind).
 
 ## Activity feed (`chat/activity_feed.mjs`)

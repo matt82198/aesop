@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -273,5 +273,43 @@ test('claudemd-lint refuses unsplittable input without a provider fallback', asy
     assert.equal(result.text, '');
     assert.match(result.error, /no safe sentence split/);
     assert.equal(fake.posts().length, 0);
+  });
+});
+
+test('change-summary serializes source facts even when the model invents a result', async () => {
+  const data = {
+    title: 'Fix "quoted" paths',
+    diff_headers: ['diff --git a/z b/z', 'diff --git "a/old name" "b/new name"',
+      'diff --git a/path b/sub b/path b/sub', 'diff --git "a/\\303\\251" "b/\\303\\251"'],
+    evidence: ['# fail 2', '# tests 2', '# pass 0', '# fail 2', '# pass 10 later', ' # fail 5'],
+    why_options: ['Keep renamed paths readable.'],
+  };
+  const expected = { title: data.title, paths: ['z', 'new name', 'path b/sub', 'é'], counts: ['# fail 2', '# pass 0', '# fail 2'] };
+  await withFake((_req, _body, res) => sse(res, ['CI is green.', '\n```']), async ({ dir, fake, config }) => {
+    const feed = join(dir, 'feed.jsonl');
+    for (const json of [false, true]) {
+      const args = ['--change-summary', ...(json ? ['--json'] : []), 'summarize'];
+      const r = await ask(args, { cwd: dir, config, stdin: JSON.stringify({ data }), env: { AESOP_ACTIVITY_FEED: feed } });
+      assert.equal(r.code, 0, r.stderr);
+      const answer = json ? JSON.parse(r.stdout).text : r.stdout.trimEnd();
+      assert.deepEqual(JSON.parse(answer), expected);
+      const events = readFileSync(feed, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      assert.equal(events.filter(e => e.job === events.at(-1).job && e.type === 'chunk').map(e => e.text).join(''), answer);
+    }
+    assert.doesNotMatch(fake.posts()[0].body.messages.at(-1).content, /# fail 2|diff --git/);
+  });
+});
+
+test('change-summary accepts only a supplied purpose and rejects malformed sources before calling the provider', async () => {
+  const why = 'Keep renamed paths readable.';
+  const data = { title: 'Rename', evidence: [], diff_headers: [], why_options: [why] };
+  await withFake((_req, _body, res) => sse(res, [why]), async ({ dir, fake, config }) => {
+    const run = (packet) => ask(['--change-summary', 'summarize'], { cwd: dir, config, stdin: JSON.stringify(packet) });
+    assert.deepEqual(JSON.parse((await run({ data })).stdout), { title: 'Rename', paths: [], counts: [], why });
+    for (const invalid of [null, { data: { ...data, evidence: 'not lines' } },
+      { data: { ...data, diff_headers: ['diff --git a/src'] } }]) {
+      assert.equal((await run(invalid)).code, 2);
+    }
+    assert.equal(fake.posts().length, 1);
   });
 });
