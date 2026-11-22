@@ -1,0 +1,345 @@
+[
+  {
+    "job": "123274859344",
+    "step": "Run shell test suites",
+    "first_line": 1127,
+    "lines": [
+      "2026-10-29T05:10:04.4172042Z [TEST] Running: test-backup-fleet-blocked-heartbeat.sh",
+      "2026-10-29T05:10:04.4210831Z [TEST] TEST 1: blocked cycle writes heartbeat + .watchdog-blocked, exits 3, logs masked HIGH line",
+      "2026-10-29T05:10:04.6233840Z PASS: blocked cycle: heartbeat + marker('repo') + exit 3 + masked HIGH line in log",
+      "2026-10-29T05:10:04.6234395Z [TEST] TEST 2: clean cycle removes .watchdog-blocked and exits 0",
+      "2026-10-29T05:10:04.6858665Z PASS: clean cycle: marker removed, heartbeat written, exit 0",
+      "2026-10-29T05:10:04.6859228Z [TEST] TEST 3: hard failure (exit 1) must not write the heartbeat",
+      "2026-10-29T05:10:04.7224120Z FAIL: hard failure (exit 1) wrote the heartbeat -- a failed cycle must read as stale",
+      "2026-10-29T05:10:04.7224420Z",
+      "2026-10-29T05:10:04.7224532Z Test Results: 2 passed, 1 failed"
+    ],
+    "gold": {
+      "suite": "test-backup-fleet-blocked-heartbeat.sh",
+      "subcase": "TEST 3: hard failure (exit 1) must not write the heartbeat",
+      "assertion": "FAIL: hard failure (exit 1) wrote the heartbeat -- a failed cycle must read as stale",
+      "line": 1133,
+      "timestamp": "2026-10-29T05:10:04.7224120Z"
+    },
+    "test_id": "test-backup-fleet-blocked-heartbeat.sh :: TEST 3: hard failure (exit 1) must not write the heartbeat",
+    "parent": {
+      "line": 1132,
+      "text": "2026-10-29T05:10:04.6859228Z [TEST] TEST 3: hard failure (exit 1) must not write the heartbeat"
+    }
+  },
+  {
+    "job": "118874488337",
+    "step": "Run shell test suites",
+    "first_line": 1147,
+    "lines": [
+      "2026-10-20T20:43:32.6462281Z [TEST] Running: test-run-merge-queue-halt.sh",
+      "2026-10-20T20:43:32.6519989Z === Test 1: Store-stub interpreter (exit 49) must NOT fail open ===",
+      "2026-10-20T20:43:32.6599087Z HALT-CHECK-FAILED (exit 49); treating as HALTED, cycle skipped",
+      "2026-10-20T20:43:32.6599505Z MERGE-QUEUE: HALTED",
+      "2026-10-20T20:43:32.6616579Z PASS: exit-49 interpreter fails closed (cycle skipped, HALT-CHECK-FAILED logged)",
+      "2026-10-20T20:43:32.6616843Z",
+      "2026-10-20T20:43:32.6617094Z === Test 2: box-wide sentinel honored by existence, even when halt.py says not halted ===",
+      "2026-10-20T20:43:32.6697163Z HALTED: box-wide operator stop [box-wide /tmp/shard-2/tmp.V4L1if70jL/tmp/tmp.08goFD4tVp/box-conductor/state/.HALT]",
+      "2026-10-20T20:43:32.6697660Z MERGE-QUEUE: HALTED",
+      "2026-10-20T20:43:32.6714809Z PASS: box-wide sentinel halts the pass",
+      "2026-10-20T20:43:32.6714990Z",
+      "2026-10-20T20:43:32.6715228Z === Test 3: box-wide sentinel honored with an unusable interpreter (existence only) ===",
+      "2026-10-20T20:43:32.6800717Z HALTED: box-wide operator stop [box-wide /tmp/shard-2/tmp.V4L1if70jL/tmp/tmp.08goFD4tVp/box-conductor/state/.HALT]",
+      "2026-10-20T20:43:32.6801250Z MERGE-QUEUE: HALTED",
+      "2026-10-20T20:43:32.6818144Z PASS: box-wide sentinel needs no interpreter",
+      "2026-10-20T20:43:32.6818569Z",
+      "2026-10-20T20:43:32.6818907Z === Test 4: real halt.py halt still halts with its reason (regression) ===",
+      "2026-10-20T20:43:32.7380144Z HALTED: per-checkout stop",
+      "2026-10-20T20:43:32.7380538Z MERGE-QUEUE: HALTED",
+      "2026-10-20T20:43:32.7397493Z PASS: halt.py halted state still halts",
+      "2026-10-20T20:43:32.7397745Z",
+      "2026-10-20T20:43:32.7398157Z === Test 5: clearing halt.py sentinel lets the pass run (regression) ===",
+      "2026-10-20T20:43:32.7968847Z PASS: unhalted pass runs",
+      "2026-10-20T20:43:32.7969183Z",
+      "2026-10-20T20:43:32.7969751Z === Test 6: CONDUCTOR_ROOT unset on a non-canonical checkout fails closed (no HOME fallback) ===",
+      "2026-10-20T20:43:32.8310811Z HALT-CHECK-FAILED (exit 3); treating as HALTED, cycle skipped",
+      "2026-10-20T20:43:32.8311485Z MERGE-QUEUE: HALTED",
+      "2026-10-20T20:43:32.8337839Z PASS: unresolved CONDUCTOR_ROOT fails closed; no home fleet-root fallback (exit 0)",
+      "2026-10-20T20:43:32.8338581Z",
+      "2026-10-20T20:43:32.8338881Z === Test 7: halt.py --status fails closed for the same setup (CONDUCTOR_ROOT unset, HOME holds sentinel) ===",
+      "2026-10-20T20:43:32.8587367Z not halted",
+      "2026-10-20T20:43:32.8589227Z FAIL: halt.py --status must fail closed with an unresolved CONDUCTOR_ROOT, got 0",
+      "2026-10-20T20:43:32.8639715Z [FAIL] test-run-merge-queue-halt.sh (exit code: 0)",
+      "2026-10-20T20:43:32.8649206Z [TEST] Running: test-run-shell-tests-live-heartbeat.sh"
+    ],
+    "gold": {
+      "suite": "test-run-merge-queue-halt.sh",
+      "subcase": "Test 7: halt.py --status fails closed for the same setup (CONDUCTOR_ROOT unset, HOME holds sentinel)",
+      "assertion": "FAIL: halt.py --status must fail closed with an unresolved CONDUCTOR_ROOT, got 0",
+      "line": 1178,
+      "timestamp": "2026-10-20T20:43:32.8589227Z"
+    },
+    "test_id": "test-run-merge-queue-halt.sh :: Test 7: halt.py --status fails closed for the same setup (CONDUCTOR_ROOT unset, HOME holds sentinel)",
+    "parent": {
+      "line": 1176,
+      "text": "2026-10-20T20:43:32.8338881Z === Test 7: halt.py --status fails closed for the same setup (CONDUCTOR_ROOT unset, HOME holds sentinel) ==="
+    }
+  },
+  {
+    "job": "137020977850",
+    "step": "Run Python tests (shard 3/4)",
+    "first_line": 3819,
+    "lines": [
+      "2026-11-21T23:31:44.9318945Z FAIL: test_cancel_mid_stream_closes_the_socket_and_reports_cancelled (tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled)",
+      "2026-11-21T23:31:44.9320175Z ----------------------------------------------------------------------",
+      "2026-11-21T23:31:44.9320695Z Traceback (most recent call last):",
+      "2026-11-21T23:31:44.9321602Z   File \"tests/test_turn_stream.py\", line 307, in test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+      "2026-11-21T23:31:44.9322540Z     self.assertEqual(box[\"lines\"], [\"cancelled: fake request aborted\"])",
+      "2026-11-21T23:31:44.9323231Z AssertionError: Lists differ: [] != ['cancelled: fake request aborted']",
+      "2026-11-21T23:31:44.9323634Z",
+      "2026-11-21T23:31:44.9323848Z Second list contains 1 additional elements."
+    ],
+    "gold": {
+      "suite": "tests.test_turn_stream.CancelTests",
+      "subcase": "test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+      "assertion": "AssertionError: Lists differ: [] != ['cancelled: fake request aborted']",
+      "line": 3824,
+      "timestamp": "2026-11-21T23:31:44.9323231Z"
+    },
+    "test_id": "tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+    "parent": {
+      "line": 3819,
+      "text": "2026-11-21T23:31:44.9318945Z FAIL: test_cancel_mid_stream_closes_the_socket_and_reports_cancelled (tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled)"
+    }
+  },
+  {
+    "job": "137011359925",
+    "step": "Run Python tests (shard 3/4)",
+    "first_line": 3799,
+    "lines": [
+      "2026-11-21T22:53:26.1690465Z FAIL: test_cancel_mid_stream_closes_the_socket_and_reports_cancelled (tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled)",
+      "2026-11-21T22:53:26.1691124Z ----------------------------------------------------------------------",
+      "2026-11-21T22:53:26.1691470Z Traceback (most recent call last):",
+      "2026-11-21T22:53:26.1692065Z   File \"tests/test_turn_stream.py\", line 307, in test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+      "2026-11-21T22:53:26.1692890Z     self.assertEqual(box[\"lines\"], [\"cancelled: fake request aborted\"])",
+      "2026-11-21T22:53:26.1693594Z AssertionError: Lists differ: [] != ['cancelled: fake request aborted']",
+      "2026-11-21T22:53:26.1694111Z",
+      "2026-11-21T22:53:26.1694257Z Second list contains 1 additional elements."
+    ],
+    "gold": {
+      "suite": "tests.test_turn_stream.CancelTests",
+      "subcase": "test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+      "assertion": "AssertionError: Lists differ: [] != ['cancelled: fake request aborted']",
+      "line": 3804,
+      "timestamp": "2026-11-21T22:53:26.1693594Z"
+    },
+    "test_id": "tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+    "parent": {
+      "line": 3799,
+      "text": "2026-11-21T22:53:26.1690465Z FAIL: test_cancel_mid_stream_closes_the_socket_and_reports_cancelled (tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled)"
+    }
+  },
+  {
+    "job": "137008623682",
+    "step": "Run Python tests (shard 3/4)",
+    "first_line": 3833,
+    "lines": [
+      "2026-11-21T22:43:16.3129605Z FAIL: test_cancel_mid_stream_closes_the_socket_and_reports_cancelled (tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled)",
+      "2026-11-21T22:43:16.3130688Z ----------------------------------------------------------------------",
+      "2026-11-21T22:43:16.3131197Z Traceback (most recent call last):",
+      "2026-11-21T22:43:16.3132156Z   File \"tests/test_turn_stream.py\", line 307, in test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+      "2026-11-21T22:43:16.3133276Z     self.assertEqual(box[\"lines\"], [\"cancelled: fake request aborted\"])",
+      "2026-11-21T22:43:16.3133740Z AssertionError: Lists differ: [] != ['cancelled: fake request aborted']",
+      "2026-11-21T22:43:16.3133975Z",
+      "2026-11-21T22:43:16.3134122Z Second list contains 1 additional elements."
+    ],
+    "gold": {
+      "suite": "tests.test_turn_stream.CancelTests",
+      "subcase": "test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+      "assertion": "AssertionError: Lists differ: [] != ['cancelled: fake request aborted']",
+      "line": 3838,
+      "timestamp": "2026-11-21T22:43:16.3133740Z"
+    },
+    "test_id": "tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled",
+    "parent": {
+      "line": 3833,
+      "text": "2026-11-21T22:43:16.3129605Z FAIL: test_cancel_mid_stream_closes_the_socket_and_reports_cancelled (tests.test_turn_stream.CancelTests.test_cancel_mid_stream_closes_the_socket_and_reports_cancelled)"
+    }
+  },
+  {
+    "job": "136979110843",
+    "step": "Run shell test suites",
+    "first_line": 1395,
+    "lines": [
+      "2026-11-21T20:49:35.3630535Z [TEST] Running: test-run-watchdog-lockguard.sh",
+      "2026-11-21T20:49:35.3710544Z === Test 1: empty lock timestamp (dead holder) is reclaimed and logged ===",
+      "2026-11-21T20:49:35.4730100Z PASS: empty timestamp + dead pid: cycle ran, corrupt-timestamp and reclaimed messages logged (exit 0)",
+      "2026-11-21T20:49:35.4731424Z === Test 1b: no pid file + empty timestamp is reclaimed and logged ===",
+      "2026-11-21T20:49:35.5685533Z PASS: no pid + empty timestamp: cycle ran and corrupt-timestamp message logged (exit 0)",
+      "2026-11-21T20:49:35.5686464Z === Test 2: live holder with a 1000s-old timestamp is NEVER reclaimed ===",
+      "2026-11-21T20:49:35.5983320Z PASS: live pid + stale timestamp: no second cycle, lock untouched (exit 0)",
+      "2026-11-21T20:49:35.5984533Z === Test 3: dead holder with a FRESH timestamp is reclaimed ===",
+      "2026-11-21T20:49:35.6972046Z PASS: dead pid + fresh timestamp: reclaimed and cycle ran (exit 0)",
+      "2026-11-21T20:49:35.6972967Z === Test 4: two concurrent reclaimers of one dead-holder lock -> exactly one winner ===",
+      "2026-11-21T20:49:51.2880414Z PASS: 15/15 concurrent reclaim trials produced exactly one acquirer (RC=0 or RC=2)",
+      "2026-11-21T20:49:51.2882174Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ===",
+      "2026-11-21T20:50:06.8788742Z   trial 15: acquirers=2",
+      "2026-11-21T20:50:06.8811322Z RC=2",
+      "2026-11-21T20:50:06.8811714Z RC=0",
+      "2026-11-21T20:50:32.8721836Z FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "2026-11-21T20:50:32.8722701Z === Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ===",
+      "2026-11-21T20:50:32.9313529Z PASS: control: stale heartbeat, no HALT -> watchdog spawn attempted"
+    ],
+    "gold": {
+      "suite": "test-run-watchdog-lockguard.sh",
+      "subcase": "Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+      "assertion": "FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "line": 1410,
+      "timestamp": "2026-11-21T20:50:32.8721836Z"
+    },
+    "test_id": "test-run-watchdog-lockguard.sh :: Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+    "parent": {
+      "line": 1406,
+      "text": "2026-11-21T20:49:51.2882174Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ==="
+    }
+  },
+  {
+    "job": "136933435950",
+    "step": "Run shell test suites",
+    "first_line": 1395,
+    "lines": [
+      "2026-11-21T18:03:12.9034266Z [TEST] Running: test-run-watchdog-lockguard.sh",
+      "2026-11-21T18:03:12.9104473Z === Test 1: empty lock timestamp (dead holder) is reclaimed and logged ===",
+      "2026-11-21T18:03:12.9930020Z PASS: empty timestamp + dead pid: cycle ran, corrupt-timestamp and reclaimed messages logged (exit 0)",
+      "2026-11-21T18:03:12.9930713Z === Test 1b: no pid file + empty timestamp is reclaimed and logged ===",
+      "2026-11-21T18:03:13.0684520Z PASS: no pid + empty timestamp: cycle ran and corrupt-timestamp message logged (exit 0)",
+      "2026-11-21T18:03:13.0685020Z === Test 2: live holder with a 1000s-old timestamp is NEVER reclaimed ===",
+      "2026-11-21T18:03:13.0948610Z PASS: live pid + stale timestamp: no second cycle, lock untouched (exit 0)",
+      "2026-11-21T18:03:13.0949249Z === Test 3: dead holder with a FRESH timestamp is reclaimed ===",
+      "2026-11-21T18:03:13.1767332Z PASS: dead pid + fresh timestamp: reclaimed and cycle ran (exit 0)",
+      "2026-11-21T18:03:13.1767833Z === Test 4: two concurrent reclaimers of one dead-holder lock -> exactly one winner ===",
+      "2026-11-21T18:03:28.6836563Z PASS: 15/15 concurrent reclaim trials produced exactly one acquirer (RC=0 or RC=2)",
+      "2026-11-21T18:03:28.6837565Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ===",
+      "2026-11-21T18:03:34.9034161Z   trial 6: acquirers=2",
+      "2026-11-21T18:03:34.9053098Z RC=0",
+      "2026-11-21T18:03:34.9053295Z RC=2",
+      "2026-11-21T18:04:10.2165632Z FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "2026-11-21T18:04:10.2168405Z === Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ===",
+      "2026-11-21T18:04:10.2697150Z PASS: control: stale heartbeat, no HALT -> watchdog spawn attempted"
+    ],
+    "gold": {
+      "suite": "test-run-watchdog-lockguard.sh",
+      "subcase": "Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+      "assertion": "FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "line": 1410,
+      "timestamp": "2026-11-21T18:04:10.2165632Z"
+    },
+    "test_id": "test-run-watchdog-lockguard.sh :: Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+    "parent": {
+      "line": 1406,
+      "text": "2026-11-21T18:03:28.6837565Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ==="
+    }
+  },
+  {
+    "job": "132651131623",
+    "step": "Run shell test suites",
+    "first_line": 1395,
+    "lines": [
+      "2026-11-15T01:09:17.1994336Z [TEST] Running: test-run-watchdog-lockguard.sh",
+      "2026-11-15T01:09:17.2064277Z === Test 1: empty lock timestamp (dead holder) is reclaimed and logged ===",
+      "2026-11-15T01:09:17.2932034Z PASS: empty timestamp + dead pid: cycle ran, corrupt-timestamp and reclaimed messages logged (exit 0)",
+      "2026-11-15T01:09:17.2933045Z === Test 1b: no pid file + empty timestamp is reclaimed and logged ===",
+      "2026-11-15T01:09:17.3739886Z PASS: no pid + empty timestamp: cycle ran and corrupt-timestamp message logged (exit 0)",
+      "2026-11-15T01:09:17.3740613Z === Test 2: live holder with a 1000s-old timestamp is NEVER reclaimed ===",
+      "2026-11-15T01:09:17.4016377Z PASS: live pid + stale timestamp: no second cycle, lock untouched (exit 0)",
+      "2026-11-15T01:09:17.4016984Z === Test 3: dead holder with a FRESH timestamp is reclaimed ===",
+      "2026-11-15T01:09:17.4876723Z PASS: dead pid + fresh timestamp: reclaimed and cycle ran (exit 0)",
+      "2026-11-15T01:09:17.4877731Z === Test 4: two concurrent reclaimers of one dead-holder lock -> exactly one winner ===",
+      "2026-11-15T01:09:33.0315526Z PASS: 15/15 concurrent reclaim trials produced exactly one acquirer (RC=0 or RC=2)",
+      "2026-11-15T01:09:33.0316258Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ===",
+      "2026-11-15T01:10:06.2990219Z   trial 32: acquirers=2",
+      "2026-11-15T01:10:06.3006075Z RC=2",
+      "2026-11-15T01:10:06.3006939Z RC=0",
+      "2026-11-15T01:10:14.6021979Z FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "2026-11-15T01:10:14.6022703Z === Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ===",
+      "2026-11-15T01:10:14.6600550Z PASS: control: stale heartbeat, no HALT -> watchdog spawn attempted"
+    ],
+    "gold": {
+      "suite": "test-run-watchdog-lockguard.sh",
+      "subcase": "Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+      "assertion": "FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "line": 1410,
+      "timestamp": "2026-11-15T01:10:14.6021979Z"
+    },
+    "test_id": "test-run-watchdog-lockguard.sh :: Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+    "parent": {
+      "line": 1406,
+      "text": "2026-11-15T01:09:33.0316258Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ==="
+    }
+  },
+  {
+    "job": "132570811180",
+    "step": "Run shell test suites",
+    "first_line": 1386,
+    "lines": [
+      "2026-11-14T20:06:47.6286434Z [TEST] Running: test-run-watchdog-lockguard.sh",
+      "2026-11-14T20:06:47.6368080Z === Test 1: empty lock timestamp (dead holder) is reclaimed and logged ===",
+      "2026-11-14T20:06:47.7344467Z PASS: empty timestamp + dead pid: cycle ran, corrupt-timestamp and reclaimed messages logged (exit 0)",
+      "2026-11-14T20:06:47.7345695Z === Test 1b: no pid file + empty timestamp is reclaimed and logged ===",
+      "2026-11-14T20:06:47.8252823Z PASS: no pid + empty timestamp: cycle ran and corrupt-timestamp message logged (exit 0)",
+      "2026-11-14T20:06:47.8253789Z === Test 2: live holder with a 1000s-old timestamp is NEVER reclaimed ===",
+      "2026-11-14T20:06:47.8546418Z PASS: live pid + stale timestamp: no second cycle, lock untouched (exit 0)",
+      "2026-11-14T20:06:47.8547291Z === Test 3: dead holder with a FRESH timestamp is reclaimed ===",
+      "2026-11-14T20:06:47.9516949Z PASS: dead pid + fresh timestamp: reclaimed and cycle ran (exit 0)",
+      "2026-11-14T20:06:47.9517906Z === Test 4: two concurrent reclaimers of one dead-holder lock -> exactly one winner ===",
+      "2026-11-14T20:07:03.5327422Z PASS: 15/15 concurrent reclaim trials produced exactly one acquirer (RC=0 or RC=2)",
+      "2026-11-14T20:07:03.5328898Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ===",
+      "2026-11-14T20:07:36.7879781Z   trial 32: acquirers=2",
+      "2026-11-14T20:07:36.7903236Z RC=2",
+      "2026-11-14T20:07:36.7903670Z RC=0",
+      "2026-11-14T20:07:45.1051235Z FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "2026-11-14T20:07:45.1052847Z === Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ===",
+      "2026-11-14T20:07:45.1646517Z PASS: control: stale heartbeat, no HALT -> watchdog spawn attempted"
+    ],
+    "gold": {
+      "suite": "test-run-watchdog-lockguard.sh",
+      "subcase": "Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+      "assertion": "FAIL: 1/40 barrier-released reclaim trials did not produce exactly one acquirer",
+      "line": 1401,
+      "timestamp": "2026-11-14T20:07:45.1051235Z"
+    },
+    "test_id": "test-run-watchdog-lockguard.sh :: Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer",
+    "parent": {
+      "line": 1397,
+      "text": "2026-11-14T20:07:03.5328898Z === Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ==="
+    }
+  },
+  {
+    "job": "121755173192",
+    "step": "Run Python tests (shard 3/4)",
+    "first_line": 3649,
+    "lines": [
+      "2026-10-26T18:18:03.0784568Z FAIL: test_sleeping_grandchild_is_killed_with_its_parent (tests.test_emit_receipt.TestPartTimeout.test_sleeping_grandchild_is_killed_with_its_parent)",
+      "2026-10-26T18:18:03.0785846Z encoding_lint",
+      "2026-10-26T18:18:03.0786379Z gen_tool_index",
+      "2026-10-26T18:18:03.0787079Z ----------------------------------------------------------------------",
+      "2026-10-26T18:18:03.0787976Z generated_push_gate",
+      "2026-10-26T18:18:03.0788689Z Traceback (most recent call last):",
+      "2026-10-26T18:18:03.0789474Z import_resolution_check",
+      "2026-10-26T18:18:03.0790837Z   File \"tests/test_emit_receipt.py\", line 652, in test_sleeping_grandchild_is_killed_with_its_parent",
+      "2026-10-26T18:18:03.0792188Z inprocess_http_timeout_lint",
+      "2026-10-26T18:18:03.0793034Z     self.assertFalse(_alive(child_pid), \"grandchild survived the kill\")",
+      "2026-10-26T18:18:03.0793952Z linux_shape_check",
+      "2026-10-26T18:18:03.0794928Z AssertionError: True is not false : grandchild survived the kill",
+      "2026-10-26T18:18:03.0795761Z metrics_gate",
+      "2026-10-26T18:18:03.0796074Z"
+    ],
+    "gold": {
+      "suite": "tests.test_emit_receipt.TestPartTimeout",
+      "subcase": "test_sleeping_grandchild_is_killed_with_its_parent",
+      "assertion": "AssertionError: True is not false : grandchild survived the kill",
+      "line": 3660,
+      "timestamp": "2026-10-26T18:18:03.0794928Z"
+    },
+    "test_id": "tests.test_emit_receipt.TestPartTimeout.test_sleeping_grandchild_is_killed_with_its_parent",
+    "parent": {
+      "line": 3649,
+      "text": "2026-10-26T18:18:03.0784568Z FAIL: test_sleeping_grandchild_is_killed_with_its_parent (tests.test_emit_receipt.TestPartTimeout.test_sleeping_grandchild_is_killed_with_its_parent)"
+    }
+  }
+]

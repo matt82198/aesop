@@ -52,6 +52,18 @@ class StoreError(Exception):
     """Raised for an unusable store or a refused append."""
 
 
+class HeadWriteError(StoreError, OSError):
+    """store.json head update failed after the event line was already appended.
+
+    Also an OSError so callers that handled the raw head failure keep working; the
+    message says the event is durable and must not be retried.
+    """
+
+
+class HeadPermissionError(HeadWriteError, PermissionError):
+    """HeadWriteError for a PermissionError (the Windows reader-holds-file case)."""
+
+
 def line_sha(line_bytes):
     return hashlib.sha256(line_bytes).hexdigest()
 
@@ -173,7 +185,12 @@ class Store:
         for f in reversed(self.day_files()):
             lines = self._lines(f)
             if lines:
-                return lines[-1], json.loads(lines[-1].decode("utf-8"))["seq"]
+                try:
+                    seq = json.loads(lines[-1].decode("utf-8"))["seq"]
+                except ValueError as exc:
+                    raise StoreError("torn or unparseable last line in %s (%s); append "
+                                     "refused, nothing written" % (f.name, exc))
+                return lines[-1], seq
         return None, 0
 
     def append(self, kind, actor, text, session="", refs=None, ts=None):
@@ -203,7 +220,14 @@ class Store:
             # verify reports it, and the next locked append rewrites head, so it self-repairs.
             with open(target, "ab") as fh:
                 fh.write(encoded + b"\n")
-            self._write_head(line_sha(encoded))
+            try:
+                self._write_head(line_sha(encoded))
+            except OSError as exc:
+                # The line above is already durable; a retry would append a duplicate.
+                cls = HeadPermissionError if isinstance(exc, PermissionError) else HeadWriteError
+                raise cls("store.json head update failed after the line was appended "
+                          "(event durable at seq %d; do not retry): %s"
+                          % (event["seq"], exc)) from exc
         return event
 
     def _write_head(self, head):
@@ -217,8 +241,8 @@ class Store:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["head"] = head
         tmp = self.path / "store.json.tmp"
-        tmp.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         try:
+            tmp.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             _replace_with_retry(tmp, meta_path)
         except BaseException:
             with contextlib.suppress(OSError):
