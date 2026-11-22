@@ -58,6 +58,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - Merge actors (merge_train, merge_queue, auto_merge, pr_sweep, halt): tools/merge_actors/CLAUDE.md
 - State tracker, event stores and ingest: tools/state_tracker/CLAUDE.md
 - CI isolation, CI modes and workflow lint: tools/ci_isolation/CLAUDE.md
+- `peer_push_sweep.py` (2026-11-21): called once per watchdog cycle by `run_peer_push_sweep` (daemons/run-watchdog.sh). Pushes ONE committed codex/* or agy/* worktree branch per cycle via a detached locked worker; never main, master, detached HEAD, --force or --no-verify; `--dry-run` writes nothing. Tests: `tests/test-peer-push-sweep.sh`.
 
 ## Recent additions (2026-10)
 

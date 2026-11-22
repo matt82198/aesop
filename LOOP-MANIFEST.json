@@ -7,7 +7,8 @@
       "reason": "watchdog daemon: long-running backup, PR-sweep and task-ingest cycle loop",
       "tests": [
         "tests/test-run-watchdog.sh",
-        "tests/test-run-watchdog-ingest.sh"
+        "tests/test-run-watchdog-ingest.sh",
+        "tests/test-peer-push-sweep.sh"
       ]
     },
     {
