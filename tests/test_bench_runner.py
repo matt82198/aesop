@@ -535,6 +535,159 @@ class TestOllamaBenchRunners(unittest.TestCase):
                 self.assertEqual(res.returncode, 0, msg=res.stderr)
                 self.assertEqual(list(Path(td).iterdir()), [])
 
+    def test_ollama_never_sends_openai_api_key_and_rejects_non_loopback_and_path_tricks(self):
+        import os
+        from unittest import mock
+        import bench_api_runner
+
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from bench import accuracy_harness, frontier_slice, probe_refusals, run_seam_u
+
+        canary_key = "canary-" + "openai-env-value-must-never-leak"
+        acc_task = accuracy_harness._build_test_tasks()[0]
+
+        evil_urls = [
+            "http://evil.example:11434/v1",
+            "http://evil.example/127.0.0.1",
+            "http://evil.example/localhost/v1",
+            "http://evil.example/[::1]/v1",
+            "http://127.0.0.1.evil.example:11434/v1",
+            "http://localhost.evil.example:11434/v1",
+            "http://127.0.0.1@evil.example:11434/v1",
+            "ftp://127.0.0.1:11434/v1",
+        ]
+
+        with mock.patch.dict(
+            os.environ,
+            {"_".join(("OPENAI", "API", "KEY")): canary_key},
+            clear=False,
+        ):
+            os.environ.pop("AESOP_BENCH_OFFLINE", None)
+
+            # 1. Evil-host, path-trick, subdomain-trick, and userinfo-trick URLs fail closed
+            #    before any HTTP request is constructed across validate_ollama_base_url + runners.
+            with mock.patch("urllib.request.build_opener") as mock_opener:
+                for bad_url in evil_urls:
+                    with self.subTest(bad_url=bad_url):
+                        with self.assertRaises(ValueError):
+                            bench_runner.validate_ollama_base_url(bad_url)
+                        with self.assertRaises(ValueError):
+                            accuracy_harness.run_live_benchmark(
+                                [acc_task],
+                                model="ollama/qwen3-coder:30b",
+                                base_url=bad_url,
+                            )
+                        with self.assertRaises(ValueError):
+                            bench_runner._make_ollama_runner(
+                                model_id="ollama/qwen3-coder:30b",
+                                base_url=bad_url,
+                            )("prompt")
+                        with self.assertRaises(ValueError):
+                            bench_api_runner.make_ollama_api_runner(
+                                "ollama/qwen3-coder:30b",
+                                base_url=bad_url,
+                                confirm_spend=True,
+                            )
+                        with self.assertRaises(ValueError):
+                            run_seam_u.create_ollama_runner(
+                                "ollama/qwen3-coder:30b",
+                                base_url=bad_url,
+                            )
+                        _, _, stop_r, err_msg = probe_refusals.probe(
+                            "ollama/qwen3-coder:30b",
+                            "ft01",
+                            "prompt",
+                            "",
+                            16,
+                            5.0,
+                            base_url=bad_url,
+                        )
+                        self.assertIsNone(stop_r)
+                        self.assertIsNotNone(err_msg)
+                mock_opener.assert_not_called()
+
+            # 2. Valid loopback hosts (127.0.0.1, localhost, [::1]) AND explicit allow_remote_ollama=True
+            #    NEVER send OPENAI_API_KEY (always send fixed dummy Bearer 'ollama').
+            captured_requests = []
+
+            class _FakeHTTPResp:
+                status = 200
+
+                def read(self, _n=-1):
+                    body = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "files": [
+                                                {
+                                                    "path": acc_task.owned_files[0],
+                                                    "contents": "# ok\n",
+                                                }
+                                            ],
+                                            "summary": "ok",
+                                            "done": True,
+                                        }
+                                    )
+                                }
+                            }
+                        ],
+                        "usage": {"total_tokens": 10},
+                    }
+                    return json.dumps(body).encode("utf-8")
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+            class _FakeOpener:
+                def open(self, req, timeout=None):
+                    captured_requests.append(req)
+                    return _FakeHTTPResp()
+
+            with mock.patch("urllib.request.build_opener", return_value=_FakeOpener()):
+                for ok_url in (
+                    "http://127.0.0.1:11434/v1",
+                    "http://localhost:11434/v1",
+                    "http://[::1]:11434/v1",
+                ):
+                    accuracy_harness.run_live_benchmark(
+                        [acc_task],
+                        model="ollama/qwen3-coder:30b",
+                        base_url=ok_url,
+                    )
+                # Explicit allow flag permits LAN Ollama host while STILL sending dummy key
+                accuracy_harness.run_live_benchmark(
+                    [acc_task],
+                    model="ollama/qwen3-coder:30b",
+                    base_url="http://gpu-box.lan:11434/v1",
+                    allow_remote_ollama=True,
+                )
+
+            self.assertEqual(len(captured_requests), 4)
+            for req in captured_requests:
+                headers_lower = {k.lower(): v for k, v in req.header_items()}
+                self.assertEqual(headers_lower.get("authorization"), "Bearer ollama")
+                self.assertNotIn(canary_key, str(headers_lower))
+
+            # frontier_slice also validates base_url on ollama path
+            with self.assertRaises(ValueError):
+                orig_cwd = os.getcwd()
+                try:
+                    os.chdir(REPO_ROOT)
+                    frontier_slice.run_live_frontier_benchmark(
+                        [],
+                        model="ollama/qwen3-coder:30b",
+                        confirm_spend=True,
+                        base_url="http://evil.example/127.0.0.1",
+                    )
+                finally:
+                    os.chdir(orig_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

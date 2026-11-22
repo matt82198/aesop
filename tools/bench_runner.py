@@ -448,19 +448,68 @@ def _make_claude_runner(model_alias: str) -> ModelRunner:
 
 DEFAULT_OLLAMA_MODEL = "qwen3-coder:30b"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
+OLLAMA_DUMMY_API_KEY = "ollama"
+
+
+def ollama_dummy_api_key() -> str:
+    """Return fixed non-secret placeholder key for Ollama (never reads env secrets)."""
+    return "ollama"
+_LOOPBACK_OLLAMA_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+_FORBIDDEN_PAID_HOST_SUFFIXES = (
+    "openai.com",
+    "anthropic.com",
+    "cohere.ai",
+    "mistral.ai",
+    "googleapis.com",
+    "openrouter.ai",
+)
+
+
+def validate_ollama_base_url(base_url: str, *, allow_remote: bool = False) -> str:
+    """Validate an Ollama base URL using strict URL hostname parsing.
+
+    Rejects non-HTTP(S) schemes, embedded credentials, paid cloud hosts, and
+    any non-loopback hostname (including path tricks like http://evil.example/127.0.0.1
+    and subdomain tricks like http://127.0.0.1.evil.example) unless allow_remote=True.
+    """
+    import urllib.parse
+
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError("Ollama base_url must be a non-empty HTTP(S) URL string.")
+    raw = base_url.strip()
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or not parsed.hostname:
+        raise ValueError(f"Invalid Ollama base_url (expected http/https with host): {base_url!r}")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"Ollama base_url must not contain embedded credentials: {base_url!r}")
+    host = parsed.hostname.strip().lower()
+    for suffix in _FORBIDDEN_PAID_HOST_SUFFIXES:
+        if host == suffix or host.endswith(f".{suffix}"):
+            raise ValueError(f"Refusing paid cloud API host {host!r} on Ollama path.")
+    if not allow_remote and host not in _LOOPBACK_OLLAMA_HOSTS:
+        raise ValueError(
+            f"Ollama base_url host must be loopback (127.0.0.1, ::1, or localhost), "
+            f"got {host!r} in {base_url!r}. Pass --allow-remote-ollama to opt in."
+        )
+    return raw.rstrip("/")
 
 
 def _make_ollama_runner(
     model_id: str = DEFAULT_OLLAMA_MODEL,
     base_url: str = DEFAULT_OLLAMA_BASE_URL,
     transport: Optional[Callable[..., dict]] = None,
+    allow_remote: bool = False,
+    validate_eager: bool = False,
 ) -> ModelRunner:
     """Create a local open-weight Ollama / OpenAI-compatible runner (stdlib-only)."""
     effective_model = (
         model_id[len("ollama/"):] if model_id.startswith("ollama/") else model_id
     )
+    if validate_eager:
+        validate_ollama_base_url(base_url, allow_remote=allow_remote)
 
     def runner(prompt: str) -> tuple:
+        checked_url = validate_ollama_base_url(base_url, allow_remote=allow_remote)
         if _offline_seam_set():
             raise RuntimeError(OFFLINE_REFUSAL)
         call_transport = transport
@@ -480,8 +529,8 @@ def _make_ollama_runner(
         resp = call_transport(
             payload,
             timeout_s=180.0,
-            base_url=base_url,
-            api_key=str("ollama"),
+            base_url=checked_url,
+            api_key=ollama_dummy_api_key(),
         )
         elapsed_ms = (time.time() - start) * 1000.0
         choices = resp.get("choices") or ()
@@ -595,13 +644,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ground-truth", default=None, help="Override path to ground_truth.jsonl")
     parser.add_argument("--model", default=None, help="Optional model ID override for --runner ollama")
     parser.add_argument("--base-url", default=None, help="Optional base URL override for --runner ollama")
+    parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (still uses fixed dummy key, never OPENAI_API_KEY)",
+    )
     args = parser.parse_args(argv)
 
     runner = RUNNERS[args.runner]
-    if args.runner == "ollama" and (args.model or args.base_url):
+    if args.runner == "ollama":
         runner = _make_ollama_runner(
             model_id=args.model or os.environ.get("AESOP_BENCH_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
             base_url=args.base_url or os.environ.get("AESOP_OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
+            allow_remote=bool(args.allow_remote_ollama),
+            validate_eager=True,
         )
     if getattr(runner, "is_cli", False) and _offline_seam_set():
         print(OFFLINE_REFUSAL, file=sys.stderr)

@@ -20,8 +20,14 @@ import os
 import re
 import sys
 import urllib.request
+from pathlib import Path
 
 API_URL = "https://api.anthropic.com/v1/messages"
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from tools.bench_runner import ollama_dummy_api_key, validate_ollama_base_url
 
 # Import frontier_eligibility for tool mode
 sys.path.insert(0, ".")
@@ -54,6 +60,7 @@ def probe(
     tool_info=None,
     base_url=None,
     transport=None,
+    allow_remote_ollama=False,
 ):
     """Probe a task/model pair for refusal.
 
@@ -125,25 +132,28 @@ def probe(
             body_dict["tool_choice"] = {"type": "tool", "name": "submit_answer"}
 
     if is_ollama:
-        call_transport = transport
-        if call_transport is None:
-            from pathlib import Path
-
-            driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
-            if driver_dir not in sys.path:
-                sys.path.insert(0, driver_dir)
-            from openai_transport import default_openai_transport
-
-            call_transport = default_openai_transport
-        resolved_url = base_url or os.environ.get(
-            "AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
+        raw_url = (
+            base_url
+            if base_url is not None
+            else os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
         )
         try:
+            resolved_url = validate_ollama_base_url(
+                raw_url, allow_remote=allow_remote_ollama
+            )
+            call_transport = transport
+            if call_transport is None:
+                driver_dir = str(_REPO_ROOT / "driver")
+                if driver_dir not in sys.path:
+                    sys.path.insert(0, driver_dir)
+                from openai_transport import default_openai_transport
+
+                call_transport = default_openai_transport
             out = call_transport(
                 body_dict,
                 timeout_s=timeout_s,
                 base_url=resolved_url,
-                api_key=str("ollama"),
+                api_key=ollama_dummy_api_key(),
             )
             choices = out.get("choices") or []
             finish = choices[0].get("finish_reason") if choices else None
@@ -172,6 +182,11 @@ def main():
                     help="Answer mode: 'regex' (v4, default) or 'tool' (v5)")
     ap.add_argument("--models", default="claude-fable-5,claude-opus-5")
     ap.add_argument("--base-url", default=None, help="Optional base URL for ollama/<model> runs")
+    ap.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends paid API keys)",
+    )
     ap.add_argument("--tasks", default="", help="Comma-separated task-id prefixes to probe (default: all)")
     ap.add_argument("--tasks-file", default="bench/tasks_frontier.jsonl")
     ap.add_argument("--ground-truth-file", default="bench/ground_truth_frontier.jsonl")
@@ -181,10 +196,18 @@ def main():
     args = ap.parse_args()
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
-    api_key = os.environ.get("BENCH_API_KEY", "")
-    if any(not m.startswith("ollama/") for m in models) and not api_key:
+    needs_paid_key = any(not m.startswith("ollama/") for m in models)
+    api_key = os.environ.get("BENCH_API_KEY", "") if needs_paid_key else ""
+    if needs_paid_key and not api_key:
         print("ERROR: BENCH_API_KEY not set - probe is API-only (no CLI fallback).", file=sys.stderr)
         sys.exit(2)
+    if any(m.startswith("ollama/") for m in models):
+        validate_ollama_base_url(
+            args.base_url
+            if args.base_url is not None
+            else os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
+            allow_remote=args.allow_remote_ollama,
+        )
 
     prefixes = [p for p in args.tasks.split(",") if p]
     tasks = []
@@ -212,7 +235,7 @@ def main():
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = [ex.submit(probe, m, tid, prompt, api_key, args.max_tokens, args.timeout,
-                         args.answer_mode, tool_info, args.base_url)
+                         args.answer_mode, tool_info, args.base_url, None, args.allow_remote_ollama)
                 for m, tid, prompt in jobs]
         for fut in concurrent.futures.as_completed(futs):
             tid, model, stop_reason, err = fut.result()

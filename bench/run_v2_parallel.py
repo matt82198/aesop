@@ -61,6 +61,7 @@ from frontier_eligibility import audit_tasks, remove_format_instruction
 # Import OpenAI transport
 sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))
 from openai_transport import default_openai_transport
+from tools.bench_runner import ollama_dummy_api_key, validate_ollama_base_url
 
 
 # ============================================================================
@@ -348,7 +349,7 @@ def invoke_openai_model(
         payload,
         timeout_s=timeout_s,
         base_url=base_url,
-        api_key=str("ollama") if is_local else None,
+        api_key=ollama_dummy_api_key() if is_local else None,
     )
 
     if not response.get("choices"):
@@ -406,6 +407,7 @@ def run_single_task(
     answer_mode: str = "regex",
     tool_tasks_info: Optional[Dict] = None,
     all_tasks: Optional[List[str]] = None,
+    allow_remote_ollama: bool = False,
 ) -> FrontierV2Run:
     """Run a single task on a single tier.
 
@@ -524,13 +526,21 @@ def run_single_task(
             else:
                 openai_max_tokens = 512  # Regex mode (prose)
 
+            ollama_url = (
+                validate_ollama_base_url(
+                    os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
+                    allow_remote=allow_remote_ollama,
+                )
+                if is_ollama
+                else "https://api.openai.com/v1"
+            )
             response_text, tokens_in, tokens_out, cost = invoke_openai_model(
                 effective_model, request_prompt,
                 max_tokens=openai_max_tokens,
                 timeout_s=180.0 if is_ollama else 60.0,
                 tools=tools,
                 tool_choice=tool_choice,
-                base_url=os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1") if is_ollama else "https://api.openai.com/v1",
+                base_url=ollama_url,
                 is_local=is_ollama,
             )
             transport = "ollama" if is_ollama else "openai"
@@ -633,6 +643,11 @@ def main():
         "--exclude-tasks",
         default=None,
         help="Path to file containing task IDs to exclude (one per line or comma-separated)",
+    )
+    parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends paid API keys)",
     )
 
     args = parser.parse_args()
@@ -737,7 +752,8 @@ def main():
             executor.submit(
                 run_single_task, tier, task, repeat, ground_truth,
                 answer_mode=args.answer_mode,
-                tool_tasks_info=tool_tasks_info
+                tool_tasks_info=tool_tasks_info,
+                allow_remote_ollama=args.allow_remote_ollama,
             ): (tier, task.id, repeat)
             for tier, task, repeat in work_items
         }

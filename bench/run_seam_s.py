@@ -47,12 +47,17 @@ from typing import Dict, List, Optional, Tuple
 
 # Add driver to path.
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 DRIVER_DIR = REPO_ROOT / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
 from agent_driver import ROLE_WORKER
 from backend_config import build_driver
+from openai_compatible_driver import OpenAICompatibleDriver
+from openai_transport import default_openai_transport
+from tools.bench_runner import ollama_dummy_api_key, validate_ollama_base_url
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
 
@@ -450,6 +455,11 @@ def main():
         help="Repair budget (number of repairs, not total attempts). "
              "Total attempts = 1 (initial) + repair_cap. Default: 2 (3 total attempts max).",
     )
+    parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends paid API keys)",
+    )
 
     args = parser.parse_args()
 
@@ -512,32 +522,36 @@ def main():
                     print(f"Reached max_runs limit ({args.max_runs})")
                     sys.exit(0)
 
-                # Determine backend from tier.
-                if tier.startswith("ollama/"):
-                    backend_name = "openai-compatible"
-                else:
-                    backend_name = tier_to_backend.get(tier, "anthropic")
-
-                # Build driver config.
-                config = {
-                    "backend": backend_name,
-                }
-                if backend_name == "openai-compatible":
-                    config["model"] = tier[len("ollama/"):]
-                    config["base_url"] = os.environ.get(
-                        "AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
-                    )
-                    config["is_local"] = True
-                elif backend_name == "anthropic":
-                    config["model"] = tier
-                    config["api_key_env"] = "ANTHROPIC_API_KEY"
-                elif backend_name == "codex":
-                    config["model"] = tier
-                    config["api_key_env"] = "OPENAI_API_KEY"
-
-                # Build driver.
+                # Determine backend and construct driver.
                 try:
-                    driver = build_driver(config)
+                    if tier.startswith("ollama/"):
+                        backend_name = "openai-compatible"
+                        ollama_url = validate_ollama_base_url(
+                            os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
+                            allow_remote=args.allow_remote_ollama,
+                        )
+                        driver = OpenAICompatibleDriver(
+                            base_url=ollama_url,
+                            model=tier[len("ollama/"):],
+                            api_key_env="OLLAMA_API_KEY",
+                            is_local=not args.allow_remote_ollama,
+                            transport=lambda payload, _u=ollama_url: default_openai_transport(
+                                payload,
+                                timeout_s=120.0,
+                                base_url=_u,
+                                api_key=ollama_dummy_api_key(),
+                            ),
+                        )
+                    else:
+                        backend_name = tier_to_backend.get(tier, "anthropic")
+                        config = {"backend": backend_name}
+                        if backend_name == "anthropic":
+                            config["model"] = tier
+                            config["api_key_env"] = "ANTHROPIC_API_KEY"
+                        elif backend_name == "codex":
+                            config["model"] = tier
+                            config["api_key_env"] = "OPENAI_API_KEY"
+                        driver = build_driver(config)
                 except Exception as exc:
                     print(f"ERROR: failed to build driver for {tier}: {exc}")
                     sys.exit(1)

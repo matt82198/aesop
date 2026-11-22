@@ -32,19 +32,23 @@ try:
     from bench_runner import (
         load_tasks,
         load_ground_truth,
+        ollama_dummy_api_key,
         run_bench,
         build_summary,
         print_table,
         print_comparison,
+        validate_ollama_base_url,
     )
 except ImportError:
     from tools.bench_runner import (
         load_tasks,
         load_ground_truth,
+        ollama_dummy_api_key,
         run_bench,
         build_summary,
         print_table,
         print_comparison,
+        validate_ollama_base_url,
     )
 
 BENCH_DIR = Path(__file__).resolve().parent.parent / "bench"
@@ -160,12 +164,14 @@ def make_ollama_api_runner(
     base_url: str = "http://127.0.0.1:11434/v1",
     confirm_spend: bool = False,
     transport=None,
+    allow_remote_ollama: bool = False,
 ):
     """Create a local open-weight Ollama / OpenAI-compatible HTTP runner."""
     if os.environ.get("AESOP_BENCH_OFFLINE") == "1":
         raise RuntimeError("AESOP_BENCH_OFFLINE=1: live API bench disabled, no client constructed")
     if not confirm_spend:
         raise RuntimeError("live API bench requires --confirm-spend; no client constructed")
+    checked_url = validate_ollama_base_url(base_url, allow_remote=allow_remote_ollama)
     effective_model = model_id[len("ollama/"):] if model_id.startswith("ollama/") else model_id
     if transport is None:
         driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
@@ -187,8 +193,8 @@ def make_ollama_api_runner(
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout_s=180.0,
-            base_url=base_url,
-            api_key=str("ollama"),
+            base_url=checked_url,
+            api_key=ollama_dummy_api_key(),
         )
         elapsed_ms = (time_module.time() - start) * 1000.0
         choices = resp.get("choices") or ()
@@ -209,12 +215,18 @@ def run_variant(
     api_key: str,
     confirm_spend: bool = False,
     base_url: str = "http://127.0.0.1:11434/v1",
+    allow_remote_ollama: bool = False,
 ) -> Tuple[List[dict], float, dict]:
     """Run one variant x model combo. Return (results, accuracy, cost_summary)."""
     tasks_file, gt_file, display_name = VARIANTS[variant]
     if _is_ollama_spec(model_alias):
         model_id = "qwen3-coder:30b" if model_alias == "ollama" else model_alias[len("ollama/"):]
-        runner = make_ollama_api_runner(model_id, base_url=base_url, confirm_spend=confirm_spend)
+        runner = make_ollama_api_runner(
+            model_id,
+            base_url=base_url,
+            confirm_spend=confirm_spend,
+            allow_remote_ollama=allow_remote_ollama,
+        )
     else:
         model_id = MODEL_IDS[model_alias]
         runner = make_api_runner(model_id, api_key, confirm_spend=confirm_spend)
@@ -306,6 +318,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
         help="OpenAI-compatible base URL for ollama[/<model>] runs",
     )
+    parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends OPENAI_API_KEY)",
+    )
     args = parser.parse_args(argv)
 
     # Expand 'all' to v2 and v3
@@ -353,6 +370,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     api_key,
                     confirm_spend=args.confirm_spend,
                     base_url=args.base_url,
+                    allow_remote_ollama=args.allow_remote_ollama,
                 )
                 results_by_variant[variant][model_alias] = summary
 

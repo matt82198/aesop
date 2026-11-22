@@ -37,6 +37,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from tools.bench_runner import ollama_dummy_api_key, validate_ollama_base_url
+
 try:
     # Imported as bench.run_seam_u (tests, repo-root imports): resolve through the package.
     from bench.frontier_slice import MODEL_PRICING_USD_PER_MTOK
@@ -787,6 +792,11 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         action="store_true",
         help="Probe mode: max_tokens=64, record refusals/answered, no grading",
     )
+    parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends paid API keys)",
+    )
 
     parsed = parser.parse_args(args)
 
@@ -1106,18 +1116,22 @@ def create_ollama_runner(
     probe: bool = False,
     base_url: Optional[str] = None,
     transport=None,
+    allow_remote_ollama: bool = False,
 ) -> Callable[[str], Tuple[str, Dict[str, Any]]]:
     """Create a local open-weight Ollama runner (supports tool_calls and diff text)."""
     effective_model = model[len("ollama/"):] if model.startswith("ollama/") else model
-    resolved_url = base_url or os.environ.get(
-        "AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"
+    raw_url = (
+        base_url
+        if base_url is not None
+        else os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
     )
+    resolved_url = validate_ollama_base_url(raw_url, allow_remote=allow_remote_ollama)
     max_tokens = 64 if probe else 1500
 
     def runner(prompt: str) -> Tuple[str, Dict[str, Any]]:
         call_transport = transport
         if call_transport is None:
-            driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
+            driver_dir = str(_REPO_ROOT / "driver")
             if driver_dir not in sys.path:
                 sys.path.insert(0, driver_dir)
             from openai_transport import default_openai_transport
@@ -1135,7 +1149,7 @@ def create_ollama_runner(
             payload,
             timeout_s=180.0,
             base_url=resolved_url,
-            api_key=str("ollama"),
+            api_key=ollama_dummy_api_key(),
         )
         elapsed_ms = (time.time() - start) * 1000.0
         choices = data.get("choices") or []
@@ -1253,6 +1267,7 @@ def main():
                 tier,
                 repeat,
                 args.probe,
+                args.allow_remote_ollama,
             )
             futures[future] = (task_json, tier, repeat)
 
@@ -1276,6 +1291,7 @@ def run_single_task(
     tier: str,
     repeat: int,
     probe: bool,
+    allow_remote_ollama: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a single task against a tier.
@@ -1307,7 +1323,9 @@ def run_single_task(
     try:
         # Determine transport and create runner
         if tier.startswith("ollama/"):
-            runner = create_ollama_runner(tier, probe=probe)
+            runner = create_ollama_runner(
+                tier, probe=probe, allow_remote_ollama=allow_remote_ollama
+            )
         elif "gpt" in tier.lower():
             api_key = os.environ.get("OPENAI_API_KEY")
             if not api_key:

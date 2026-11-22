@@ -35,7 +35,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Import bench utilities if needed
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from tools.bench_runner import ollama_dummy_api_key, validate_ollama_base_url
 
 # Module-level error tracking for API runs
 _error_tasks = []  # Populated by run_live_frontier_benchmark on API errors
@@ -268,6 +271,7 @@ def run_live_frontier_benchmark(
     confirm_spend: bool = False,
     base_url: Optional[str] = None,
     transport=None,
+    allow_remote_ollama: bool = False,
 ) -> Tuple[List[FrontierScore], float]:
     """Run frontier tasks against Claude API.
 
@@ -293,11 +297,21 @@ def run_live_frontier_benchmark(
     # Check API key up front (fail-closed) before creating client. A refused
     # run is NOT a 0% measurement: main() must not write results for it.
     is_ollama = model.startswith("ollama/")
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = None if is_ollama else os.environ.get("ANTHROPIC_API_KEY")
     if not is_ollama and not api_key:
         print("ERROR: ANTHROPIC_API_KEY not set - live run refused, no results written", file=sys.stderr)
         _live_skipped = True
         return ([], 0.0)
+    ollama_url = ""
+    if is_ollama:
+        raw_ollama_url = (
+            base_url
+            if base_url is not None
+            else os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+        )
+        ollama_url = validate_ollama_base_url(
+            raw_ollama_url, allow_remote=allow_remote_ollama
+        )
 
     # Check HALT sentinel before starting API calls
     try:
@@ -331,7 +345,6 @@ def run_live_frontier_benchmark(
 
     client = None
     ollama_transport = transport
-    ollama_url = base_url or os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
     if is_ollama:
         if ollama_transport is None:
             driver_dir = str(Path(__file__).resolve().parent.parent / "driver")
@@ -368,7 +381,7 @@ def run_live_frontier_benchmark(
                     },
                     timeout_s=180.0,
                     base_url=ollama_url,
-                    api_key=str("ollama"),
+                    api_key=ollama_dummy_api_key(),
                 )
                 choices = resp.get("choices") or ()
                 response_text = (
@@ -476,6 +489,11 @@ def main():
         help="Optional base URL for ollama/<model> runs (default: http://127.0.0.1:11434/v1)",
     )
     parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends paid API keys)",
+    )
+    parser.add_argument(
         "--tasks",
         default="bench/tasks_frontier.jsonl",
         help="Path to tasks file",
@@ -545,6 +563,7 @@ def main():
                 model=args.model,
                 confirm_spend=args.confirm_spend,
                 base_url=args.base_url,
+                allow_remote_ollama=args.allow_remote_ollama,
             )
         except UnknownModelPricingError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)

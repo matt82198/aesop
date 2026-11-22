@@ -39,8 +39,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 # Import agent driver classes (same directory).
-sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT / "driver"))
 from codex_driver import WORKER_PATCH_SCHEMA
+from tools.bench_runner import ollama_dummy_api_key, validate_ollama_base_url
 
 
 # ============================================================================
@@ -669,6 +673,7 @@ def run_live_benchmark(
     api_key: Optional[str] = None,
     transport=None,
     base_url: Optional[str] = None,
+    allow_remote_ollama: bool = False,
 ) -> Tuple[List[TaskScore], float]:
     """Run all tasks against a real Chat Completions backend.
 
@@ -684,28 +689,31 @@ def run_live_benchmark(
     Args:
         tasks: List of test tasks
         model: OpenAI model ID (default gpt-3.5-turbo)
-        api_key: OPENAI_API_KEY (reads from env if not provided)
+        api_key: OPENAI_API_KEY (reads from env if not provided; ignored on ollama/*)
         transport: optional callable(payload)->response for testing; defaults
             to openai_transport.default_openai_transport
 
     Returns:
         Tuple of (task_scores, overall_accuracy)
     """
-    effective_model = model[len("ollama/"):] if model.startswith("ollama/") else model
-    resolved_base_url = base_url or (
-        os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
-        if model.startswith("ollama/")
-        else "https://api.openai.com/v1"
-    )
-    is_loopback = any(
-        h in resolved_base_url for h in ("127.0.0.1", "localhost", "[::1]")
-    )
+    is_ollama = model.startswith("ollama/")
+    effective_model = model[len("ollama/"):] if is_ollama else model
+    if is_ollama:
+        raw_ollama_url = (
+            base_url
+            if base_url is not None
+            else os.environ.get("AESOP_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+        )
+        resolved_base_url = validate_ollama_base_url(
+            raw_ollama_url, allow_remote=allow_remote_ollama
+        )
+        effective_api_key: Optional[str] = ollama_dummy_api_key()
+    else:
+        resolved_base_url = base_url or "https://api.openai.com/v1"
+        effective_api_key = api_key or os.environ.get("OPENAI_API_KEY")
+
     if transport is None:
-        if not api_key:
-            api_key = os.environ.get("OPENAI_API_KEY") or (
-                str("ollama") if is_loopback else None
-            )
-        if not api_key:
+        if not effective_api_key:
             raise RuntimeError(
                 "OPENAI_API_KEY not provided and not in environment. "
                 "Set it before running live benchmark (or use --model ollama/<model> for local Ollama)."
@@ -720,9 +728,9 @@ def run_live_benchmark(
                 try:
                     return default_openai_transport(
                         payload,
-                        timeout_s=120.0 if is_loopback else 60.0,
+                        timeout_s=120.0 if is_ollama else 60.0,
                         base_url=resolved_base_url,
-                        api_key=str(api_key),
+                        api_key=str(effective_api_key),
                     )
                 except Exception as exc:
                     if "429" in str(exc) and attempt < 4:
@@ -805,6 +813,11 @@ def main():
         help="Optional OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1 for ollama/*)",
     )
     parser.add_argument(
+        "--allow-remote-ollama",
+        action="store_true",
+        help="Allow non-loopback Ollama base URL (never sends OPENAI_API_KEY)",
+    )
+    parser.add_argument(
         "--output",
         default="bench/results/accuracy-harness-results.json",
         help="Output JSON file path",
@@ -822,7 +835,12 @@ def main():
         scores, overall = run_offline_benchmark(tasks)
     else:
         print(f"Running LIVE benchmark against {args.model}...")
-        scores, overall = run_live_benchmark(tasks, model=args.model, base_url=args.base_url)
+        scores, overall = run_live_benchmark(
+            tasks,
+            model=args.model,
+            base_url=args.base_url,
+            allow_remote_ollama=args.allow_remote_ollama,
+        )
 
     # Print results
     print_results_table(scores, overall)
