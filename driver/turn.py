@@ -45,12 +45,13 @@ from turn_backend import (  # noqa: E402
     EXIT_TIMEOUT,
     EXIT_USAGE,
     default_provider,
-    refusal_reason,
     run_turn,
     TurnProvider,
     TurnResult,
 )
+from turn_engine import EngineError, TurnEngine  # noqa: E402
 from turn_frames import FrameWriter  # noqa: E402
+from turn_gate import parse_url, refusal_for  # noqa: E402
 from turn_stream import CancelToken, StreamResult, run_stream_turn  # noqa: E402
 
 PROG = "python -m driver.turn"
@@ -113,6 +114,11 @@ def _read_context(stdin) -> str:
 
 
 def _build_messages(prompt: str, context: str, system):
+    """The one message assembly for a one-shot turn, shared by the CLI and by `aesop ask` (serve mode).
+
+    A system message when system text is given, then one user message: the piped context first, a blank
+    line, then the prompt. No delimiter is added around the context.
+    """
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -261,6 +267,36 @@ def _hello() -> dict:
     return {"type": "hello", "protocol": PROTOCOL_VERSION, "engine": "driver.turn"}
 
 
+def _run_collected(entry, model, messages, timeout_s, token, json_mode, stdout, stderr) -> int:
+    """Default and --json modes: the same streamed route, printed once at the end.
+
+    Warnings (the over-window notice) are diagnostics on stderr; the exit code
+    is unchanged by them. A failure line is the `error` of the JSON object and
+    is also written to stderr.
+    """
+    def note(text):
+        if text.startswith(("warning: ", "growing ")):
+            stderr.write(text + "\n")
+
+    result = _stream_one(entry, model, messages, timeout_s=timeout_s, token=token, on_delta=None, notify=note)
+    if json_mode:
+        obj = {
+            "ok": result.ok,
+            "provider": result.provider,
+            "model": result.model,
+            "text": result.text,
+            "elapsed_ms": result.elapsed_ms,
+        }
+        if not result.ok:
+            obj["error"] = result.error or "unknown error"
+        stdout.write(json.dumps(obj) + "\n")
+    elif result.ok:
+        stdout.write(result.text + "\n")
+    if not result.ok:
+        stderr.write((result.error or "unknown error") + "\n")
+    return result.exit_code
+
+
 def _run_frames(entry, model, messages, timeout_s, token, stdout) -> int:
     writer = FrameWriter(_binary(stdout))
     writer.control(_hello())
@@ -319,18 +355,67 @@ def _serve(entry, default_model, stdin, stdout) -> int:
     def bad_request(reason, turn_id=None):
         writer.control(_event("notify", turn_id, text=f"error: driver: bad-request: {reason}"))
 
-    def run_one(request):
+    engine = TurnEngine()
+    default_registry = {"providers": {entry["id"]: entry["raw"]}, "routes": {}}
+
+    def run_messages(request):
+        """A turn given as explicit messages: one stateless request to the CLI's provider."""
         turn_id = request["id"]
-        token = request["token"]
         result = run_stream_turn(
-            entry, request["model"], request["messages"], cancel=token, on_delta=writer.data,
+            entry, request["model"], request["messages"], cancel=request["token"], on_delta=writer.data,
             notify=lambda text: writer.control(_event("notify", turn_id, text=text)),
         )
         if result.usage is not None:
             writer.control(_event("usage", turn_id, usage=result.usage))
         writer.control(_done_message(result, turn_id))
-        with tokens_lock:
-            tokens.pop(turn_id, None)
+
+    def run_line(request):
+        """A turn given as a line: the routed engine, with this session's context and breaker state."""
+        turn_id = request["id"]
+        raw = request["raw"]
+        registry = raw.get("registry") if isinstance(raw.get("registry"), dict) else default_registry
+        selection = raw.get("selection") if isinstance(raw.get("selection"), dict) else {"provider": entry["id"], "model": request["model"]}
+        env = None
+        if isinstance(raw.get("keys"), dict):
+            # Keys travel on stdin with the turn, never on the command line or in the child's environment.
+            env = {str(name): str(value) for name, value in raw["keys"].items()}
+        now = raw.get("now") if isinstance(raw.get("now"), (int, float)) and not isinstance(raw.get("now"), bool) else None
+        preset = None
+        if "prompt" in request:
+            # A one-shot turn (aesop ask): the same builder the one-shot CLI uses, sent as it is.
+            preset = _build_messages(request["prompt"], request["context"], request["system"])
+        try:
+            result = engine.run_turn(
+                registry, selection, request.get("line", request.get("prompt")),
+                task=raw.get("task") if isinstance(raw.get("task"), str) else "chat",
+                cancel=request["token"], on_delta=writer.data, now=now, env=env, messages=preset,
+                notify=lambda text: writer.control(_event("notify", turn_id, text=text)),
+                flash=lambda text: writer.control(_event("flash", turn_id, text=text)),
+                usage=lambda report: writer.control(_event("usage", turn_id, usage=report)),
+            )
+        except EngineError as exc:
+            # The turn could not start; the adapter raises this text the way the harness throws it.
+            writer.control({"type": "done", "id": turn_id, "ok": False, "exit": EXIT_USAGE, "thrown": str(exc), "error": str(exc)})
+            return
+        done = {
+            "type": "done", "id": turn_id, "ok": result.ok, "exit": result.exit_code,
+            "provider": result.provider, "model": result.model, "text": result.text, "elapsed_ms": result.elapsed_ms,
+        }
+        if not result.ok:
+            done["error"] = result.error or "unknown error"
+        if result.cancelled:
+            done["cancelled"] = True
+        writer.control(done)
+
+    def run_one(request):
+        try:
+            if "messages" in request:
+                run_messages(request)
+            else:
+                run_line(request)
+        finally:
+            with tokens_lock:
+                tokens.pop(request["id"], None)
 
     def worker():
         while True:
@@ -341,6 +426,7 @@ def _serve(entry, default_model, stdin, stdout) -> int:
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+    graceful = False
     for request in _read_requests(stdin):
         if not isinstance(request, dict):
             bad_request("a request is one JSON object per line")
@@ -348,6 +434,7 @@ def _serve(entry, default_model, stdin, stdout) -> int:
         op = request.get("op")
         turn_id = request.get("id")
         if op == "shutdown":
+            graceful = True
             break
         if op == "cancel":
             with tokens_lock:
@@ -359,21 +446,35 @@ def _serve(entry, default_model, stdin, stdout) -> int:
             bad_request("unknown op", turn_id)
             continue
         messages = request.get("messages")
-        if messages is None and isinstance(request.get("line"), str):
-            messages = [{"role": "user", "content": request["line"]}]
-        if not isinstance(messages, list) or not messages:
-            bad_request("a turn needs a line or a messages list", turn_id)
+        line = request.get("line")
+        if messages is not None and (not isinstance(messages, list) or not messages):
+            bad_request("messages must be a non-empty list", turn_id)
+            continue
+        prompt = request.get("prompt")
+        if messages is None and not isinstance(line, str) and not isinstance(prompt, str):
+            bad_request("a turn needs a line, a prompt or a messages list", turn_id)
             continue
         _, model = _split_model_spec(request.get("model") if isinstance(request.get("model"), str) else None)
         token = CancelToken()
         with tokens_lock:
             tokens[turn_id] = token
-        pending.put({"id": turn_id, "token": token, "model": model or default_model, "messages": messages})
-    # End of input: cancel whatever is running or queued, then close the stream.
-    with tokens_lock:
-        live = list(tokens.values())
-    for token in live:
-        token.cancel()
+        job = {"id": turn_id, "token": token, "model": model or default_model, "raw": request}
+        if messages is not None:
+            job["messages"] = messages
+        elif isinstance(line, str):
+            job["line"] = line
+        else:
+            job["prompt"] = prompt
+            job["context"] = request["context"] if isinstance(request.get("context"), str) else ""
+            job["system"] = request["system"] if isinstance(request.get("system"), str) else None
+        pending.put(job)
+    # `shutdown` lets queued turns finish. End of input (the parent went away) cancels whatever is
+    # running or queued. Either way the stream then closes with `E 0`.
+    if not graceful:
+        with tokens_lock:
+            live = list(tokens.values())
+        for token in live:
+            token.cancel()
     pending.put(None)
     thread.join()
     writer.end(EXIT_OK)
@@ -420,26 +521,29 @@ def main(argv=None, *, stdin=None, stdout=None, stderr=None, transport=None, can
 
     base = default_provider()
     if args.base_url is not None:
+        if parse_url(args.base_url) is None:
+            return _usage_fail("--base-url is not a URL", stderr)
         name = provider_name or CUSTOM_PROVIDER_NAME
         base = TurnProvider(name, args.base_url.rstrip("/"), base.model, is_local=_is_loopback_url(args.base_url))
     streaming = args.stream or args.frames or args.serve
 
-    # Refusal is decided on the raw ids and the host, before stdin is read and before any socket.
+    # The boundary gate (turn_gate) runs on the ids and the URL text before stdin is read and before
+    # any socket or DNS lookup. Every request runs the same gate again at send time (turn_stream).
     shown_name = provider_name or base.name
     shown_model = model_id or base.model
-    reason = refusal_reason(shown_name, shown_model, args.base_url)
+    reason = refusal_for({"id": shown_name, "raw": {"type": "openai", "base_url": base.base_url}}, shown_model)
     if reason:
+        line = f"error: {shown_name}: refused: {reason}"
         if args.frames or args.serve:
-            line = f"error: {shown_name}: refused: {reason}"
             writer = FrameWriter(_binary(stdout))
             writer.control(_hello())
             writer.control(_event("notify", text=line))
             writer.control(_done_message(StreamResult(False, "", shown_name, shown_model, 0, line, EXIT_REFUSED)))
             writer.end(EXIT_REFUSED)
-        elif args.stream:
-            stderr.write(f"error: {shown_name}: refused: {reason}\n")
+        elif args.json:
+            _emit(TurnResult(False, "", shown_name, shown_model, 0, line, EXIT_REFUSED), True, stdout, stderr)
         else:
-            _emit(TurnResult(False, "", shown_name, shown_model, 0, reason, EXIT_REFUSED), args.json, stdout, stderr)
+            stderr.write(line + "\n")
         return EXIT_REFUSED
 
     if args.base_url is not None:
@@ -456,12 +560,16 @@ def main(argv=None, *, stdin=None, stdout=None, stderr=None, transport=None, can
 
     context = _read_context(stdin)
     messages = _build_messages(prompt, context, args.system)
-    if streaming:
+    if streaming or transport is None:
+        # Every real turn takes the streamed route, so Ollama gets its native route and a sized window
+        # in every mode (finding f-db2dd2fa). Only an injected transport keeps the P1 one-shot path.
         token = cancel if cancel is not None else CancelToken()
         entry = _provider_entry(provider)
         if args.frames:
             return _run_frames(entry, provider.model, messages, timeout_s, token, stdout)
-        return _run_plain_stream(entry, provider.model, messages, timeout_s, token, stdout, stderr)
+        if args.stream:
+            return _run_plain_stream(entry, provider.model, messages, timeout_s, token, stdout, stderr)
+        return _run_collected(entry, provider.model, messages, timeout_s, token, args.json, stdout, stderr)
 
     result = run_turn(provider, messages, transport=transport, timeout_s=timeout_s)
     _emit(result, args.json, stdout, stderr)

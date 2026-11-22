@@ -24,12 +24,13 @@ import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { PASTE_IDLE_MS, applyKey, createInputState, parseSlash } from './input.mjs';
+import { driverSource } from './driver_source.mjs';
 import { applyFeedEvent, feedPath, lastJobs, tailFeed } from './activity_feed.mjs';
 import { PEER_COMMANDS, runPeerCommand } from './peer_bus.mjs';
 import { applyDefaultProvider, authLines, detectLines, harnessSource, listModelLines, loadRegistry, matchRoute, probeProvider, resolveSelection } from './harness.mjs';
 // Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
 // AESOP_CHAT_BACKEND values. Unset or empty means pipe. Any other value is an error line (H-R28).
-const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness']);
+const BACKEND_VALUES = new Set(['pipe', 'orchestrator', 'harness', 'driver']);
 // Per-viewer selection memory (H-R10): {provider, model} only, never a key. Stored under the state root.
 function selectionFile(settings) {
   return join(settings.AESOP_STATE_ROOT || join(os.homedir(), '.aesop'), 'chat-selection.json');
@@ -214,7 +215,11 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
   const badBackend = backendValue !== undefined && backendValue !== '' && !BACKEND_VALUES.has(backendValue);
   // Default backend: the model harness (local Ollama unless the config declares providers). An injected
   // source, or an explicit AESOP_CHAT_BACKEND=pipe|orchestrator, keeps the old behaviour.
-  const implicitHarness = !source && (backendValue === undefined || backendValue === '');
+  // AESOP_CHAT_BACKEND=driver runs the same registry, commands and keys, but every turn goes through the
+  // aesop turn engine (driver/turn.py) by way of chat/driver_source.mjs. It takes the same config lookup and
+  // built-in Ollama default as the unset case. The harness stays the default (spec H-R26).
+  const driver = !source && backendValue === 'driver';
+  const implicitHarness = !source && (backendValue === undefined || backendValue === '' || driver);
   const harness = backendValue === 'harness' || implicitHarness;
   let configPath = env.AESOP_CHAT_CONFIG;
   if (!configPath && implicitHarness) {
@@ -266,7 +271,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     },
   });
   if (badBackend) {
-    session.state.transcript.push({ role: 'system', text: `error: AESOP_CHAT_BACKEND: unknown value "${backendValue}" (use pipe, orchestrator or harness)` });
+    session.state.transcript.push({ role: 'system', text: `error: AESOP_CHAT_BACKEND: unknown value "${backendValue}" (use pipe, orchestrator, harness or driver)` });
   }
   if (harness) {
     // Fallback, error and cancel lines go to the transcript as they happen (H-R12, H-R19, H-R21).
@@ -274,7 +279,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     // A skip notice is flashed for one frame: the transcript repaints every frame, so a line kept there
     // would be drawn again on each repaint (H-R16 announces the skip once).
     const flash = (text) => { session.setHint(text); session.setHint(null); };
-    backend.source = harnessSource(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env, {
+    backend.source = (driver ? driverSource : harnessSource)(registry, () => ({ provider: session.state.status.provider, model: session.state.status.model }), env, {
       notify,
       flash,
       usage: (u) => session.setUsage(u),
@@ -358,6 +363,8 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     const restoreTerminal = () => {
       if (restored) return;
       restored = true;
+      // The driver backend owns a child process; end it on every exit path. Other backends have no close.
+      try { backend.source.close?.(); } catch { /* best effort: never changes the exit code */ }
       stopFeed();
       clearPasteFlush();
       stdin.removeListener('keypress', onKeypress);
