@@ -342,3 +342,35 @@ test('render_frame_clips_to_rows_when_chrome_exceeds_rows', async () => {
     `a frame rendered with rows=3 must have at most 3 lines (clip, never scroll); got ${lines.length}:\n${stripAnsi(frame)}`,
   );
 });
+
+test('render_emoji_variation_selectors_and_zwj_clusters_measure_and_wrap_accurately', async () => {
+  const { displayWidth, wrapText, renderFrame } = await loadRender();
+  assert.equal(displayWidth('🚀'), 2, 'U+1F680 rocket is 2 columns wide');
+  assert.equal(displayWidth('🚨'), 2, 'U+1F6A8 siren is 2 columns wide');
+  assert.equal(displayWidth('🪄'), 2, 'U+1FA84 wand (Extended-A) is 2 columns wide');
+  assert.equal(displayWidth('✅'), 2, 'U+2705 check mark is 2 columns wide');
+  assert.equal(displayWidth('⚠️'), 2, 'U+26A0 + U+FE0F VS16 warning emoji is 2 columns wide');
+  assert.equal(displayWidth('👍🏽'), 2, 'emoji + Fitzpatrick skin-tone modifier is 2 columns wide');
+  assert.equal(displayWidth('👨‍💻'), 2, 'ZWJ technologist cluster occupies 2 columns, not 5');
+  assert.equal(displayWidth('🏳️‍🌈'), 2, 'ZWJ flag cluster occupies 2 columns');
+  assert.equal(displayWidth('🇺🇸'), 2, 'regional indicator flag pair occupies 2 columns');
+  assert.equal(displayWidth('─'), 1, 'box-drawing horizontal bar stays 1 column');
+  assert.equal(displayWidth('│'), 1, 'box-drawing vertical bar stays 1 column');
+
+  const broken = wrapText('👨‍💻👨‍💻👨‍💻', 4);
+  assert.deepEqual(broken, ['👨‍💻👨‍💻', '👨‍💻'], 'hard wrap must not split inside a ZWJ grapheme cluster');
+
+  const state = makeState({
+    status: { model: 'qwen3-coder:30b', provider: 'ollama', cwd: '/w', tokens: 0, elapsedMs: 0, spinnerTick: 0 },
+    transcript: [{ role: 'assistant', text: 'Deploy 🚀🚀 status' }],
+  });
+  const frame = renderFrame(state, { columns: 24, rows: 20, color: false, unicode: true });
+  for (const line of stripAnsi(frame).split('\n')) {
+    assert.ok(
+      displayWidth(line) <= 24,
+      `rendered emoji line exceeds 24 display columns (${displayWidth(line)}): ${JSON.stringify(line)}`,
+    );
+  }
+  const deployLines = stripAnsi(frame).split('\n').filter((l) => l.includes('Deploy') || l.includes('status'));
+  assert.equal(deployLines.length, 2, '26-column assistant emoji line must wrap onto 2 lines at columns=24');
+});
