@@ -3,6 +3,8 @@
 // child (chat/driver_source.mjs -> driver/turn.py --serve, spec H-R26). It holds no conversation state and
 // writes no history file.
 // Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider/model error, 5 timeout, 6 boundary refused.
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { prepareChangeSummary } from './change_summary.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +15,7 @@ import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistr
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
 
-const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--proof-receipt] [--change-summary] [--timeout <s>] "<prompt>"';
+const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--split-claudemd-line] [--proof-receipt] [--change-summary] [--timeout <s>] "<prompt>"';
 const DEFAULT_TIMEOUT_S = 300;
 
 /**
@@ -28,6 +30,7 @@ export function parseAskArgs(argv) {
     const a = argv[i];
     if (a === '--') { words.push(...argv.slice(i + 1)); break; }
     if (a === '--json') out.json = true;
+    else if (a === '--split-claudemd-line') out.splitClaudeMdLine = true;
     else if (a === '--proof-receipt') out.proofReceipt = true;
     else if (a === '--change-summary') out.changeSummary = true;
     else if (a === '--model' || a === '--system' || a === '--from' || a === '--timeout') {
@@ -47,7 +50,7 @@ export function parseAskArgs(argv) {
     } else words.push(a);
   }
   out.prompt = words.join(' ').trim();
-  if (out.prompt === '') return { ...out, error: 'no prompt given' };
+  if (out.prompt === '' && !out.splitClaudeMdLine) return { ...out, error: 'no prompt given' };
   return out;
 }
 
@@ -77,7 +80,7 @@ function askActivityFeed(args, env, stderr, started) {
     start,
     chunk(text) { writer?.chunk(text); },
     end(code, fields) {
-      if (code === EXIT.USAGE) return;
+      if (code === EXIT.USAGE && !writer) return;
       start(fields);
       const status = { [EXIT.OK]: 'ok', [EXIT.TIMEOUT]: 'timeout', [EXIT.REFUSED]: 'refused' }[code] ?? 'error';
       if (fields.error) writer.error(fields.error);
@@ -118,6 +121,24 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     return EXIT.USAGE;
   }
   const makeSource = backendFlag === 'harness' ? harnessSource : driverSource;
+
+  if (args.splitClaudeMdLine) {
+    const context = stdin && !stdin.isTTY ? await readAll(stdin) : '';
+    const route = { provider: 'claudemd_split', model: null };
+    activity.start(route, context);
+    const script = fileURLToPath(new URL('../tools/claudemd_split.py', import.meta.url));
+    const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', [script, '--stdin-line'], {
+      input: context, encoding: 'utf8', windowsHide: true, timeout: Math.ceil(args.timeoutS * 1000),
+    });
+    if (run.error || run.status !== 0) {
+      const code = run.error?.code === 'ETIMEDOUT' ? EXIT.TIMEOUT : run.status === 2 ? EXIT.USAGE : EXIT.PROVIDER;
+      return finish(code, { ...route, error: run.error?.message || run.stderr.trim() || 'splitter failed' });
+    }
+    const text = run.stdout.trimEnd();
+    activity.chunk(text);
+    if (!args.json) stdout.write(text + '\n');
+    return finish(EXIT.OK, { ...route, text });
+  }
 
   let configPath = env.AESOP_CHAT_CONFIG;
   if (!configPath) {

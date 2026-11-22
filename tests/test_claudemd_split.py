@@ -55,6 +55,19 @@ class TestClaudeMdSplit(unittest.TestCase):
         self.assertEqual(2, len(fixed.rstrip(b"\n").split(b"\n\n")))
         self.assertLessEqual(max(map(len, fixed.splitlines())), 1024)
 
+    def test_single_line_contract_rejects_an_over_cap_replacement(self):
+        from unittest.mock import patch
+        from tools import claudemd_split
+
+        first = b"Safe."
+        last = ("\u00e9" * 513).encode()
+        line = first + b" " + last
+        for proposal in ([line], [first, last]):
+            with self.subTest(lengths=list(map(len, proposal))):
+                with patch.object(claudemd_split, "split_sentences", return_value=proposal):
+                    with self.assertRaisesRegex(ValueError, "1024"):
+                        claudemd_split.single_line_replacement(line)
+
     def test_chat_1440(self):
         self.chat_fixture("chat_1440.txt")  # 5f1492de, line 85
 

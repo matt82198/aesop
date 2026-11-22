@@ -92,6 +92,8 @@ With `AESOP_CHAT_BACKEND` unset and no injected `source`, `aesop chat` uses the 
 
 ## `aesop ask` (one-shot, `chat/ask.mjs`)
 
+Use `aesop ask --split-claudemd-line` for a single line already reported in excess of its file allowance. Pipe JSON with a string at `data.line`. The deterministic splitter returns a JSON array of capped parts that rejoin with one space. An unsafe split exits 2. The `--json` envelope names provider `claudemd_split` and has a null model.
+
 `aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--timeout <s>] "<prompt>"`: `runAsk({argv, stdin, stdout, stderr, env, cwd})` returns the exit code. It reuses the registry code (`loadRegistry`, `applyDefaultProvider`, `assertProviderAllowed`, `resolveSelection`) and the chat config lookup (`AESOP_CHAT_CONFIG`, else `./aesop.config.json`, else the built-in ollama default). No TTY needed; no history file, no conversation state. Plain mode writes only the answer to stdout (a final newline is added if missing); diagnostics go to stderr. `--json` writes one object `{ok, provider, model, text, elapsed_ms, error?}` to stdout (not streamed). `--timeout` is a total wall-clock cap in seconds (default 300).
 
 **Message assembly (finding f-ce0779b1)**: piped (non-TTY) stdin is context. ask sends the prompt, the stdin text and `--system` to the driver as parts, and the driver's one builder (`_build_messages`, driver/TURN.md) assembles them: a system message, then one user message with stdin first and the prompt after it, no delimiter. `tests/chat-ask-parity.test.mjs` requires the request captured from ask to equal the one from `driver/turn.py` for the same input (the legacy harness path joins the same parts in the same order into its single user line).
