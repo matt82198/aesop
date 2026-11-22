@@ -279,7 +279,8 @@ def _extract(archive_name, data, dest):
 
 def _run_config(cmd, token, cwd):
     real = [token if part == TOKEN_PLACEHOLDER else part for part in cmd]
-    res = subprocess.run(real, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace", timeout=600)
+    res = subprocess.run(real, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
+                         encoding="utf-8", errors="replace", timeout=600)
     shown = " ".join(cmd)
     if res.returncode != 0:
         raise Refusal("config failed (rc=%s): %s\n%s" % (res.returncode, shown, (res.stderr or res.stdout).strip()))

@@ -235,6 +235,7 @@ def run_secret_scan(repo_path):
         result = subprocess.run(
             [sys.executable, str(script_path), '--range', '@{upstream}..HEAD', '--repo', str(repo_path)],
             cwd=str(repo_path),
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30
         )
         return result.returncode == 0

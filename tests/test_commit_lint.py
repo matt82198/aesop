@@ -65,7 +65,7 @@ def _run_lint(repo, *args):
     """Invoke commit_lint.py as a subprocess against the fixture repo."""
     return subprocess.run(
         [sys.executable, COMMIT_LINT] + list(args),
-        cwd=repo, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        cwd=repo, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
 
 
@@ -155,7 +155,7 @@ class TestCommitLint(unittest.TestCase):
         repo_root = str(__import__("pathlib").Path(__file__).resolve().parent.parent)
         result = subprocess.run(
             [sys.executable, "tools/commit_lint.py", "--json", "--message", "feat: valid msg"],
-            capture_output=True, text=True, cwd=repo_root, timeout=30,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=repo_root, timeout=30,
         )
         self.assertEqual(result.returncode, 0)
         data = json.loads(result.stdout)
@@ -166,7 +166,7 @@ class TestCommitLint(unittest.TestCase):
         repo_root = str(__import__("pathlib").Path(__file__).resolve().parent.parent)
         result = subprocess.run(
             [sys.executable, "tools/commit_lint.py", "--message", "badformat no colon"],
-            capture_output=True, text=True, cwd=repo_root, timeout=30,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=repo_root, timeout=30,
         )
         self.assertEqual(result.returncode, 1)
 
@@ -181,7 +181,7 @@ class TestCommitLint(unittest.TestCase):
         repo_root = str(__import__("pathlib").Path(__file__).resolve().parent.parent)
         result = subprocess.run(
             [sys.executable, "tools/commit_lint.py", "--message", "", "--json"],
-            capture_output=True, text=True, cwd=repo_root, timeout=30,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=repo_root, timeout=30,
         )
         # Empty message should be linted (return 1, not read from stdin)
         self.assertEqual(result.returncode, 1, f"Expected exit 1 for empty message, got {result.returncode}")
@@ -283,6 +283,51 @@ class TestCommitLintRange(unittest.TestCase):
             _make_fixture_repo(repo, ["feat: add the first thing"])
             result = _run_lint(repo, "--range", "no-such-ref..HEAD")
             self.assertEqual(2, result.returncode, f"stdout: {result.stdout} stderr: {result.stderr}")
+
+    def test_does_not_block_on_open_stdin_pipe(self):
+        """commit_lint.py without --message/--range/--stdin must not hang on an open stdin pipe."""
+        for extra in ([], ["--check"]):
+            proc = subprocess.Popen(
+                [sys.executable, COMMIT_LINT] + extra,
+                cwd=str(REPO_ROOT),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+            )
+            try:
+                rc = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+                self.fail(f"commit_lint.py {extra} blocked on open stdin pipe")
+            finally:
+                if proc.stdin:
+                    proc.stdin.close()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+            self.assertEqual(rc, 2)
+
+    def test_piped_stdin_still_lints_message(self):
+        """Intentional piped stdin (with or without --stdin) still lints the commit message."""
+        for extra in ([], ["--stdin"]):
+            res = subprocess.run(
+                [sys.executable, COMMIT_LINT] + extra,
+                input="feat: valid piped commit\n",
+                cwd=str(REPO_ROOT),
+                capture_output=True, text=True, encoding="utf-8", timeout=15,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            bad = subprocess.run(
+                [sys.executable, COMMIT_LINT] + extra,
+                input="bad commit subject\n",
+                cwd=str(REPO_ROOT),
+                capture_output=True, text=True, encoding="utf-8", timeout=15,
+            )
+            self.assertEqual(bad.returncode, 1, bad.stderr)
 
 
 if __name__ == "__main__":

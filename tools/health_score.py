@@ -286,6 +286,7 @@ def _check_secret_scan_runnable(cwd_path):
     try:
         result = subprocess.run(
             [sys.executable, str(secret_scan), "--help"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',

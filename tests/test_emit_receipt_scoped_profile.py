@@ -334,6 +334,7 @@ class TestZeroShardConclusionIsNotSuccess(unittest.TestCase):
     conclusion is distinct from a real pass."""
 
     OK = [sys.executable, "-c", "import sys; sys.exit(0)"]
+    OK_SHARD = [sys.executable, "-c", "import sys; print('Ran 1 test in 0.00s'); sys.exit(0)"]
 
     def _git(self, cwd, *args):
         subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
@@ -360,7 +361,7 @@ class TestZeroShardConclusionIsNotSuccess(unittest.TestCase):
     def _registry(self):
         registry = {"secret-scan": emit_receipt.PartSpec(lambda repo: self.OK)}
         for i in range(4):
-            registry["py-shard-%d" % i] = emit_receipt.PartSpec(lambda repo: self.OK)
+            registry["py-shard-%d" % i] = emit_receipt.PartSpec(lambda repo: self.OK_SHARD)
         return registry
 
     def _run(self, profile, extra):

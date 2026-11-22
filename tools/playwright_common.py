@@ -83,7 +83,7 @@ def start_server(root: Path, port: int, repo: Path, serve_script: Path,
                AESOP_UI_COLLECT_INTERVAL=collect_interval,
                PORT=str(port))
     server = subprocess.Popen([sys.executable, str(serve_script)], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(boot_tries):
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.2).close()

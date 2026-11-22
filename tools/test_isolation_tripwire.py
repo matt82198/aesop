@@ -1009,7 +1009,7 @@ def main(argv=None):
         if which_path:
             resolved_command[0] = which_path
 
-    proc = subprocess.run(resolved_command, cwd=str(Path.cwd()))
+    proc = subprocess.run(resolved_command, cwd=str(Path.cwd()), stdin=subprocess.DEVNULL)
     cmd_exit = _exit_code(proc.returncode)
 
     after = take_snapshot(root)

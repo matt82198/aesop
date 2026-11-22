@@ -106,7 +106,7 @@ def run_one_regenerator(argv, repo_root, timeout: int = REGEN_TIMEOUT_S, capture
     try:
         proc = subprocess.run(
             [sys.executable, str(script)] + list(argv[1:]),
-            cwd=str(repo_root), capture_output=True, text=True,
+            cwd=str(repo_root), stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)[:200]

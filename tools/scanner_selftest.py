@@ -28,6 +28,7 @@ def run_test(name, file_content, filename, expected_exit, expected_keyword):
     try:
         result = subprocess.run(
             [sys.executable, scanner_path, str(test_file)],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',
@@ -40,6 +41,7 @@ def run_test(name, file_content, filename, expected_exit, expected_keyword):
         try:
             result = subprocess.run(
                 [sys.executable, scanner_path, str(test_file)],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 encoding='utf-8', errors='replace',
@@ -317,6 +319,7 @@ def main():
         try:
             r = subprocess.run(
                 [sys.executable, str(scanner_path), str(scanner_path)],
+                stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
             )
             self_ok = (r.returncode == 0 and "CLEAN" in r.stdout

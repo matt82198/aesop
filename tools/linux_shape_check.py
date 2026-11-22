@@ -143,6 +143,7 @@ def run_shell_tests_native(repo_root: Path, timeout: int = 120) -> Tuple[int, st
         result = subprocess.run(
             tripwired_argv(shell_suite_argv(), sys.executable),
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout,
         )
@@ -161,6 +162,7 @@ def run_node_tests_native(repo_root: Path, test_files: List[str], timeout: int =
             tripwired_argv(node_suite_argv(test_files), sys.executable),
             cwd=str(repo_root),
             env=env,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout,
         )
@@ -268,6 +270,7 @@ def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> T
     try:
         result = subprocess.run(
             ["wsl.exe", "bash", "-lc", cmd],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout,
         )
@@ -292,6 +295,7 @@ def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], ti
     try:
         result = subprocess.run(
             ["wsl.exe", "bash", "-lc", cmd],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout,
         )

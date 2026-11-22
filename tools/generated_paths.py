@@ -129,7 +129,7 @@ from typing import Dict, List, Optional
 
 USAGE = (
     "usage: generated_paths.py --list [--json]\n"
-    "       generated_paths.py --check [PATH ...]   (paths from stdin when omitted)\n"
+    "       generated_paths.py --check [--stdin] [PATH ...]   (paths from stdin when --stdin or piped)\n"
 )
 
 ALLOW_ENV = "AESOP_ALLOW_GENERATED"
@@ -305,7 +305,7 @@ def _git_stdout(*args: str) -> Optional[str]:
     """Stripped stdout of a git command, or None on any failure (callers fail closed)."""
     try:
         proc = subprocess.run(
-            ["git"] + list(args), capture_output=True, text=True,
+            ["git"] + list(args), stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -345,7 +345,7 @@ def _git_bytes(*args: str) -> Optional[bytes]:
     """Raw stdout bytes of a git command, or None on any failure (callers fail closed)."""
     try:
         proc = subprocess.run(
-            ["git"] + list(args), capture_output=True, timeout=120)
+            ["git"] + list(args), stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -357,7 +357,7 @@ def _git_rc(*args: str) -> int:
     """Exit code of a git command; non-zero (never raised) on any failure."""
     try:
         return subprocess.run(
-            ["git"] + list(args), capture_output=True, timeout=300).returncode
+            ["git"] + list(args), stdin=subprocess.DEVNULL, capture_output=True, timeout=300).returncode
     except (OSError, subprocess.SubprocessError):
         return 127
 
@@ -392,7 +392,7 @@ def regen_matches_head(path: str) -> bool:
             return False
         proc = subprocess.run(
             [sys.executable, str(script)] + list(argv[1:]),
-            cwd=str(wt), capture_output=True, timeout=300)
+            cwd=str(wt), stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
         if proc.returncode != 0:
             return False
         target = wt / path
@@ -448,6 +448,52 @@ def _emit_check(paths: List[str], as_json: bool) -> int:
     return 1
 
 
+def _stdin_has_input() -> bool:
+    """Return True when non-TTY stdin has buffered bytes, is at EOF, or is not a pipe."""
+    if sys.stdin is None:
+        return False
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return True
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        try:
+            handle = msvcrt.get_osfhandle(fd)
+        except OSError:
+            return True
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetFileType.argtypes = [wintypes.HANDLE]
+        kernel32.GetFileType.restype = wintypes.DWORD
+        kernel32.PeekNamedPipe.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.PeekNamedPipe.restype = wintypes.BOOL
+        if kernel32.GetFileType(wintypes.HANDLE(handle)) != 3:
+            return True
+        avail = wintypes.DWORD(0)
+        if not kernel32.PeekNamedPipe(
+            wintypes.HANDLE(handle), None, 0, None, ctypes.byref(avail), None
+        ):
+            return True
+        return avail.value > 0
+    import select
+
+    try:
+        readable, _, _ = select.select([fd], [], [], 0)
+        return bool(readable)
+    except (OSError, ValueError):
+        return True
+
+
 def main(argv: List[str]) -> int:
     if "--help" in argv or "-h" in argv:
         sys.stdout.write(__doc__ + "\n" + USAGE)
@@ -456,9 +502,10 @@ def main(argv: List[str]) -> int:
     as_json = "--json" in argv
     do_list = "--list" in argv
     do_check = "--check" in argv
+    read_stdin = "--stdin" in argv
     paths: List[str] = []
     for arg in argv:
-        if arg in ("--json", "--list", "--check"):
+        if arg in ("--json", "--list", "--check", "--stdin"):
             continue
         if arg.startswith("-"):
             sys.stderr.write("generated_paths: unknown flag %r\n%s" % (arg, USAGE))
@@ -468,6 +515,9 @@ def main(argv: List[str]) -> int:
     if do_list and do_check:
         sys.stderr.write("generated_paths: --list and --check are mutually exclusive\n" + USAGE)
         return 2
+    if read_stdin and not do_check:
+        sys.stderr.write("generated_paths: --stdin requires --check\n" + USAGE)
+        return 2
     if not do_list and not do_check:
         return _emit_list(as_json)
     if do_list:
@@ -476,7 +526,7 @@ def main(argv: List[str]) -> int:
             return 2
         return _emit_list(as_json)
 
-    if not paths and not sys.stdin.isatty():
+    if not paths and (read_stdin or (not sys.stdin.isatty() and _stdin_has_input())):
         paths = [line for line in sys.stdin.read().splitlines() if line.strip()]
     return _emit_check(paths, as_json)
 

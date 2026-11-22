@@ -232,6 +232,7 @@ def build(output_dir=None):
     server_proc = subprocess.Popen(
         [sys.executable, str(REPO_ROOT / "ui" / "serve.py"), "--demo"],
         env=env,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

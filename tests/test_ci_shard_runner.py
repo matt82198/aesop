@@ -206,5 +206,62 @@ class TestPytestTimeoutEnv(unittest.TestCase):
             self.assertIsNone(val)
 
 
+class TestSilentExitFailClosed(unittest.TestCase):
+    """Shard runner must fail closed when output lacks 'Ran N tests' or ran fewer than expected."""
+
+    def test_exit_0_without_summary_fails_closed_naming_last_test(self):
+        from tools.ci_shard_runner import judge_shard_output
+
+        out = (
+            "Shard 1: expected 12 test(s)\n"
+            "test_first (tests.test_a.T.test_first) ... ok\n"
+            "test_imports_humanize_lint (tests.test_tools_importable.TestToolsImportable.test_imports_humanize_lint) ... "
+        )
+        rc, reason = judge_shard_output(out, exit_code=0)
+        self.assertNotEqual(rc, 0)
+        self.assertIsNotNone(reason)
+        self.assertIn("test_imports_humanize_lint", reason)
+
+    def test_exit_0_with_fewer_tests_than_expected_fails_closed(self):
+        from tools.ci_shard_runner import judge_shard_output
+
+        out = (
+            "Shard 1: expected 10 test(s)\n"
+            "test_alpha (tests.test_a.T.test_alpha) ... ok\n"
+            "Ran 3 tests in 0.05s\n"
+            "OK\n"
+        )
+        rc, reason = judge_shard_output(out, exit_code=0)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("test_alpha", reason)
+
+    def test_exit_0_with_complete_summary_passes(self):
+        from tools.ci_shard_runner import judge_shard_output
+
+        out = (
+            "Shard 1: expected 3 test(s)\n"
+            "test_alpha (tests.test_a.T.test_alpha) ... ok\n"
+            "Ran 3 tests in 0.05s\n"
+            "OK\n"
+        )
+        rc, reason = judge_shard_output(out, exit_code=0)
+        self.assertEqual(rc, 0)
+        self.assertIsNone(reason)
+
+    def test_exit_0_with_class_skipped_accounting_passes(self):
+        from tools.ci_shard_runner import judge_shard_output
+
+        out = (
+            "Shard 1: expected 5 test(s)\n"
+            "Shard 1: class_skipped=3\n"
+            "test_alpha (tests.test_a.T.test_alpha) ... ok\n"
+            "Ran 2 tests in 0.05s\n"
+            "OK (skipped=1)\n"
+        )
+        rc, reason = judge_shard_output(out, exit_code=0)
+        self.assertEqual(rc, 0)
+        self.assertIsNone(reason)
+
+
 if __name__ == "__main__":
     unittest.main()

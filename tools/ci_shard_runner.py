@@ -21,8 +21,10 @@ Exit codes:
 """
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -176,6 +178,74 @@ def _parse_args(argv):
 
 
 _ISOLATION_ARMED_ENV = "AESOP_CI_SHARD_TRIPWIRE_ARMED"
+_EXPECTED_RE = re.compile(r"^Shard \d+: expected (\d+) test\(s\)", re.MULTILINE)
+_CLASS_SKIPPED_RE = re.compile(r"^Shard \d+: class_skipped=(\d+)", re.MULTILINE)
+_UNITTEST_RAN_RE = re.compile(r"^Ran (\d+) tests?\b", re.MULTILINE)
+_TEST_LINE_RE = re.compile(r"^([A-Za-z_]\w*\s+\([^()\r\n]+\))", re.MULTILINE)
+
+
+def last_started_test(output):
+    """Return the last verbosity=2 unittest test header seen in output, or None."""
+    matches = _TEST_LINE_RE.findall(output or "")
+    return matches[-1] if matches else None
+
+
+def judge_shard_output(output, exit_code, expected_count=None):
+    """Fail closed when a shard exits 0 without a complete 'Ran N tests' summary.
+
+    Returns (judged_exit_code, failure_reason_or_None).
+    """
+    if exit_code != 0:
+        return exit_code, None
+    text = output or ""
+    if expected_count is None:
+        exp_m = _EXPECTED_RE.search(text)
+        expected_count = int(exp_m.group(1)) if exp_m else None
+    skip_m = _CLASS_SKIPPED_RE.search(text)
+    class_skipped = int(skip_m.group(1)) if skip_m else 0
+    last_test = last_started_test(text) or "unknown"
+    m = _UNITTEST_RAN_RE.search(text)
+    if m is None:
+        return 1, f"shard exited 0 without 'Ran N tests' summary (last test started: {last_test})"
+    ran_count = int(m.group(1))
+    if expected_count is not None and (ran_count + class_skipped) < expected_count:
+        return 1, (
+            f"shard exited 0 after running {ran_count} (+{class_skipped} class-skipped) "
+            f"of {expected_count} expected tests (last test started: {last_test})"
+        )
+    if ran_count == 0 and class_skipped == 0:
+        return 1, f"shard exited 0 with 0 tests run (last test started: {last_test})"
+    return 0, None
+
+
+def _count_tests_by_scope(suite):
+    """Return (class_counts, module_counts) for tests in a unittest.TestSuite."""
+    class_counts = {}
+    module_counts = {}
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            sub_cls, sub_mod = _count_tests_by_scope(item)
+            for k, v in sub_cls.items():
+                class_counts[k] = class_counts.get(k, 0) + v
+            for k, v in sub_mod.items():
+                module_counts[k] = module_counts.get(k, 0) + v
+        else:
+            cls = item.__class__
+            cls_key = f"{cls.__module__}.{cls.__qualname__}"
+            class_counts[cls_key] = class_counts.get(cls_key, 0) + 1
+            module_counts[cls.__module__] = module_counts.get(cls.__module__, 0) + 1
+    return class_counts, module_counts
+
+
+def _pump_stream(pipe, dest, chunks):
+    """Stream lines from pipe to dest while recording them in chunks."""
+    try:
+        for line in iter(pipe.readline, ""):
+            chunks.append(line)
+            dest.write(line)
+            dest.flush()
+    finally:
+        pipe.close()
 
 
 def _arm_isolation_tripwire(target_argv):
@@ -184,19 +254,45 @@ def _arm_isolation_tripwire(target_argv):
     Without this, a Python test writing to the live fleet-state heartbeats or
     the real home profile passed every CI shard silently (the tripwire only
     wrapped the Node and shell suites). The child is marked armed via env so it
-    never re-wraps itself. Exit = max(shard exit, tripwire finding), per the
-    tripwire's own contract.
+    never re-wraps itself. Also enforces complete unittest summary output so a
+    silent mid-shard exit 0 never reads as green.
     """
     if os.environ.get(_ISOLATION_ARMED_ENV):
         return
     env = dict(os.environ)
     env[_ISOLATION_ARMED_ENV] = "1"
     tripwire = _TOOLS_DIR / "test_isolation_tripwire.py"
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         [sys.executable, str(tripwire), "--", *target_argv],
         env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
     )
-    sys.exit(proc.returncode)
+    out_chunks = []
+    err_chunks = []
+    t_out = threading.Thread(target=_pump_stream, args=(proc.stdout, sys.stdout, out_chunks), daemon=True)
+    t_err = threading.Thread(target=_pump_stream, args=(proc.stderr, sys.stderr, err_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+    rc = proc.wait()
+    t_out.join()
+    t_err.join()
+    skip_judge = (
+        "-h" in target_argv
+        or "--help" in target_argv
+        or "--emit-timing" in target_argv
+        or os.environ.get("PYTEST_TIMEOUT") is not None
+    )
+    if not skip_judge:
+        combined = "".join(out_chunks) + "\n" + "".join(err_chunks)
+        judged_rc, reason = judge_shard_output(combined, rc)
+        if reason:
+            print(f"ERROR: {reason}", file=sys.stderr, flush=True)
+            sys.exit(judged_rc)
+    sys.exit(rc)
 
 
 def main():
@@ -219,6 +315,7 @@ def main():
     try:
         result = subprocess.run(
             ["git", "ls-files", "tests/test_*.py"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',
@@ -258,7 +355,7 @@ def main():
         timeout = int(pytest_timeout) if pytest_timeout else 0
         cmd = build_pytest_args(shard_files, timeout=timeout or None)
         print(f"  pytest mode: {' '.join(cmd)}")
-        proc = subprocess.run(cmd)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL)
         sys.exit(proc.returncode)
 
     test_timings = {}
@@ -300,7 +397,8 @@ def main():
             print(f"  - {name}: {error}", file=sys.stderr)
         sys.exit(1)
 
-    if suite.countTestCases() == 0:
+    expected_count = suite.countTestCases()
+    if expected_count == 0:
         print(
             f"ERROR: No tests were collected for shard {shard_id}",
             file=sys.stderr,
@@ -327,9 +425,56 @@ def main():
         print(f"Timing written to {timing_out}")
         sys.exit(0)
 
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    sys.exit(0 if result.wasSuccessful() else 1)
+    class_counts, module_counts = _count_tests_by_scope(suite)
+    state = {"last_started": None}
+
+    class _TrackingResult(unittest.TextTestResult):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.class_skipped = 0
+
+        def startTest(self, test):
+            state["last_started"] = str(test)
+            super().startTest(test)
+            # Flush the test header immediately so a hard exit (e.g. os._exit)
+            # still leaves the last started test visible in parent output.
+            self.stream.flush()
+
+        def addSkip(self, test, reason):
+            desc = str(test)
+            if desc.startswith("setUpClass (") and desc.endswith(")"):
+                self.class_skipped += class_counts.get(desc[len("setUpClass ("):-1], 0)
+            elif desc.startswith("setUpModule (") and desc.endswith(")"):
+                self.class_skipped += module_counts.get(desc[len("setUpModule ("):-1], 0)
+            super().addSkip(test, reason)
+
+    print(f"Shard {shard_id}: expected {expected_count} test(s)", flush=True)
+    runner = unittest.TextTestRunner(verbosity=2, resultclass=_TrackingResult)
+    try:
+        result = runner.run(suite)
+    except SystemExit as exc:
+        print(
+            f"ERROR: shard {shard_id} aborted via SystemExit({exc.code}) before test summary "
+            f"(last test started: {state['last_started'] or 'unknown'})",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
+    if result.class_skipped:
+        print(f"Shard {shard_id}: class_skipped={result.class_skipped}", flush=True)
+    if not result.wasSuccessful():
+        sys.exit(1)
+    if (result.testsRun + result.class_skipped) < expected_count or (
+        result.testsRun == 0 and result.class_skipped == 0
+    ):
+        print(
+            f"ERROR: shard {shard_id} ran {result.testsRun} (+{result.class_skipped} class-skipped) "
+            f"of {expected_count} expected tests (last test started: {state['last_started'] or 'unknown'})",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
