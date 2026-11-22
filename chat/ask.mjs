@@ -3,6 +3,7 @@
 // child (chat/driver_source.mjs -> driver/turn.py --serve, spec H-R26). It holds no conversation state and
 // writes no history file.
 // Exit codes: 0 ok, 2 usage, 3 provider unreachable, 4 provider/model error, 5 timeout, 6 boundary refused.
+import { prepareChangeSummary } from './change_summary.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { driverSource } from './driver_source.mjs';
@@ -12,7 +13,7 @@ import { applyDefaultProvider, assertProviderAllowed, harnessSource, loadRegistr
 
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, UNREACHABLE: 3, PROVIDER: 4, TIMEOUT: 5, REFUSED: 6 });
 
-const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--proof-receipt] [--timeout <s>] "<prompt>"';
+const USAGE = 'usage: aesop ask [--model <provider>/<model>] [--system <text>] [--from <name>] [--json] [--proof-receipt] [--change-summary] [--timeout <s>] "<prompt>"';
 const DEFAULT_TIMEOUT_S = 300;
 
 /**
@@ -28,6 +29,7 @@ export function parseAskArgs(argv) {
     if (a === '--') { words.push(...argv.slice(i + 1)); break; }
     if (a === '--json') out.json = true;
     else if (a === '--proof-receipt') out.proofReceipt = true;
+    else if (a === '--change-summary') out.changeSummary = true;
     else if (a === '--model' || a === '--system' || a === '--from' || a === '--timeout') {
       const v = argv[i + 1];
       if (v === undefined) return { ...out, error: `${a} needs a value` };
@@ -160,7 +162,13 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
   if (stdin && !stdin.isTTY) context = await readAll(stdin);
   // Proof-receipt mode: the JSON packet on stdin is consumed by proofReceiptSchema and never sent as a context part.
   // The schema-constrained turn needs the native harness (driverSource has no responseSchema), so it goes there.
+  // Change-summary mode: the packet on stdin is consumed by prepareChangeSummary and never sent as a context part;
+  // the model receives the prompt plus the summary instructions, and the serialized facts are emitted afterwards.
+  if (args.proofReceipt && args.changeSummary) {
+    return finish(EXIT.USAGE, { provider, model, error: 'aesop ask: --proof-receipt and --change-summary cannot be combined' });
+  }
   let schema;
+  let summary;
   let promptText = args.prompt;
   if (args.proofReceipt) {
     try {
@@ -170,7 +178,15 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     }
     promptText += `\nReturn one eligible receipt ID as a JSON string. Choose "NONE" if there are no eligible IDs.\nResponse schema: ${JSON.stringify(schema)}`;
   }
-  const partContext = schema ? '' : context;
+  if (args.changeSummary) {
+    try {
+      summary = prepareChangeSummary(context);
+    } catch (err) {
+      return finish(EXIT.USAGE, { provider, model, error: `aesop ask: invalid change-summary input: ${err.message}` });
+    }
+    promptText += `\n\n${summary.prompt}`;
+  }
+  const partContext = schema || summary ? '' : context;
   const useHarness = backendFlag === 'harness' || schema !== undefined;
   const line = useHarness
     ? [args.system, partContext.trim() !== '' ? partContext.trimEnd() : '', promptText].filter(Boolean).join('\n\n')
@@ -194,13 +210,18 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     : makeSource(registry, () => ({ provider, model }), env, { notify, flash: () => {}, usage: () => {} });
 
   let text = '';
+  let reply = '';
+  const emit = chunk => {
+    text += chunk;
+    activity.chunk(chunk);
+    if (!args.json) stdout.write(chunk);
+  };
   try {
     for await (const chunk of source(line, { signal: controller.signal, ...turnOptions })) {
-      text += chunk;
-      if (!schema) {
-        activity.chunk(chunk);
-        if (!args.json) stdout.write(chunk);
-      }
+      // Proof-receipt replies are buffered until validated; change-summary replies are buffered until serialized.
+      if (schema) text += chunk;
+      else if (summary) reply += chunk;
+      else emit(chunk);
     }
   } catch (err) {
     clearTimeout(timer);
@@ -224,6 +245,7 @@ export async function runAsk({ argv, stdin, stdout, stderr, env = process.env, c
     activity.chunk(text);
     if (!args.json) stdout.write(text);
   }
+  if (summary) emit(summary.serialize(reply));
   if (!args.json && text !== '' && !text.endsWith('\n')) stdout.write('\n');
   return finish(EXIT.OK, { provider, model, text });
 }
