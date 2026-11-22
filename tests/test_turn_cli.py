@@ -14,7 +14,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import activity_feed_isolation  # noqa: E402,F401  (pins AESOP_ACTIVITY_FEED; see that module)
+import activity_feed_isolation  # noqa: E402
+activity_feed_isolation.pin()
 import unittest
 import urllib.error
 import socket
