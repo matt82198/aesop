@@ -72,7 +72,60 @@ test('gh run view prefixes supply metadata and prevent cross-step attribution', 
     'ci B\tOther\t' + stamp + 'FAIL: unscoped'];
   const [hit] = records(['--log', '-'], lines.join('\n'));
   assert.deepEqual([hit.job, hit.step, hit.test_id, hit.parent, hit.assertion],
-    ['ci B', 'Other', 'unknown', 'unknown', { line: 3, text: lines[2] }]);
+    ['ci B', 'Other', 'unknown', 'unknown', { line: 1, text: lines[2] }]);
+});
+
+// Original step files, before gh adds display columns. The same assertion occurs
+// twice with different timestamps so landing on its other occurrence fails.
+const jobUrl = 'https://github.com/example/project/actions/runs/741/job/852';
+const steps = [
+  { name: 'Prepare', number: 1, lines: [
+    '2026-11-01T01:00:00Z start', '2026-11-01T01:00:01Z ready',
+  ] },
+  { name: 'Run tests', number: 4, lines: [
+    '2026-11-01T01:01:00Z [TEST] Running: sample.sh',
+    '2026-11-01T01:01:01Z === Test 1: first ===',
+    '2026-11-01T01:01:02Z', '2026-11-01T01:01:03Z FAIL: mismatch',
+    '2026-11-01T01:01:04Z === Test 2: second ===',
+    '2026-11-01T01:01:05Z FAIL: mismatch',
+  ] },
+];
+const fixtureRows = steps.flatMap(s => s.lines.map(line => 'CI\t' + s.name + '\t' + line));
+
+test('GitHub pointers land on each original step assertion and timestamp', (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'ci-excerpt-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const jobs = [{ name: 'CI', url: jobUrl, steps: steps.map(({ name, number }) => ({ name, number })) }];
+  writeFileSync(join(cwd, 'jobs.json'), JSON.stringify({ jobs }));
+  const hits = records(['--log', '-', '--jobs', 'jobs.json'], fixtureRows.join('\r\n'), cwd);
+  assert.deepEqual(hits.map(h => h.test_id), ['sample.sh :: Test 1: first', 'sample.sh :: Test 2: second']);
+  assert.deepEqual(hits.map(h => h.source), [jobUrl + '#step:4:4', jobUrl + '#step:4:6']);
+  for (const hit of hits) {
+    const [, step, line] = new URL(hit.source).hash.split(':');
+    const landed = steps.find(s => s.number === Number(step)).lines[Number(line) - 1];
+    assert.equal(hit.assertion.line, Number(line));
+    assert.equal(hit.assertion.text, 'CI\tRun tests\t' + landed);
+  }
+});
+
+test('file pointers land on physical input lines across step boundaries', (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'ci-excerpt-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const file = join(cwd, 'run.log');
+  writeFileSync(file, fixtureRows.join('\n'));
+  const hits = records(['--log', 'run.log'], '', cwd);
+  assert.deepEqual(hits.map(h => h.source), ['run.log:6', 'run.log:8']);
+  const raw = readFileSync(file, 'utf8').split('\n');
+  for (const hit of hits) assert.equal(raw[Number(hit.source.split(':').pop()) - 1], hit.assertion.text);
+});
+
+test('excerpts without a unique assertion link to their observed failure evidence', () => {
+  const rows = ['FAIL: test_a (pkg.C.test_a)', '-----', 'AssertionError: one', 'AssertionError: two',
+    '[TEST] Running: orphan.sh', '[FAIL] orphan.sh (exit code: 1)',
+    'ci\tother\t2026-11-01T01:01:06Z ##[error]Process completed with exit code 1.'];
+  const hits = records(['--log', '-'], rows.join('\n'));
+  assert.deepEqual(hits.map(h => [h.assertion, h.source]),
+    [['unknown', '-:1'], ['unknown', '-:6'], ['unknown', '-:7']]);
 });
 
 test('empty result, help, bad arguments and unreadable input have distinct outcomes', () => {

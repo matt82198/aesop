@@ -768,7 +768,7 @@ Commands (Node.js):
   dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback; add --demo for a seeded zero-key snapshot)
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
-  excerpt                 Extract numbered CI failures: aesop excerpt --log <file|-> [--job ID] [--step NAME]
+  excerpt                 Extract numbered CI failures: aesop excerpt --log <file|-> [--job ID] [--step NAME] [--jobs jobs.json]
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
   pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format.
                           Bare aesop without a TTY on stdin/stdout is this filter; with a TTY, bare aesop scaffolds
