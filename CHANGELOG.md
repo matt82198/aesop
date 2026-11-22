@@ -126,7 +126,7 @@ Release that brings the npm package and the README in line with the current lice
 - #1387 fix(tests): retry rmSync on EPERM/EBUSY/ENOTEMPTY in dash-fresh-init cleanup
 - #1381 fix(stdio): single TTY seam, real EPIPE test, ship stdio/ in the tarball
 - #1374 fix(backup-fleet): prevent 22-minute autodiscovery hang with early heartbeat + timeout bounds
-- #1375 fix: status heartbeat path resolution prefers conductor3 (wrong-data P0) + machinery-map citations (f-58ff8836)
+- #1375 fix: status heartbeat path resolution prefers the machinery checkout (wrong-data P0) + machinery-map citations (f-58ff8836)
 - #1376 fix(tools): healthcheck UTF-8 output on Windows cp1252 consoles (f-6905850f)
 - #1364 fix(gates): claudemd_sync_gate resolves origin/<base> and fails closed instead of diffing HEAD~1
 - #1359 fix(receipts): _kill_process_tree reaches orphaned and re-sessioned descendants
