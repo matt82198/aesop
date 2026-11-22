@@ -468,7 +468,7 @@ function clockNow() {
  * @param {ReturnType<typeof loadRegistry>} registry
  * @param {() => {provider: string|null, model: string|null}} getSelection live status selection
  * @param {Record<string, string|undefined>} [env] source of key env vars (api_key_env)
- * @param {{notify?: (text: string) => void}} [options] receives transcript system lines
+ * @param {{notify?: (text: string) => void, responseSchema?: object}} [options] receives transcript system lines and optionally constrains native Ollama output
  * @returns {(line: string, opts?: {task?: string}) => AsyncGenerator<string>}
  */
 export function harnessSource(registry, getSelection, env = process.env, options = {}) {
@@ -562,6 +562,10 @@ export function harnessSource(registry, getSelection, env = process.env, options
     const base = String(entry.raw.base_url).replace(/\/+$/, '');
     const messages = [...prior, { role: 'user', content: String(line) }];
     const native = isOllama(entry);
+    if (options.responseSchema && !native) {
+      outcome.failure = new TurnFailure('config', 'structured output requires a native Ollama provider');
+      return outcome;
+    }
     let payload = { model, stream: true, messages };
     if (native) {
       const sized = sizeOllamaContext(messages, entry.raw);
@@ -571,6 +575,7 @@ export function harnessSource(registry, getSelection, env = process.env, options
       else if (last !== undefined && sized.numCtx > last) notify(`growing model window to ${sized.numCtx} (Ollama reloads the model; this can take ~20 s)`);
       lastNumCtx.set(key, sized.numCtx);
       payload = { model, stream: true, messages, options: { num_ctx: sized.numCtx } };
+      if (options.responseSchema) payload.format = options.responseSchema;
       if (sized.truncates) notify(`warning: input ~${sized.promptTokens} tokens exceeds the model window ${sized.numCtx}; the start will be cut`);
     }
     const body = JSON.stringify(payload);
