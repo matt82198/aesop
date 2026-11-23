@@ -336,6 +336,79 @@ function checkPrePushHook() {
   return { passed, hint };
 }
 
+// Headless worker CLI rows. Only the backend that seats.worker.backend selects is probed; the other
+// row is n/a and never counted. PATH is walked here (no shell): POSIX runs the file directly; Windows
+// runs .exe directly and .cmd/.bat through cmd.exe with a fixed argv (the resolved path is the only
+// interpolated value, and it comes from PATH, not from user input).
+const WORKER_CLI_BACKENDS = {
+  'codex-exec': { bin: 'codex' },
+  'agy-headless': { bin: 'agy' }
+};
+const CLI_PROBE_TIMEOUT_MS = 5000;
+
+/** The configured seats.worker.backend string, or null when unset or unreadable. */
+function readWorkerBackend() {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(CURRENT_DIR, 'aesop.config.json'), 'utf8'));
+    const backend = config && config.seats && config.seats.worker && config.seats.worker.backend;
+    return typeof backend === 'string' ? backend : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** First PATH match for `bin` (with Windows executable extensions), or null. */
+function resolveOnPath(bin) {
+  const isWin = process.platform === 'win32';
+  const exts = isWin ? ['.exe', '.cmd', '.bat'] : [''];
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, bin + ext);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch (e) {
+        // not in this directory; keep scanning PATH
+      }
+    }
+  }
+  return null;
+}
+
+/** Run `<file> --version` with a short timeout. Returns { ok, output } or { ok: false, detail }. */
+function probeCliVersion(file) {
+  const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(file);
+  const res = batch
+    ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${file}" --version`], {
+      encoding: 'utf8', timeout: CLI_PROBE_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: true
+    })
+    : spawnSync(file, ['--version'], { encoding: 'utf8', timeout: CLI_PROBE_TIMEOUT_MS, windowsHide: true });
+  if (res.error) {
+    return { ok: false, detail: res.error.code === 'ETIMEDOUT' ? `timed out after ${CLI_PROBE_TIMEOUT_MS}ms` : res.error.message };
+  }
+  if (res.status !== 0) return { ok: false, detail: `exited with status ${res.status}` };
+  const firstLine = (res.stdout || '').split(/\r?\n/).map(s => s.trim()).find(Boolean) || 'version unknown';
+  return { ok: true, output: firstLine };
+}
+
+/** Check row for one headless backend: n/a unless `selectedBackend` names it. */
+function checkWorkerCli(selectedBackend, backendName) {
+  const { bin } = WORKER_CLI_BACKENDS[backendName];
+  if (selectedBackend !== backendName) {
+    const shown = selectedBackend === null ? 'unset' : `"${selectedBackend}"`;
+    return { passed: true, na: true, hint: `n/a (seats.worker.backend is ${shown})` };
+  }
+  const file = resolveOnPath(bin);
+  if (!file) {
+    return { passed: false, hint: `${bin} not found on PATH: install ${bin} or add its directory to PATH` };
+  }
+  const probe = probeCliVersion(file);
+  if (!probe.ok) {
+    return { passed: false, hint: `${bin} --version failed (${probe.detail}): reinstall ${bin} or fix its PATH entry` };
+  }
+  return { passed: true, hint: `${bin} --version: ${probe.output}` };
+}
+
 // Dashboard port, resolved exactly as `aesop dash` does (tools/dash.js): a valid PORT env wins
 // (an invalid PORT falls back to 8770), else aesop.config.json dashboard.port, else 8770.
 const DEFAULT_DASHBOARD_PORT = 8770;
@@ -491,6 +564,8 @@ function formatRow(label, status, hint, na = false) {
       { label: 'Skills files (power & buildsystem)', fn: checkSkillsFiles },
       { label: 'Required directories (daemons, dash, monitor, tools, ui)', fn: () => checkDirectories(layout) },
       { label: 'Git pre-push hook installed', fn: checkPrePushHook },
+      { label: 'Codex CLI', fn: () => checkWorkerCli(readWorkerBackend(), 'codex-exec') },
+      { label: 'agy CLI', fn: () => checkWorkerCli(readWorkerBackend(), 'agy-headless') },
       ...PUSH_GATE_ARTIFACTS.map(artifact => ({
         label: `Push-gate artifact: ${artifact.file}`,
         fn: () => checkPushGateArtifact(artifact)
