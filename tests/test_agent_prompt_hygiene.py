@@ -26,6 +26,54 @@ def run_gate(root_dir):
 class TestAgentPromptHygiene(unittest.TestCase):
     """Test suite for agent_prompt_hygiene.py gate."""
 
+    def scan_driver_docstring(self, body):
+        """Write a driver module docstring to a temp tree and run the hygiene gate."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            driver_dir = Path(tmpdir) / "driver"
+            driver_dir.mkdir()
+            (driver_dir / "worker.py").write_text(f'"""\n{body}\n"""\n', encoding="utf-8")
+            return run_gate(tmpdir)
+
+    def test_dotted_env_identifiers_pass(self):
+        """Dotted identifiers containing .env (e.g. a.b.env_x) are not .env file references."""
+        for body in (
+            "Secrets stay private.\n\n\nSee seats.worker.env_passthrough.",
+            "Secrets stay private.\nSee a.b.env_x in config.",
+            "Find a.b.env in the settings.",
+            "Print a.b.env_x for diagnostics.",
+            "Print get_config().env for diagnostics.",
+            "Secrets stay private.\nSee .envoy for details.",
+        ):
+            with self.subTest(body=body):
+                code, _, stderr = self.scan_driver_docstring(body)
+                self.assertEqual(code, 0, stderr)
+
+    def test_env_file_at_end_of_window_fails(self):
+        """Real .env file references within the 3-line window still fail."""
+        for body, expected_span in (
+            ("Secrets\n\n\ncat .env", "Line 2-5: Credential hunting pattern across lines"),
+            ("Secrets\n\n\nread the .env file", "Line 2-5: Credential hunting pattern across lines"),
+            ("Secrets\n\n\nopen './config/.env.prod'", "Line 2-5: Credential hunting pattern across lines"),
+            ("Secrets\nSee a.b.env_x and .env", "Line 2-3: Credential hunting pattern across lines"),
+        ):
+            with self.subTest(body=body):
+                code, _, stderr = self.scan_driver_docstring(body)
+                self.assertEqual(code, 1, stderr)
+                self.assertIn(expected_span, stderr)
+
+    def test_env_file_single_line_actions_fail(self):
+        """Single-line file operations targeting .env paths still fail."""
+        for action, finding in (
+            ("cat .env", "Reading credential file"),
+            ("print a.b.env_x and .env", "Reading credential file"),
+            (r"find config\.env", "Searching .env files"),
+            ("find ./config/.env.local", "Searching .env files"),
+        ):
+            with self.subTest(action=action):
+                code, _, stderr = self.scan_driver_docstring(action)
+                self.assertEqual(code, 1, stderr)
+                self.assertIn(finding, stderr)
+
     def test_clean_prompt_passes(self):
         """Clean prompt file should pass."""
         with tempfile.TemporaryDirectory() as tmpdir:

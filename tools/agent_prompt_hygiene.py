@@ -11,6 +11,11 @@ lead to unsafe behavior:
 - Credential hunting
 - File read/cat operations on credential files
 
+Suppression: append `# hygiene-ok: <reason>` to a reviewed false-positive line.
+Covers single-line matches on that line and 3-line window matches where either
+the trigger line or the credential-file line carries the pragma; a reason is
+required and all other lines remain scanned.
+
 Fail-closed: exit 1 on violation, exit 0 on success, exit 2 on usage error.
 """
 
@@ -19,10 +24,12 @@ import re
 from pathlib import Path
 
 
+ENV_FILE_PATTERN = r"(?<![\w)\]])\.env\b"
+
 FORBIDDEN_PATTERNS = [
     # Patterns that look for credentials/keys
     (r"grep\s+.*\b(api_?key|token|secret|password)", "Grep for credentials"),
-    (r"find\s+.*\.env", "Searching .env files"),
+    (rf"find\s+.*{ENV_FILE_PATTERN}", "Searching .env files"),
     (r"look.*for.*api.*key", "Token hunting pattern"),
     (r"search.*credential", "Credential search pattern"),
     (r"find.*secret", "Secret search pattern"),
@@ -30,7 +37,7 @@ FORBIDDEN_PATTERNS = [
     (r"hunt\s+(for\s+)?(key|token|secret)", "Token hunting"),
     (r"env\s+variable.*secret", "Secret env var pattern"),
     # Natural language file operations: cat/open/print/copy the .env file
-    (r"(cat|open|print|copy)\s+.*\.env", "Reading credential file"),
+    (rf"(cat|open|print|copy)\s+.*{ENV_FILE_PATTERN}", "Reading credential file"),
 ]
 
 # Negation keywords that indicate policy/documentation rather than instructions
@@ -104,7 +111,7 @@ def check_file_for_patterns(filepath):
         # Case 2: Credential keywords (api/secret/key/token) on this line + file path next line
         action_verbs = ["read", "get", "fetch", "find", "look", "grep", "search", "scan"]
         cred_keywords = ["api", "secret", "key", "token", "password"]
-        file_paths = [".env", ".local", ".secrets", ".credentials"]
+        file_paths = [".local", ".secrets", ".credentials"]
 
         # Check for action verbs + file paths
         has_action_verb = any(verb in line_lower for verb in action_verbs)
@@ -117,7 +124,9 @@ def check_file_for_patterns(filepath):
                 future_line = lines[j - 1].lower()
 
                 # Look for credential file paths
-                if any(path in future_line for path in file_paths):
+                if re.search(ENV_FILE_PATTERN, future_line) or any(
+                    path in future_line for path in file_paths
+                ):
                     # Exclude patterns with environment variable reads (legitimate)
                     if "os.environ" in lines[j - 1] or "getenv" in lines[j - 1]:
                         continue
