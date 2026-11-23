@@ -21,10 +21,12 @@ Constraints:
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Adjust path to import driver modules.
 DRIVER_DIR = Path(__file__).resolve().parent.parent / "driver"
@@ -32,6 +34,7 @@ if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
 from claude_code_driver import ClaudeCodeDriver
+from agent_driver import WorkerRequest
 from backend_config import build_driver, describe_backend, load_backend_config
 
 
@@ -386,6 +389,40 @@ class TestProbeCapabilities(unittest.TestCase):
         driver = build_driver(config)
         caps = driver.probe_capabilities()
         self.assertEqual(caps.recommended_verification_tier, 3)
+
+
+class TestHeadlessCliBackends(unittest.TestCase):
+    """codex-exec / agy-headless backend names resolve through build_driver."""
+
+    def test_codex_exec_backend_builds_headless_driver(self):
+        driver = build_driver({"backend": "codex-exec"})
+        self.assertEqual(driver.name, "codex-exec")
+
+    def test_agy_headless_backend_builds_headless_driver(self):
+        driver = build_driver({"backend": "agy-headless"})
+        self.assertEqual(driver.name, "agy-headless")
+
+    def test_codex_exec_accepted_as_worker_seat(self):
+        driver = build_driver({"seats": {"worker": {"backend": "codex-exec"}}})
+        self.assertEqual(driver.name, "codex-exec")
+
+    def test_open_weight_config_reaches_codex_exec_argv(self):
+        driver = build_driver(
+            {"backend": "codex-exec", "provider": "ollama", "model": "qwen2.5-coder:32b"}
+        )
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-not-a-real-secret-value"}):
+            with mock.patch("headless_cli_driver.subprocess.run", return_value=completed) as run:
+                driver.dispatch_worker(
+                    WorkerRequest(prompt="p", workdir=tempfile.gettempdir())
+                )
+        argv = run.call_args.args[0]
+        env = run.call_args.kwargs.get("env")
+        self.assertIn("--oss", argv)
+        self.assertEqual(argv[argv.index("--local-provider") + 1], "ollama")
+        self.assertEqual(argv[argv.index("-m") + 1], "qwen2.5-coder:32b")
+        self.assertIsNotNone(env)
+        self.assertNotIn("OPENAI_API_KEY", env)
 
 
 if __name__ == "__main__":

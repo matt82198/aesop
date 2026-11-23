@@ -893,5 +893,49 @@ class TestReportRound2Fixes(unittest.TestCase):
             self.assertTrue(r.get("tracker_update_attempted"),
                             "exception envelope must carry tracker outcome")
 
+
+class TestHeadlessCliDriverSelection(unittest.TestCase):
+    """--driver codex-exec / agy-headless are accepted by the wave CLIs."""
+
+    def test_resolve_worker_driver_codex_exec(self):
+        from wave_scheduler import resolve_worker_driver
+        driver, err = resolve_worker_driver("codex-exec")
+        self.assertIsNone(err)
+        self.assertEqual(driver.name, "codex-exec")
+
+    def test_resolve_worker_driver_agy_headless(self):
+        from wave_scheduler import resolve_worker_driver
+        driver, err = resolve_worker_driver("agy-headless")
+        self.assertIsNone(err)
+        self.assertEqual(driver.name, "agy-headless")
+
+    def test_codex_exec_selection_needs_no_openai_key(self):
+        from wave_scheduler import resolve_worker_driver
+        from unittest import mock
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            driver, err = resolve_worker_driver("codex-exec", execute=True)
+        self.assertIsNone(err)
+        self.assertEqual(driver.name, "codex-exec")
+
+    def test_wave_scheduler_cli_accepts_codex_exec(self):
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, str(DRIVER_DIR / "wave_scheduler.py"),
+             "--driver", "codex-exec", "--help"],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_wave_loop_cli_accepts_agy_headless(self):
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, str(DRIVER_DIR / "wave_loop.py"),
+             "--driver", "agy-headless", "--help"],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

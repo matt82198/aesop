@@ -1225,8 +1225,48 @@ def resolve_worker_driver(
             return None, "claude_code_driver.py not found"
         return ClaudeCodeDriver(), None
 
+    if driver_override in ("codex-exec", "agy-headless"):
+        # Headless CLI worker. No OpenAI key is needed: the CLI uses its own
+        # login. provider/model/env_passthrough/timeout_s come from
+        # seats.worker only when that seat names this same backend; otherwise
+        # the driver uses its defaults (no open-weight routing).
+        try:
+            from headless_cli_driver import HeadlessCliDriver
+            from backend_config import load_backend_config
+        except ImportError:
+            return None, (
+                f"--driver {driver_override} requires headless_cli_driver.py "
+                "and backend_config.py"
+            )
+        try:
+            config = load_backend_config(config_path)
+        except (TypeError, ValueError) as exc:
+            return None, f"invalid aesop.config.json: {exc}"
+        seats = config.get("seats")
+        seat = {}
+        if (
+            isinstance(seats, dict)
+            and isinstance(seats.get("worker"), dict)
+            and config.get("backend") == driver_override
+        ):
+            seat = config
+        try:
+            driver = HeadlessCliDriver(
+                driver_override,
+                model=seat.get("model"),
+                provider=seat.get("provider"),
+                env_passthrough=seat.get("env_passthrough", ()),
+                timeout_s=seat.get("timeout_s", 600.0),
+            )
+        except (TypeError, ValueError) as exc:
+            return None, f"--driver {driver_override}: {exc}"
+        return driver, None
+
     if driver_override is not None:
-        return None, f"unknown --driver '{driver_override}' (claude|codex)"
+        return None, (
+            f"unknown --driver '{driver_override}' "
+            "(claude|codex|codex-exec|agy-headless)"
+        )
 
     # Default: read the config (seats.worker or legacy backend block).
     try:
@@ -1372,14 +1412,14 @@ def main():
     )
     parser.add_argument(
         "--driver",
-        choices=["claude", "codex"],
+        choices=["claude", "codex", "codex-exec", "agy-headless"],
         default=None,
         help=(
-            "OVERRIDE the configured worker seat (claude|codex). "
-            "Default: read aesop.config.json seats.worker (no seats block "
-            "-> claude; a legacy flat backend block stays inert -- migrate "
-            "it to seats.worker); the config path also supports "
-            "openai-compatible backends"
+            "OVERRIDE the configured worker seat (claude|codex|codex-exec|"
+            "agy-headless). Default: read aesop.config.json seats.worker (no "
+            "seats block -> claude; a legacy flat backend block stays inert -- "
+            "migrate it to seats.worker); the config path also supports "
+            "openai-compatible and headless CLI backends"
         ),
     )
     parser.add_argument(
