@@ -952,6 +952,42 @@ class TestHeadroomMergeUnion(unittest.TestCase):
 
     # --- Fixture 3: unreadable -> exit 2 --------------------------------------
 
+    def test_conflicted_union_cannot_be_measured(self):
+        from claudemd_lint import _union_via_three_way
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir, branch_prepend=1, main_append=1)
+            # Both branches append a different line after the same final base line.
+            with (repo / rel).open("a", encoding="utf-8") as f:
+                f.write("feature tail\n")
+            self._run_git(repo, "commit", "-qam", "conflicting tail")
+
+            with self.subTest(preview="cli"):
+                res = subprocess.run(
+                    [sys.executable, str(LINT_SCRIPT), "--root", str(repo), "--headroom",
+                     "--base-ref", "main", "--max-lines", "102"],
+                    capture_output=True, encoding="utf-8",
+                )
+                self.assertEqual(res.returncode, 2, (res.stdout + res.stderr).strip())
+                self.assertIn("merge conflict, cannot measure", res.stderr)
+                self.assertEqual(res.stdout, "")
+
+            with self.subTest(preview="old git fallback"):
+                with self.assertRaisesRegex(HeadroomError, "merge conflict, cannot measure"):
+                    _union_via_three_way(repo, "main", "HEAD")
+
+    def test_unrelated_conflict_does_not_hide_claudemd_cap_bust(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir)
+            for branch in ("main", "feature/headroom"):
+                self._run_git(repo, "checkout", "-q", branch)
+                (repo / "other.txt").write_text(branch, encoding="utf-8")
+                self._run_git(repo, "add", "other.txt")
+                self._run_git(repo, "commit", "-qm", "conflict outside CLAUDE.md")
+
+            counts = compute_union_line_counts(repo, base_ref="main", head_ref="HEAD")
+            self.assertEqual(counts[rel], 151)
+
     def test_missing_base_ref_raises_headroom_error(self):
         """An unresolvable base ref is UNREADABLE, not a violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
