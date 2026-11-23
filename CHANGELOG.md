@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.12.1] - 2026-11-23
+
+Patch release. The shipped Python files compile on Python 3.10 and 3.11, so `aesop doctor` passes on 3.11 and adopters on 3.10 and 3.11 are no longer broken by syntax the floor cannot parse (#1477). This section covers the merged PRs between v0.12.0 and origin/main.
+
+### Fixed
+
+- #1477 fix: keep shipped Python syntax compatible with 3.10
+- #1474 fix(ask): split excess CLAUDE.md lines without a model
+- #1471 fix(chat): serialize change summary facts in ask
+- #1465 fix(ci): regenerate py shard timing from measured serial runs (4 shards, max 417 s; cap unchanged)
+
+### Added
+
+- #1472 ask: constrain proof receipt selection to eligible scalar IDs
+- #1460 feat(chat): aesop ask spawns the driver turn engine (TUI driver P6)
+- #1464 feat(chat): peer bus v3 - /codex, /codex-app, /agy, /peers and aesop post
+- #1466 feat(chat): one shared activity feed under ~/.aesop plus a Python emitter, so driver and peer jobs show in the TUI
+- #1470 Extract CI failures with exact source-line links
+
+### Changed
+
+- #1413 event store: append failure modes (durable-but-head-failed, torn tail, stale temp head)
+- #1467 docs(readme): bump release version to 0.12.0 and add regression test
+
 ## [0.12.0] - 2026-11-21
 
 Release that brings the npm package and the README in line with the current license. The project is MIT-licensed from 2026-10-27 (commit ee9ed649, #1330, which relicensed from PolyForm Noncommercial 1.0.0); npm `latest` 0.11.0 still carried the PolyForm notice. This section covers the merged PRs between v0.11.0 and origin/main.

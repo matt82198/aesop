@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.12.0/assets/logo.png" alt="Aesop" width="420">
+  <img src="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.12.1/assets/logo.png" alt="Aesop" width="420">
 </p>
 
 <p align="center">
@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.12.0/assets/clips/lens-fanout-haiku-pin.mp4">Watch the wave opening and audit fleet fanout (MP4, 0.5 MB)</a>
+  <a href="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.12.1/assets/clips/lens-fanout-haiku-pin.mp4">Watch the wave opening and audit fleet fanout (MP4, 0.5 MB)</a>
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-> **Status.** Version 0.12.0 (`package.json:3`). The receipt gate is in a measurement period: the hosted `verify-receipt` check is not required (`docs/archive/RECEIPT-GATE.md:3-4`). The hooks that dispatch lanes and bind claims to evidence live in private repositories and are not shipped here (`docs/PROVENANCE.md:20-26`, [what is public and what is not](./docs/provenance/public-and-private.md)).
+> **Status.** Version 0.12.1 (`package.json:3`). The receipt gate is in a measurement period: the hosted `verify-receipt` check is not required (`docs/archive/RECEIPT-GATE.md:3-4`). The hooks that dispatch lanes and bind claims to evidence live in private repositories and are not shipped here (`docs/PROVENANCE.md:20-26`, [what is public and what is not](./docs/provenance/public-and-private.md)).
 
 ## Blueprint
 
@@ -53,7 +53,7 @@ The pre-push policy holds 23 checks <!-- count: grep -cE '^check_[a-z_]+\(\)' ho
 
 Blue boxes ship in the npm package. Yellow boxes are yours to provide. Grey dashed boxes are examples that show one way to structure the system.
 
-![Kernel boundary](https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.12.0/docs/img/kernel-boundary.svg)
+![Kernel boundary](https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.12.1/docs/img/kernel-boundary.svg)
 
 Mermaid source: [docs/img/kernel-boundary.mmd](./docs/img/kernel-boundary.mmd)
 
