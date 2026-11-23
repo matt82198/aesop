@@ -1,5 +1,5 @@
 # tools/ — Build utilities
-Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
+Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Shipped Python files must compile on Python 3.10, the minimum version checked by `aesop doctor`.
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0. Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
 - In worktrees use ABSOLUTE paths under the worktree for every write; redaction and path-handling code must genericize over Windows profile names (use `[A-Za-z0-9_]+` regex, not hardcoded) so checkout works across shared boxes.
