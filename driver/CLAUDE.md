@@ -7,10 +7,8 @@
 - **agent_driver.py** — the `AgentDriver` ABC + capability/request/result dataclasses. The contract. stdlib-only, no provider SDKs.
 - **claude_code_driver.py** — reference adapter (Claude Code parity): two ops concrete Python, three serviced by the harness.
 - **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend: dispatch_worker (file injection, JSON retry), run_command (own `command_timeout_s` knob, defaults to timeout_s), worker_status, get_tokens_spent. Transport injectable.
-- **proc_util.py** — `run_shell_bounded()`: shared run_command backing (RS-A F1/F7). Timeout
-  truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree is killed
-  (taskkill /T /F Windows, killpg POSIX), exit 124 promptly, partial output preserved. Never
-  subprocess.run(shell=True, timeout=) — Windows kills only cmd.exe then re-blocks on the orphaned grandchild.
+- **headless_cli_driver.py** — `HeadlessCliDriver` (AgentDriver) for local headless agent CLIs. One isolated process per `dispatch_worker()` in the request workdir. Profiles (`PROFILES`): `codex-exec` (`codex exec`, prompt on stdin, `--sandbox workspace-write`, `--output-last-message` as the text channel; open-weight via `--oss --local-provider {ollama,lmstudio}`) and `agy-headless` (`agy -p ... --output-format json --mode accept-edits`; no provider flag, so a `provider` override is rejected). `model` passes as `-m` (codex-exec) or `--model` (agy-headless). `validate_headless_options()` runs at config load. Env is an allow-list (`DEFAULT_ENV_ALLOWLIST` plus `seats.worker.env_passthrough`). Never sets `WorkerResult.verified`. Backend names `codex-exec` and `agy-headless` are wired in `backend_config.py` (`_HEADLESS_WORKER_BACKENDS`) and selectable via `--driver` in `wave_loop.py`.
+- **proc_util.py** — `run_shell_bounded()`: shared run_command backing (RS-A F1/F7). Timeout truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree is killed (taskkill /T /F Windows, killpg POSIX), exit 124 promptly, partial output preserved. Never subprocess.run(shell=True, timeout=) — Windows kills only cmd.exe then re-blocks on the orphaned grandchild.
 - **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable
   seam (FakeTransport in tests: no API key or network).
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
