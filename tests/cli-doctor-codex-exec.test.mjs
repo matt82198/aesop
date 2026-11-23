@@ -162,14 +162,23 @@ test('other backend: both CLI rows print n/a and neither affects the exit code',
     'missing codex/agy must not change the exit code when the backend is claude');
 });
 
-test('exit code is non-zero only for the FAIL case: codex-exec present PASSes, codex absent FAILs', () => {
-  setWorkerBackend('codex-exec');
+// Ruling R-DOCTOR-CLI-1: the exit assertions must not depend on this box (port 8771, pre-push hook).
+// Every run here shares one fixture, so the only variable is whether codex resolves on PATH.
+test('exit code: codex absent FAILs and exits nonzero; codex present leaves the exit equal to the claude-backend run', () => {
   const shim = tempShimDir('exit-pass');
   writeFakeCli(shim, 'codex', FAKE_VERSION);
+  setWorkerBackend('claude');
+  const baseline = runDoctor(envWithPath(fleetEnv, shim));
+  setWorkerBackend('codex-exec');
   const pass = runDoctor(envWithPath(fleetEnv, shim));
   const fail = runDoctor(envWithPath(fleetEnv, null, ['codex']));
   assert.equal(cliRow(pass.report, 'Codex CLI').passed, true, 'precondition: codex present must PASS');
   assert.equal(cliRow(fail.report, 'Codex CLI').passed, false, 'precondition: codex absent must FAIL');
-  assert.equal(fail.status, 1, 'doctor must exit 1 when the Codex CLI check FAILs');
-  assert.equal(pass.status, 0, 'doctor must exit 0 when every counted check (incl. Codex CLI) PASSes');
+  assert.notEqual(fail.status, 0, 'doctor must exit nonzero when the Codex CLI check FAILs');
+  assert.equal(pass.status, baseline.status,
+    'with codex present the exit must equal the backend=claude run on the same fixture');
+  const presentStatus = Object.fromEntries(pass.report.checks.map(c => [c.label, c.passed]));
+  const absentStatus = Object.fromEntries(fail.report.checks.map(c => [c.label, c.passed]));
+  const differing = Object.keys(presentStatus).filter(label => presentStatus[label] !== absentStatus[label]);
+  assert.deepEqual(differing, ['Codex CLI'], 'the Codex CLI row must be the only row whose status differs');
 });
