@@ -53,18 +53,18 @@ The harness is organized into three layers:
 
 ### 1. Typed hook denials (`schemas/gate-denial.v1.json` and `hooks/claude/gate-denial.mjs`)
 
-Pre-tool hooks refuse disallowed tool shapes before execution. The shared emitter `hooks/claude/gate-denial.mjs` preserves existing denial rules and outputs both the human-readable `GATE-DENY` line and a structured payload conforming to `schemas/gate-denial.v1.json`:
+Pre-tool hooks refuse disallowed tool shapes before execution. The shared emitter `hooks/claude/gate-denial.mjs` preserves existing denial rules in shipped guards such as [../hooks/claude/no-heredoc-file-authoring.mjs](../hooks/claude/no-heredoc-file-authoring.mjs) and [../hooks/claude/no-scrollback-as-record.mjs](../hooks/claude/no-scrollback-as-record.mjs), outputting both the human-readable `GATE-DENY` line and a structured payload conforming to `schemas/gate-denial.v1.json`:
 
 ```json
 {
   "v": 1,
   "deny": true,
   "gate": "no-heredoc-file-authoring",
-  "reason": "Heredocs are banned in shell commands; write a file directly instead.",
+  "reason": "Heredocs are banned in Bash commands. Write a script file with the Write tool, then run it.",
   "remedy": {
     "action": "use_tool",
     "args": {
-      "tool": "Write"
+      "tools": ["Write", "Edit"]
     }
   },
   "allowed_tools": ["Write", "Edit"]
@@ -80,31 +80,56 @@ Allowed `remedy.action` values are closed under v1:
 
 ### 2. Hand-back verifier (`tools/verify_handback.py`)
 
-`tools/verify_handback.py` runs as a deterministic gate between worker completion and orchestrator review. It rejects a lane hand-back before the orchestrator reads it unless all four checks pass:
+`tools/verify_handback.py` runs as a deterministic gate between worker completion and orchestrator review. It rejects a lane hand-back before the orchestrator reads it unless all four checks (`receipt`, `worktree_clean`, `scope`, and `tests`) pass:
 
-1. **Signed receipt verifies:** invokes [../tools/verify_receipt.py](../tools/verify_receipt.py) as a library to confirm the Ed25519 or HMAC-SHA256 signature and recomputed git tree hash (`exit 0`).
-2. **Clean worktree:** confirms the worker left no uncommitted or untracked residue in its worktree.
-3. **Scoped diff:** verifies every changed path between base and head matches the lane's declared scope globs from the brief or hand-back.
-4. **Passing test run:** confirms the recorded `test_run` command finished with `exit_code` equal to `0`.
+1. **Signed receipt verifies (`checks.receipt`):** invokes [../tools/verify_receipt.py](../tools/verify_receipt.py) as a library to confirm the Ed25519 or HMAC-SHA256 signature and recomputed git tree hash (`exit 0`).
+2. **Clean worktree (`checks.worktree_clean`):** confirms the worker left no uncommitted or untracked residue in its worktree (`dirty_paths` empty).
+3. **Scoped diff (`checks.scope`):** verifies every changed path between base and head matches the lane's `declared_scope` globs from the brief or hand-back (`out_of_scope` empty).
+4. **Passing test run (`checks.tests`):** confirms the recorded `test_run` command finished with `exit_code` equal to `0`.
 
-The verifier emits a typed JSON verdict (`ACCEPT|REJECT|ERROR`):
+The verifier emits a typed v1 JSON verdict (`ACCEPT|REJECT|ERROR`):
 
 ```json
 {
+  "v": 1,
+  "ok": true,
   "verdict": "ACCEPT",
+  "lane": "retry-ledger",
+  "head_sha": "0123456789abcdef0123456789abcdef01234567",
   "checks": {
-    "receipt_valid": true,
-    "worktree_clean": true,
-    "scope_clean": true,
-    "test_run": {
-      "exit_code": 0
+    "receipt": {
+      "ok": true,
+      "status": "PASS",
+      "exit_code": 0,
+      "reasons": []
+    },
+    "worktree_clean": {
+      "ok": true,
+      "status": "PASS",
+      "dirty_paths": [],
+      "reasons": []
+    },
+    "scope": {
+      "ok": true,
+      "status": "PASS",
+      "declared_scope": ["tools/retry_ledger.py", "tests/test_retry_ledger.py"],
+      "diff_paths": ["tools/retry_ledger.py", "tests/test_retry_ledger.py"],
+      "out_of_scope": [],
+      "reasons": []
+    },
+    "tests": {
+      "ok": true,
+      "status": "PASS",
+      "command": "python -m unittest tests.test_retry_ledger -v",
+      "exit_code": 0,
+      "reasons": []
     }
   },
-  "errors": []
+  "reasons": []
 }
 ```
 
-`ACCEPT` advances the hand-back to the orchestrator, `REJECT` routes a structured failure to the retry ledger when a check fails, and `ERROR` fails closed when inputs, git state, or receipt material cannot be evaluated.
+`ACCEPT` (`exit 0`) advances the hand-back to the orchestrator, `REJECT` (`exit 1`) routes a structured failure to the retry ledger when a check fails, and `ERROR` (`exit 2`) fails closed when inputs, git state, or receipt material cannot be evaluated.
 
 ### 3. Mechanical retry ledger (`tools/retry_ledger.py`)
 

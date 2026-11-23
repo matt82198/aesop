@@ -124,7 +124,7 @@ class TestDeterministicHarnessDoc(unittest.TestCase):
         self.assertGreaterEqual(line_count, 60, "Doc is unexpectedly tiny")
         self.assertLessEqual(
             line_count,
-            220,
+            200,
             f"Doc should remain a concise one-page reference (got {line_count} lines)",
         )
 
@@ -188,6 +188,8 @@ class TestDeterministicHarnessDoc(unittest.TestCase):
             "daemons/run-watchdog.sh",
             "schemas/gate-denial.v1.json",
             "hooks/claude/gate-denial.mjs",
+            "hooks/claude/no-heredoc-file-authoring.mjs",
+            "hooks/claude/no-scrollback-as-record.mjs",
             "tools/verify_handback.py",
             "tools/retry_ledger.py",
         ):
@@ -199,6 +201,8 @@ class TestDeterministicHarnessDoc(unittest.TestCase):
         self.assertIn("../daemons/run-watchdog.sh", link_targets)
         self.assertIn("../tools/event_store/store.py", link_targets)
         self.assertIn("../state_store/store.py", link_targets)
+        self.assertIn("../hooks/claude/no-heredoc-file-authoring.mjs", link_targets)
+        self.assertIn("../hooks/claude/no-scrollback-as-record.mjs", link_targets)
 
         broken: list[str] = []
         for _, target in links:
@@ -237,9 +241,16 @@ class TestDeterministicHarnessDoc(unittest.TestCase):
             set(denial.keys()),
             {"v", "deny", "gate", "reason", "remedy", "allowed_tools"},
         )
-        self.assertIn("action", denial["remedy"])
-        self.assertIn("args", denial["remedy"])
-        self.assertIsInstance(denial["allowed_tools"], list)
+        self.assertEqual(denial["gate"], "no-heredoc-file-authoring")
+        self.assertEqual(
+            denial["reason"],
+            "Heredocs are banned in Bash commands. Write a script file with the Write tool, then run it.",
+        )
+        self.assertEqual(
+            denial["remedy"],
+            {"action": "use_tool", "args": {"tools": ["Write", "Edit"]}},
+        )
+        self.assertEqual(denial["allowed_tools"], ["Write", "Edit"])
 
         for action in ("dispatch_reader", "retry_with", "use_tool", "stop_and_report"):
             self.assertIn(action, text, f"Missing gate-denial remedy action: {action}")
@@ -268,6 +279,55 @@ class TestDeterministicHarnessDoc(unittest.TestCase):
             "stale(threshold_s)",
         ):
             self.assertIn(ledger_term, text, f"Missing retry_ledger term: {ledger_term}")
+
+    def test_verify_handback_v1_verdict_schema(self):
+        text = HARNESS_DOC.read_text(encoding="utf-8")
+        json_blocks = [
+            json.loads(body)
+            for lang, body in extract_fenced_blocks(text)
+            if lang == "json"
+        ]
+        handback_payloads = [
+            obj for obj in json_blocks
+            if isinstance(obj, dict) and "verdict" in obj
+        ]
+        self.assertEqual(
+            len(handback_payloads),
+            1,
+            "Expected exactly one verify_handback v1 verdict JSON example",
+        )
+        verdict = handback_payloads[0]
+        self.assertEqual(
+            set(verdict.keys()),
+            {"v", "ok", "verdict", "lane", "head_sha", "checks", "reasons"},
+        )
+        self.assertEqual(verdict["v"], 1)
+        self.assertIs(verdict["ok"], True)
+        self.assertEqual(verdict["verdict"], "ACCEPT")
+        self.assertIsInstance(verdict["lane"], str)
+        self.assertIsInstance(verdict["head_sha"], str)
+        self.assertIsInstance(verdict["reasons"], list)
+        self.assertIsInstance(verdict["checks"], dict)
+        self.assertEqual(
+            set(verdict["checks"].keys()),
+            {"receipt", "worktree_clean", "scope", "tests"},
+        )
+        self.assertEqual(
+            set(verdict["checks"]["receipt"].keys()),
+            {"ok", "status", "exit_code", "reasons"},
+        )
+        self.assertEqual(
+            set(verdict["checks"]["worktree_clean"].keys()),
+            {"ok", "status", "dirty_paths", "reasons"},
+        )
+        self.assertEqual(
+            set(verdict["checks"]["scope"].keys()),
+            {"ok", "status", "declared_scope", "diff_paths", "out_of_scope", "reasons"},
+        )
+        self.assertEqual(
+            set(verdict["checks"]["tests"].keys()),
+            {"ok", "status", "command", "exit_code", "reasons"},
+        )
 
     def test_readme_and_docs_index_links(self):
         readme_text = ROOT_README.read_text(encoding="utf-8")
