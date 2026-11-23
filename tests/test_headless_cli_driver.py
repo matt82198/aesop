@@ -151,13 +151,14 @@ class TestCodexExecArgv(_RepoCase):
         self.dispatch("codex-exec", fake)
         self.assertEqual(calls[0][1]["cwd"], str(self.workdir))
 
-    def test_cd_and_sandbox_flags(self):
-        # codex exec --help: -C/--cd <DIR>; -s/--sandbox {read-only,workspace-write,danger-full-access}
+    def test_cd_and_automatic_review_flags(self):
         fake, calls = _make_fake_run(last_message="ok")
         self.dispatch("codex-exec", fake)
         argv = calls[0][0]
         self.assertEqual(argv[argv.index("--cd") + 1], str(self.workdir))
-        self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace-write")
+        self.assertIn("--approve-for-me", argv)
+        # The CLI rejects an explicit sandbox alongside its workspace-write preset.
+        self.assertNotIn("--sandbox", argv)
 
     def test_prompt_is_stdin_not_argv(self):
         # codex exec --help: PROMPT omitted or "-" reads instructions from stdin.

@@ -5,7 +5,7 @@ Each dispatch_worker() call runs ONE isolated headless CLI process in the
 request's workdir and returns its outcome. Profiles:
 
   * "codex-exec"   -- ``codex exec``. The prompt is written to stdin (``-``),
-    ``--cd <workdir>`` and ``--sandbox workspace-write`` bound the worker, and
+    ``--approve-for-me`` selects automatic review with workspace-write in ``--cd <workdir>``, and
     ``--output-last-message <tmpfile>`` is the text channel. Open-weight:
     ``--oss --local-provider {ollama,lmstudio}`` plus ``-m <model>``.
   * "agy-headless" -- ``agy -p <prompt> --output-format json --print-timeout 0
@@ -364,8 +364,7 @@ class HeadlessCliDriver(AgentDriver):
             "exec",
             "--cd",
             workdir,
-            "--sandbox",
-            "workspace-write",
+            "--approve-for-me",
             "--output-last-message",
             last_message,
         ]
