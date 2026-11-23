@@ -187,9 +187,8 @@ def main():
                     applied += 1
                 else:
                     missed += 1
-                    miss_details.append(
-                        f"{fmt_time(o['ts'])} {(o['input'].get('old_string') or '')[:50].replace(chr(10), '\\n')}"
-                    )
+                    preview = (o["input"].get("old_string") or "")[:50].replace("\n", "\\n")
+                    miss_details.append(f"{fmt_time(o['ts'])} {preview}")
             elif o["tool"] == "MultiEdit":
                 for e in o["input"].get("edits") or []:
                     r = apply_edit(
@@ -203,9 +202,8 @@ def main():
                         applied += 1
                     else:
                         missed += 1
-                        miss_details.append(
-                            f"{fmt_time(o['ts'])} [multi] {(e.get('old_string') or '')[:50].replace(chr(10), '\\n')}"
-                        )
+                        preview = (e.get("old_string") or "")[:50].replace("\n", "\\n")
+                        miss_details.append(f"{fmt_time(o['ts'])} [multi] {preview}")
 
         changed = live_ok and text != (
             open(live_path, "r", encoding="utf-8").read() if live_ok else ""
