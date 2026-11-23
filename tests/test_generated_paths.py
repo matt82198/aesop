@@ -242,6 +242,37 @@ class TestCliContract(CliTestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn(generated_paths.ALLOW_ENV, res.stdout)
 
+    def test_check_does_not_block_on_open_stdin_pipe(self):
+        with tempfile.TemporaryDirectory() as neutral:
+            proc = subprocess.Popen(  # subprocess-ok
+                [sys.executable, str(TOOL), "--check"],
+                cwd=neutral,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+            )
+            try:
+                rc = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+                self.fail("generated_paths.py --check blocked on open stdin pipe")
+            finally:
+                if proc.stdin:
+                    proc.stdin.close()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+            self.assertEqual(rc, 0)
+
+    def test_check_explicit_stdin_flag_reads_piped_paths(self):
+        res = self.run_cli(["--check", "--stdin"], stdin_text="tools/INDEX.md\n")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("tools/INDEX.md", res.stderr)
+
 
 def _rmtree_chmod_onerror(func, path, exc_info):
     """shutil.rmtree onerror: clear the read-only bit, then retry the failed op.
@@ -420,7 +451,7 @@ def _run(argv, cwd):
     """Run a python tool with an explicit cwd and utf-8 decoding."""
     return subprocess.run(
         [sys.executable] + [str(a) for a in argv],
-        cwd=str(cwd), capture_output=True, text=True,
+        cwd=str(cwd), stdin=subprocess.DEVNULL, capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=120)
 
 

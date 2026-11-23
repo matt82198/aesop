@@ -235,6 +235,7 @@ def run_tests(test_module_path: str, work_dir: str, timeout: int = 30) -> Tuple[
         result = subprocess.run(
             cmd,
             cwd=work_dir,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',

@@ -198,8 +198,8 @@ def _run_push_gate_generator(target, script, args):
     try:
         proc = subprocess.run(
             [sys.executable, str(TOOLS_DIR / script), *args],
-            cwd=str(target), capture_output=True, encoding="utf-8", errors="replace",
-            timeout=120,
+            cwd=str(target), stdin=subprocess.DEVNULL, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return str(exc)

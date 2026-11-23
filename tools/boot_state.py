@@ -179,8 +179,8 @@ def run_ingest(state_dir: Path, jsonl: Path | None, *, timeout_s: int = INGEST_T
         argv += ["--jsonl", str(jsonl)]
     try:
         proc = subprocess.run(
-            argv, capture_output=True, encoding="utf-8", errors="replace",
-            timeout=timeout_s, check=False,
+            argv, stdin=subprocess.DEVNULL, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=timeout_s, check=False,
         )
     except subprocess.TimeoutExpired:
         return f"timed out after {timeout_s}s"

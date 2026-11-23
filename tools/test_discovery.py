@@ -253,6 +253,7 @@ def validate_testcmd(testcmd: str, repo_path: Path, timeout_sec: int = 120) -> D
             ro_cmd,
             shell=True,
             cwd=str(repo_path),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8", errors="replace",

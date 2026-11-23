@@ -77,6 +77,7 @@ def run(
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             capture_output=capture,
             text=True,
             encoding='utf-8', errors='replace',
@@ -175,6 +176,7 @@ def git(
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',

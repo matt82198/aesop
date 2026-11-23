@@ -322,6 +322,7 @@ def fault_f5_red_test(sandbox: Path) -> Dict[str, Any]:
     # Act: run the test and capture exit code + output
     result = subprocess.run(
         [sys.executable, str(test_file)],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         encoding='utf-8', errors='replace',

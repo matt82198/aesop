@@ -49,6 +49,56 @@ class SubprocessError(Exception):
     """Raised when subprocess fails (timeout, non-zero exit, etc.)."""
 
 
+def stdin_has_input() -> bool:
+    """Return True when non-TTY stdin has buffered bytes, is at EOF, or is not a pipe.
+
+    Returns False only when stdin is an open pipe with zero buffered bytes and
+    the write end still open, so callers do not hang in sys.stdin.read().
+    """
+    if sys.stdin is None:
+        return False
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return True
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        try:
+            handle = msvcrt.get_osfhandle(fd)
+        except OSError:
+            return True
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetFileType.argtypes = [wintypes.HANDLE]
+        kernel32.GetFileType.restype = wintypes.DWORD
+        kernel32.PeekNamedPipe.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.PeekNamedPipe.restype = wintypes.BOOL
+        if kernel32.GetFileType(wintypes.HANDLE(handle)) != 3:  # FILE_TYPE_PIPE
+            return True
+        avail = wintypes.DWORD(0)
+        if not kernel32.PeekNamedPipe(
+            wintypes.HANDLE(handle), None, 0, None, ctypes.byref(avail), None
+        ):
+            return True
+        return avail.value > 0
+    import select
+
+    try:
+        readable, _, _ = select.select([fd], [], [], 0)
+        return bool(readable)
+    except (OSError, ValueError):
+        return True
+
+
 def run_subprocess(
     cmd: List[str],
     timeout: int = 30,
@@ -71,6 +121,7 @@ def run_subprocess(
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',

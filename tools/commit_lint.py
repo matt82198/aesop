@@ -144,7 +144,12 @@ def run(args) -> int:
             vs = lint_message(msg)
             results.append({"commit": sha[:8], "violations": vs})
     else:
-        # Read from stdin
+        # Read from stdin only when explicitly requested (--stdin), on a TTY, or
+        # when a non-TTY pipe already carries buffered input/EOF (never block on
+        # an idle inherited pipe).
+        if not args.stdin and not sys.stdin.isatty() and not cli.stdin_has_input():
+            print("No input on stdin", file=sys.stderr)
+            return 2
         try:
             msg = sys.stdin.read()
         except KeyboardInterrupt:
@@ -179,6 +184,7 @@ def main() -> int:
     parser = (cli.CLIBuilder("Conventional commit message linter")
               .add_argument("--message", "-m", help="Lint a single commit message string")
               .add_argument("--range", "-r", help="Lint commits in a git range (e.g. HEAD~5..HEAD)")
+              .add_argument("--stdin", action="store_true", help="Read commit message from stdin")
               .add_json_mode()
               .add_argument("--check", action="store_true", help="Exit 1 on any violation (CI gate mode)")
               .build())

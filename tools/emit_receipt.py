@@ -207,8 +207,8 @@ def _build_parts_for_profile(profile, changed_files, owning_shards, registry):
 
 
 def _git(repo, *args):
-    res = subprocess.run(["git", "-C", str(repo)] + list(args), capture_output=True,
-                         encoding="utf-8", errors="replace", timeout=60)
+    res = subprocess.run(["git", "-C", str(repo)] + list(args), stdin=subprocess.DEVNULL,
+                         capture_output=True, encoding="utf-8", errors="replace", timeout=60)
     if res.returncode != 0:
         raise ReceiptError("git %s failed: %s" % (" ".join(args), (res.stderr or "").strip()))
     return res.stdout.strip()
@@ -391,7 +391,8 @@ def _posix_process_table():
             starts[int(entry.name)] = int(tail[19])
         return table, starts
     try:
-        out = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True, text=True,
+        out = subprocess.run(["ps", "-eo", "pid=,ppid="], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True,
                              encoding="utf-8", errors="replace", timeout=30, check=False).stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}, {}
@@ -488,8 +489,8 @@ def _kill_process_tree(proc):
     _kill_descendants(proc.pid)
     if os.name == "nt":
         try:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
-                           encoding="utf-8", errors="replace", timeout=30)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                           capture_output=True, encoding="utf-8", errors="replace", timeout=30)
         except subprocess.TimeoutExpired:
             pass  # fall through to the direct kill below
     else:
@@ -510,9 +511,9 @@ def run_part(repo, name, spec, throwaway_wt=None, log_path=None, environ=None):
 
     with tempfile.TemporaryDirectory(prefix="receipt-%s-" % name) as tmp:
         env["TMPDIR"] = tmp  # per-part temp dir, mirrors ci.yml's shard-specific TMPDIR
-        proc = subprocess.Popen(argv, cwd=str(throwaway_wt or repo), env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
-                                start_new_session=(os.name != "nt"))
+        proc = subprocess.Popen(argv, cwd=str(throwaway_wt or repo), env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
+                                errors="replace", start_new_session=(os.name != "nt"))
         try:
             out_text, err_text = proc.communicate(timeout=budget)
             returncode = proc.returncode
@@ -527,6 +528,22 @@ def run_part(repo, name, spec, throwaway_wt=None, log_path=None, environ=None):
                                            % (name, "%g" % budget))
     res = subprocess.CompletedProcess(argv, returncode, out_text, err_text)
     out = (res.stdout or "") + "\n" + (res.stderr or "")
+    if name in _PY_SHARDS and res.returncode == 0:
+        if source.get("PYTEST_TIMEOUT") is not None:
+            if parse_test_count(out) is None:
+                reason = "shard exited 0 without pytest summary"
+                judged_rc = 1
+            else:
+                judged_rc, reason = 0, None
+        else:
+            import ci_shard_runner  # tools/ is on sys.path (see module header)
+            judged_rc, reason = ci_shard_runner.judge_shard_output(out, res.returncode)
+        if judged_rc != 0:
+            msg = "emit_receipt: part %s failed closed: %s" % (name, reason)
+            print(msg, file=sys.stderr, flush=True)
+            err_text = (err_text or "") + ("\n%s\n" % msg)
+            res = subprocess.CompletedProcess(argv, judged_rc, out_text, err_text)
+            out = (res.stdout or "") + "\n" + (res.stderr or "")
     if res.returncode != 0 and log_path is not None:
         # A failing part must be explainable: keep its output tail on disk (never in the envelope).
         _write_part_log(Path(log_path), res)
@@ -567,7 +584,7 @@ def _capture_caller_state(repo):
             "tree": _git(repo, "write-tree"),
             "porcelain": subprocess.run(
                 ["git", "-C", str(repo), "status", "--porcelain", "--", ".", ":(exclude)" + PART_LOG_DIR_REL],
-                capture_output=True, encoding="utf-8", errors="replace").stdout,
+                stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8", errors="replace").stdout,
         }
     except ReceiptError:
         return None  # Not a git repo; skip tripwire verification
@@ -595,9 +612,9 @@ def _remove_throwaway_worktree(repo, wt):
     """Remove a detached worktree and clean up."""
     try:
         subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)],
-                      capture_output=True, timeout=30)
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
         subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
-                      capture_output=True, timeout=30)
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
     except Exception:
         pass  # Best effort cleanup
 
@@ -649,7 +666,8 @@ def run_matrix(repo, names, registry=None, jobs=1, wsl_status_fn=None):
 
         # Create detached worktree at HEAD
         res = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "-q", str(wt), head_sha],
-                            capture_output=True, encoding="utf-8", errors="replace", timeout=300)
+                             stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=300)
         if res.returncode != 0:
             raise ReceiptError("failed to create throwaway worktree: %s" % (res.stderr or "").strip())
 
@@ -829,7 +847,8 @@ def wrap_receipt_text(envelope):
 
 
 def _default_gh_runner(args):
-    res = subprocess.run(["gh"] + list(args), capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+    res = subprocess.run(["gh"] + list(args), stdin=subprocess.DEVNULL, capture_output=True,
+                         encoding="utf-8", errors="replace", timeout=60)
     return res.returncode, res.stdout or "", res.stderr or ""
 
 

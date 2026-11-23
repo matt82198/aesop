@@ -227,8 +227,8 @@ def verify_tip(root: Path, tip: str, paths: List[str],
             try:
                 proc = subprocess.run(
                     [sys.executable, str(script)] + list(argv[1:]), cwd=str(wt),
-                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=300)
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=300)
             except (OSError, subprocess.SubprocessError) as exc:
                 stale.append({"path": path, "tip": tip, "repair": not generator_edited,
                               "reason": "generator failed: %s" % exc})

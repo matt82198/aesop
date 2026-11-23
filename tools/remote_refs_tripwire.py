@@ -418,7 +418,7 @@ def main(argv):
     )
 
     t0 = time.monotonic()
-    proc = subprocess.run(command, cwd=str(repo_root))
+    proc = subprocess.run(command, cwd=str(repo_root), stdin=subprocess.DEVNULL)
     command_rc = _exit_code(proc.returncode)
     elapsed = time.monotonic() - t0
 

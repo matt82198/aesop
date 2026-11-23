@@ -106,6 +106,7 @@ def is_interpreter_available(interpreter_name):
         # Try to run the interpreter with --version
         result = subprocess.run(
             [interpreter_name] + check_args,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=2,
             encoding="utf-8", errors="replace",

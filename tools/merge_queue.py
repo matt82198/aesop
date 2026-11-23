@@ -1137,6 +1137,7 @@ def run_regenerator(argv, timeout: int = REGEN_TIMEOUT_S) -> tuple:
         proc = subprocess.run(
             [sys.executable, str(script)] + list(argv[1:]),
             cwd=str(_TOOLS_DIR.parent),
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:

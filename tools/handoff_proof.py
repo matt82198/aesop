@@ -186,6 +186,7 @@ def _create_fake_driver():
                     command,
                     cwd=cwd,
                     shell=shell,
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,
                     encoding='utf-8', errors='replace',

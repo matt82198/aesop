@@ -117,8 +117,8 @@ def _run_task(task: dict, transport, model: str, max_attempts: int) -> dict:
         module_path.parent.mkdir(parents=True, exist_ok=True)
         module_path.write_text(_strip_fence(content or ""), encoding="utf-8")
         proc = subprocess.run(
-            test_cmd, shell=True, cwd=REPO_ROOT, capture_output=True,
-            encoding="utf-8", errors="replace", timeout=300,
+            test_cmd, shell=True, cwd=REPO_ROOT, stdin=subprocess.DEVNULL,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=300,
         )
         lines = (proc.stdout + proc.stderr).strip().splitlines()
         result["test_last_line"] = lines[-1] if lines else ""

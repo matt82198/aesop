@@ -414,7 +414,10 @@ class TestShardEnvScrubsTripwireArmed(unittest.TestCase):
 
     VAR = "AESOP_CI_SHARD_TRIPWIRE_ARMED"
     CHECK = [sys.executable, "-c",
-             "import os, sys; sys.exit(1 if 'AESOP_CI_SHARD_TRIPWIRE_ARMED' in os.environ else 0)"]
+             "import os, sys\n"
+             "if 'AESOP_CI_SHARD_TRIPWIRE_ARMED' in os.environ: sys.exit(1)\n"
+             "print('Ran 1 test in 0.00s')\n"
+             "sys.exit(0)"]
 
     def test_part_env_does_not_inherit_tripwire_armed(self):
         spec = emit.PartSpec(lambda repo: self.CHECK)
@@ -707,6 +710,102 @@ class TestFindOwningShardsDocsOnly(unittest.TestCase):
         owning_mixed = emit._find_owning_shards(
             ["tools/CLAUDE.md", "tools/emit_receipt.py"], shard_map)
         self.assertEqual(owning_mixed, {"py-shard-1"})
+
+
+class TestRunPartStdinIsolation(unittest.TestCase):
+    """run_part() must pass stdin=subprocess.DEVNULL so children never hang on an open parent stdin."""
+
+    def test_child_reading_stdin_returns_within_5s_with_open_parent_pipe(self):
+        parent_code = (
+            "import importlib.util, json, os, sys\n"
+            "from pathlib import Path\n"
+            "spec = importlib.util.spec_from_file_location('er', sys.argv[1])\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "child_spec = mod.PartSpec(lambda r: [sys.executable, '-c', "
+            "\"import sys; data = sys.stdin.read(); sys.exit(0 if data == '' else 2)\"])\n"
+            "env = dict(os.environ, AESOP_RECEIPT_PART_TIMEOUT='3')\n"
+            "res = mod.run_part(Path(sys.argv[2]), 'stdin-probe', child_spec, environ=env)\n"
+            "print(json.dumps(res))\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", parent_code, str(TOOLS / "emit_receipt.py"), tmp],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+            )
+            try:
+                rc_code = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+                self.fail("run_part hung >5s when parent stdin was an open pipe")
+            finally:
+                if proc.stdin:
+                    proc.stdin.close()
+            stdout = proc.stdout.read() if proc.stdout else ""
+            stderr = proc.stderr.read() if proc.stderr else ""
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
+            self.assertEqual(rc_code, 0, stderr)
+            part = json.loads(stdout.strip().splitlines()[-1])
+            self.assertEqual(part["exit_code"], 0, f"child timed out or failed on open stdin: {part} {stderr}")
+
+
+class TestShardSilentExitFailClosed(unittest.TestCase):
+    """A py-shard-* part exiting 0 without a valid Ran N tests summary must be judged RED."""
+
+    def test_fake_shard_exiting_0_without_summary_is_red(self):
+        script = (
+            "import sys\n"
+            "print('test_cost_per_loc_with_empty_ledger (tests.test_cost_econ.T) ... ok', file=sys.stderr)\n"
+            "sys.exit(0)\n"
+        )
+        spec = emit.PartSpec(lambda repo: [sys.executable, "-c", script])
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            log_path = Path(tmp) / "part.log"
+            part = emit.run_part(repo, "py-shard-1", spec, log_path=log_path)
+            self.assertNotEqual(part["exit_code"], 0, f"silent exit 0 must be RED: {part}")
+            self.assertEqual(emit.conclusion_for([part]), "failure")
+            self.assertTrue(log_path.is_file())
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("test_cost_per_loc_with_empty_ledger", log_text)
+
+    def test_fake_shard_with_fewer_tests_than_expected_is_red(self):
+        script = (
+            "import sys\n"
+            "print('Shard 1: expected 10 test(s)')\n"
+            "print('test_alpha (tests.test_a.T) ... ok', file=sys.stderr)\n"
+            "print('Ran 3 tests in 0.01s', file=sys.stderr)\n"
+            "sys.exit(0)\n"
+        )
+        spec = emit.PartSpec(lambda repo: [sys.executable, "-c", script])
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            log_path = Path(tmp) / "part.log"
+            part = emit.run_part(repo, "py-shard-1", spec, log_path=log_path)
+            self.assertNotEqual(part["exit_code"], 0, f"short shard run must be RED: {part}")
+            self.assertIn("test_alpha", log_path.read_text(encoding="utf-8"))
+
+    def test_valid_shard_with_matching_summary_is_green(self):
+        script = (
+            "import sys\n"
+            "print('Shard 0: expected 2 test(s)')\n"
+            "print('Ran 2 tests in 0.01s', file=sys.stderr)\n"
+            "sys.exit(0)\n"
+        )
+        spec = emit.PartSpec(lambda repo: [sys.executable, "-c", script])
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            part = emit.run_part(repo, "py-shard-0", spec)
+            self.assertEqual(part["exit_code"], 0)
+            self.assertEqual(part["test_count"], 2)
 
 
 if __name__ == "__main__":

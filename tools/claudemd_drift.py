@@ -240,6 +240,7 @@ def check_cli_flags(cli_specs: Dict[str, Set[str]], repo_root: Path) -> List[Dic
         try:
             result = subprocess.run(
                 [str(tool_path), "--help"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 encoding='utf-8', errors='replace',

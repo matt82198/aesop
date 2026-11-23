@@ -788,6 +788,7 @@ def check_generated_files(repo_root: Path) -> List[Dict[str, str]]:
             res = subprocess.run(
                 [sys.executable, str(gen_path), "--check"],
                 cwd=str(repo_root),
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 encoding="utf-8", errors="replace",
