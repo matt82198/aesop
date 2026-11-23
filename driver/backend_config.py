@@ -371,7 +371,14 @@ def validate_api_key_env(name, where: str = "backend") -> None:
 # blocks require an explicit base_url; the orchestrator seat may omit it).
 DEFAULT_ORCHESTRATOR_BASE_URL = "https://api.openai.com/v1"
 
-_VALID_WORKER_BACKENDS = ("claude", "codex", "openai-compatible", "anthropic")
+# "codex-exec" and "agy-headless" must match headless_cli_driver.PROFILES.
+_HEADLESS_WORKER_BACKENDS = ("codex-exec", "agy-headless")
+_VALID_WORKER_BACKENDS = (
+    "claude",
+    "codex",
+    "openai-compatible",
+    "anthropic",
+) + _HEADLESS_WORKER_BACKENDS
 _VALID_ORCHESTRATOR_BACKENDS = ("harness", "claude", "openai-compatible")
 
 
@@ -388,6 +395,18 @@ def _validate_worker_seat(block: dict) -> None:
         raise ValueError(
             f"Unknown backend '{backend_name}'. "
             f"Valid choices: {', '.join(_VALID_WORKER_BACKENDS)}"
+        )
+    if backend_name in _HEADLESS_WORKER_BACKENDS:
+        # Headless CLI seats: provider/model/env_passthrough/timeout_s are
+        # validated here so a bad seat fails at load time, not mid-wave.
+        from headless_cli_driver import validate_headless_options
+
+        validate_headless_options(
+            backend_name,
+            provider=block.get("provider"),
+            model=block.get("model"),
+            env_passthrough=block.get("env_passthrough", ()),
+            timeout_s=block.get("timeout_s", 600.0),
         )
     if backend_name == "codex":
         if "model" not in block:
@@ -756,6 +775,23 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
             max_owned_bytes=config.get("max_owned_bytes", 200_000),
             max_retries=config.get("max_retries", 2),
             timeout_s=config.get("timeout_s", 120.0),
+        )
+
+    if backend_name in _HEADLESS_WORKER_BACKENDS:
+        # Import here to avoid circular dependency.
+        try:
+            from headless_cli_driver import HeadlessCliDriver
+        except ImportError as exc:
+            raise RuntimeError(
+                "Cannot import HeadlessCliDriver. Make sure headless_cli_driver.py is in the driver/ directory."
+            ) from exc
+
+        return HeadlessCliDriver(
+            backend_name,
+            model=config.get("model"),
+            provider=config.get("provider"),
+            env_passthrough=config.get("env_passthrough", ()),
+            timeout_s=config.get("timeout_s", 600.0),
         )
 
     raise ValueError(f"Unknown backend '{backend_name}'")

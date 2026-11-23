@@ -3360,11 +3360,12 @@ Examples:
     )
     parser.add_argument(
         "--driver",
-        choices=["claude", "codex"],
+        choices=["claude", "codex", "codex-exec", "agy-headless"],
         default=None,
         help=(
-            "OVERRIDE the configured worker seat (claude|codex). Default: "
-            "seats.worker from aesop.config.json, else claude"
+            "OVERRIDE the configured worker seat (claude|codex|codex-exec|"
+            "agy-headless). Default: seats.worker from aesop.config.json, "
+            "else claude"
         ),
     )
     parser.add_argument(
