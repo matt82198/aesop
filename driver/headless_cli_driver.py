@@ -15,9 +15,10 @@ request's workdir and returns its outcome. Profiles:
 Isolation and secrets:
   * argv is a list and no shell is ever used.
   * The child environment is an explicit allow-list: DEFAULT_ENV_ALLOWLIST plus
-    the names an operator lists in seats.worker.env_passthrough. Cloud API keys
-    are not in the default list; codex authenticates with its own CODEX_HOME
-    login. Env values are never logged, placed in argv, or echoed into errors.
+    the names an operator lists in the env_passthrough list of the worker seat
+    config. Cloud API keys are not in the default list; codex authenticates with
+    its own CODEX_HOME login. Env values are never logged, placed in argv, or
+    echoed into errors.
   * Never sets WorkerResult.verified; wave_bridge owns that field.
 
 Unverified: the ``agy --output-format json`` payload shape has not been checked
