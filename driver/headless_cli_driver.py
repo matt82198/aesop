@@ -51,6 +51,7 @@ from proc_util import run_shell_bounded
 
 PROFILES = ("codex-exec", "agy-headless")
 OPEN_WEIGHT_PROVIDERS = ("ollama", "lmstudio")
+CONFIGURED_PROVIDERS = ("local_eval", "openai")
 
 DEFAULT_TIMEOUT_S = 600.0
 _COMMAND_TIMEOUT_S = 600.0
@@ -121,10 +122,10 @@ def validate_headless_options(
                 "agy-headless has no provider flag; remove 'provider' "
                 "(open-weight routing is codex-exec only)"
             )
-        if provider not in OPEN_WEIGHT_PROVIDERS:
+        if provider not in (*OPEN_WEIGHT_PROVIDERS, *CONFIGURED_PROVIDERS):
             raise ValueError(
                 f"provider {provider!r} not supported for codex-exec; "
-                f"valid: {', '.join(OPEN_WEIGHT_PROVIDERS)}"
+                f"valid: {', '.join((*OPEN_WEIGHT_PROVIDERS, *CONFIGURED_PROVIDERS))}"
             )
     if model is not None:
         if not isinstance(model, str) or not model.strip() or model.startswith("-"):
@@ -368,7 +369,9 @@ class HeadlessCliDriver(AgentDriver):
             "--output-last-message",
             last_message,
         ]
-        if self._provider is not None:
+        if self._provider in CONFIGURED_PROVIDERS:
+            argv += ["-c", f'model_provider="{self._provider}"']
+        elif self._provider is not None:
             argv += ["--oss", "--local-provider", self._provider]
         if model is not None:
             argv += ["-m", model]

@@ -248,6 +248,16 @@ class TestEnvAllowList(_RepoCase):
 
 
 class TestOpenWeightCodex(_RepoCase):
+    def test_configured_provider_and_model_are_pinned_for_native_evaluation(self):
+        for provider in ("local_eval", "openai"):
+            with self.subTest(provider=provider):
+                fake, calls = _make_fake_run(last_message="ok")
+                self.dispatch("codex-exec", fake, provider=provider, model="chosen")
+                argv = calls[0][0]
+                self.assertEqual(argv[argv.index("-c") + 1], f'model_provider="{provider}"')
+                self.assertEqual(argv[argv.index("-m") + 1], "chosen")
+                self.assertNotIn("--oss", argv)
+
     def test_ollama_profile_puts_oss_provider_and_model_in_argv(self):
         fake, calls = _make_fake_run(last_message="ok")
         self.dispatch("codex-exec", fake, provider="ollama", model="qwen2.5-coder:32b")
