@@ -125,7 +125,7 @@ Every path below exists on the main branch.
 
 - **[Documentation home](./docs/README.md)** - the map of every page.
 - **[Quickstart](./docs/quickstart.md)** - the zero-key demo, then sign and verify a receipt.
-- **Concepts** - [receipts loop](./docs/concepts/receipts-loop.md), [signed receipts](./docs/concepts/signed-receipts.md), [event store](./docs/concepts/event-store.md), [per-project stores](./docs/concepts/per-project-stores.md), [stage lanes](./docs/concepts/stage-lanes.md), [crash-only operation](./docs/concepts/crash-only.md).
+- **Concepts** - [deterministic harness](./docs/DETERMINISTIC-HARNESS.md), [receipts loop](./docs/concepts/receipts-loop.md), [signed receipts](./docs/concepts/signed-receipts.md), [event store](./docs/concepts/event-store.md), [per-project stores](./docs/concepts/per-project-stores.md), [stage lanes](./docs/concepts/stage-lanes.md), [crash-only operation](./docs/concepts/crash-only.md).
 - **Guides** - [verify a receipt](./docs/guides/verify-receipt.md), [verify an event store](./docs/guides/verify-event-store.md), [install](./docs/INSTALL.md), [first wave](./docs/FIRST-WAVE.md).
 - **Reference** - [receipt format](./docs/reference/receipt-format.md), [stage matrix](./docs/reference/stage-matrix.md), [machinery map](./docs/MACHINERY-MAP.md).
 - **Trust** - [provenance and evidence](./docs/provenance/README.md), [releasing](./docs/RELEASING.md), [SECURITY.md](./SECURITY.md).
