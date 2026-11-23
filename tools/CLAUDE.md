@@ -6,6 +6,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Ship
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
 ## Core invariants
+- [Chained reads](chain/README.md) collect bounded GitHub, feed and worktree digests. Run `node --test tools/chain/chain.test.mjs` for the offline runner and failure cases.
 - **Never print secrets**: mask as pattern name + masked value only; NEVER output raw credentials/tokens. **AESOP_STATE_ROOT**: all heartbeat/ledger/logs use `AESOP_STATE_ROOT` env var (default `./state`) or CLI args; no hardcoded personal paths.
 - **halt.py state-dir default**: `resolve_state_dir()`'s precedence is `AESOP_STATE_ROOT` env > `aesop.config.json` `state_root` > `$AESOP_ROOT/state` (when `AESOP_ROOT` is set) > `common.get_state_dir()`'s cwd-relative `./state`. The `$AESOP_ROOT/state` step (fixed 2026-10-05, PR #773) matters because callers that `cd` elsewhere before invoking `halt.py --status` (e.g. `daemons/run-watchdog.sh`'s single-source-of-truth delegation) must still find a sentinel written at `$AESOP_ROOT/state/.HALT` — a bare cwd fallback silently missed it and let a halted daemon keep running.
 - **status.js heartbeat path resolution (2026-10-29)**: resolves heartbeat paths with conductor3 preference (env override, then conductor3 location, then local fallback) to match ui/config.py; tests: `tests/status-cli-heartbeat-paths.test.mjs`.
