@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Linux shape checker -- detect platform-specific failures via WSL before push.
-INDEX: Linux shape check (cross-platform test runner, detects Windows-only red CI via WSL)
+INDEX: Linux shape check (cross-platform test runner via WSL; ignores non-userland docker-desktop WSL utility VMs when probing distros)
 
 Runs shell, Node, and workflow tests under WSL to catch platform-specific failures
 locally before pushing (e.g., isolated-home USERPROFILE assumption, shell test failures
@@ -64,9 +64,18 @@ WSL_NO_DISTRO = "no-distro"    # wsl.exe runs but lists no distribution (expecte
 WSL_ERROR = "error"            # WSL claims to be there but the probe itself failed: fail closed
 
 
+_NON_USERLAND_WSL_DISTROS = frozenset({"docker-desktop", "docker-desktop-data"})
+
+
 def _looks_like_distro_name(line: str) -> bool:
     # Distro names never contain whitespace; the "no installed distributions" message does.
-    return bool(line) and not any(ch.isspace() for ch in line)
+    # Docker Desktop's internal WSL2 utility VMs (docker-desktop, docker-desktop-data) lack
+    # bash/python/node and are not userland Linux distributions.
+    return (
+        bool(line)
+        and not any(ch.isspace() for ch in line)
+        and line.lower() not in _NON_USERLAND_WSL_DISTROS
+    )
 
 
 def wsl_status() -> str:
