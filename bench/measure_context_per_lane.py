@@ -1,4 +1,4 @@
-"""Replay context admission from one local orchestrator JSONL archive."""
+"""Estimate context admission from one local orchestrator JSONL archive."""
 
 import argparse
 import hashlib
@@ -8,11 +8,17 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
-import tiktoken
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from driver.turn_context import CHARS_PER_TOKEN, size_ollama_context
 
 
 def compact(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def estimated_tokens(content):
+    messages = [{"content": compact(content)}]
+    return size_ollama_context(messages).prompt_tokens
 
 
 def lookup_text(row, content):
@@ -25,13 +31,13 @@ def lookup_text(row, content):
     return ""
 
 
-def measure(rows, session, count):
+def measure(rows, session):
     """Charge each new message once. Store exact report versions for page faults."""
     seen = set()
     lanes = set()
     pages = {}
     latest = {}
-    baseline = paged = faults = fault_tokens = messages = 0
+    baseline = paged = faults = fault_estimate = messages = 0
 
     for row in rows:
         role = row["type"]
@@ -40,10 +46,10 @@ def measure(rows, session, count):
             continue
         seen.add(row["uuid"])
         content = row["message"]["content"]
-        raw_tokens = count(compact(content))
+        raw_estimate = estimated_tokens(content)
         messages += 1
-        baseline += raw_tokens
-        paged += raw_tokens
+        baseline += raw_estimate
+        paged += raw_estimate
         origin = row.get("origin") or {}
         if role == "user" and origin.get("kind") == "peer" and origin.get("handback") is True:
             lane = origin["senderTaskId"]
@@ -63,7 +69,7 @@ def measure(rows, session, count):
             pages[key] = report
             latest[lane] = key
             receipt = f"  {headline}\n  Page: {key}"
-            paged += count(compact(content.replace(body, receipt))) - raw_tokens
+            paged += estimated_tokens(content.replace(body, receipt)) - raw_estimate
             continue
 
         # In replay, a human or tool naming a paged lane serves as an explicit lookup.
@@ -75,10 +81,10 @@ def measure(rows, session, count):
         for key in requested:
             request = [{"type": "tool_use", "name": "read_page", "input": {"page": key}}]
             response = [{"type": "tool_result", "content": pages[key]}]
-            charge = count(compact(request)) + count(compact(response))
+            charge = estimated_tokens(request) + estimated_tokens(response)
             paged += charge
             faults += 1
-            fault_tokens += charge
+            fault_estimate += charge
 
     finishes = len(lanes)
     if not finishes:
@@ -88,11 +94,11 @@ def measure(rows, session, count):
         "lane_finishes": finishes,
         "paged_reports": len(pages),
         "page_ins": faults,
-        "page_in_tokens": fault_tokens,
-        "baseline_tokens": baseline,
-        "paged_tokens": paged,
-        "baseline_tokens_per_lane_finish": baseline / finishes,
-        "paged_tokens_per_lane_finish": paged / finishes,
+        "page_in_estimated_tokens": fault_estimate,
+        "baseline_estimated_tokens": baseline,
+        "paged_estimated_tokens": paged,
+        "baseline_estimated_tokens_per_lane_finish": baseline / finishes,
+        "paged_estimated_tokens_per_lane_finish": paged / finishes,
     }
 
 
@@ -104,14 +110,15 @@ def replay(path, session):
             digest.update(line)
             yield json.loads(line)
 
-    encoding = tiktoken.get_encoding("cl100k_base")
     with path.open("rb") as stream:
-        metrics = measure(records(stream), session, lambda s: len(encoding.encode_ordinary(s)))
+        metrics = measure(records(stream), session)
     return {
         "command": f"python bench/measure_context_per_lane.py --session {session}",
         "transcript_sha256": digest.hexdigest(),
-        "encoding": encoding.name,
-        "tiktoken_version": tiktoken.__version__,
+        "token_estimate_method": (
+            "driver.turn_context.size_ollama_context: count UTF-16 code units in each "
+            f"compact JSON message, divide by {CHARS_PER_TOKEN}, round up, then sum."
+        ),
         **metrics,
     }
 
