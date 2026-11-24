@@ -15,6 +15,7 @@ Test cases:
   - cleanup runs both commands for this run's own copy dir
 """
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -28,11 +29,34 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 import linux_shape_check as lsc
 
 
+def _posix_bash():
+    """A POSIX bash for the copy snippet, or None.
+
+    On Windows, C:\\Windows\\System32\\bash.exe is the WSL launcher. It runs Linux bash and
+    cannot take the snippet's Windows-style paths (the windows-shard runner failed both copy
+    cases with empty stderr that way), so System32 is skipped. Git for Windows' bash is the
+    POSIX shell the snippet needs. The real copy runs in WSL bash on the shell leg.
+    """
+    name = "bash.exe" if os.name == "nt" else "bash"
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry or "system32" in entry.lower():
+            continue
+        cand = Path(entry) / name
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+_BASH = _posix_bash()
+_NO_BASH = "no POSIX bash on PATH (only the WSL launcher); the copy step is covered by the WSL shell leg"
+
+
 def _bash_script(script: str) -> subprocess.CompletedProcess:
     """Run a bash snippet locally. Paths in the snippet are POSIX-style, so pass them as as_posix()."""
-    return subprocess.run(["bash", "-c", script], cwd=str(Path(__file__).parent), capture_output=True, timeout=60)
+    return subprocess.run([_BASH, "-c", script], cwd=str(Path(__file__).parent), capture_output=True, timeout=60)
 
 
+@unittest.skipIf(_BASH is None, _NO_BASH)
 class TestCopyStepFailsClosed(unittest.TestCase):
 
     def test_failed_source_read_fails_the_copy(self):
@@ -100,6 +124,23 @@ class TestCleanupGuard(unittest.TestCase):
         self.assertEqual(len(cmds), 2, cmds)
         self.assertIn("pkill -f", cmds[0])
         self.assertEqual(cmds[1], f"rm -rf {parent}")
+
+
+class TestPosixBashSelection(unittest.TestCase):
+
+    def test_system32_launcher_is_never_selected(self):
+        name = "bash.exe" if os.name == "nt" else "bash"
+        with tempfile.TemporaryDirectory() as tmp:
+            system32 = Path(tmp, "System32")
+            posix = Path(tmp, "GitUsrBin")
+            system32.mkdir()
+            posix.mkdir()
+            (system32 / name).write_text("launcher", encoding="utf-8")
+            (posix / name).write_text("posix", encoding="utf-8")
+            path = os.pathsep.join([str(system32), str(posix)])
+            with mock.patch.dict(os.environ, {"PATH": path}):
+                chosen = _posix_bash()
+        self.assertEqual(chosen, str(posix / name))
 
 
 if __name__ == "__main__":
