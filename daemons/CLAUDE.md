@@ -48,6 +48,7 @@
 - `AESOP_MERGE_QUEUE_CMD`: Override the `tools/merge_queue.py --advance` invocation (test override); if set, runs as `bash -c "$AESOP_MERGE_QUEUE_CMD"`.
 - `REPO_OPERATION_TIMEOUT` (default: 60): Per-repo git operation timeout in seconds (backup-fleet.sh; 2026-10-29 fix). Each repo's `process_repo` call is wrapped in `timeout $REPO_OPERATION_TIMEOUT`; timeout exit 124 is logged as TIMEOUT status and the repo is skipped.
 - `AUTODISCOVERY_TIMEOUT` (default: 240): Entire autodiscovery loop timeout in seconds (backup-fleet.sh; 2026-10-29 fix). Bounds the cycle duration so it fits within the 5-minute scheduler interval, preventing indefinite hangs.
+- `GIT_TERMINAL_PROMPT=0` (exported by backup-fleet.sh, 2026-11-23): git never prompts for credentials, so a fetch or push to an auth-gated origin fails closed. Without it, a prompt on a controlling tty stops git (SIGTTIN) and the `timeout` wrapper cannot reap it, hanging the cycle (WSL shell-suite repro: 400s cap, rc=124).
 
 ## Invariants & Style
 
