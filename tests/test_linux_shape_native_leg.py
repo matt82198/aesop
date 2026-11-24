@@ -19,6 +19,7 @@ Test cases:
 import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -42,6 +43,18 @@ def _captured_call(fn, *args):
     with mock.patch("linux_shape_check.subprocess.run", return_value=_completed()) as run:
         fn(*args)
     return run.call_args.args[0]
+
+
+def _primary_checkout_root(tmp):
+    """A repo root whose .git is a directory: the in-place WSL path, whatever the cwd is.
+
+    run_shell_tests_wsl branches on the .git type of its repo root. Path(".") is a linked
+    worktree (.git is a file) when this suite runs from a worktree, which takes the clone
+    prelude and a trailing cleanup call, so the assertion below would read the wrong command.
+    """
+    root = Path(tmp)
+    (root / ".git").mkdir()
+    return root
 
 
 class TestNativeLegUsesTripwire(unittest.TestCase):
@@ -77,12 +90,33 @@ class TestNativeAndWslShareOneCommandShape(unittest.TestCase):
 
     def test_shell_native_and_wsl_differ_only_in_host_prefix(self):
         native = _captured_call(lsc.run_shell_tests_native, Path("."))
-        wsl_argv = _captured_call(lsc.run_shell_tests_wsl, Path("."), WSL_PATH)
+        with tempfile.TemporaryDirectory() as tmp:
+            wsl_argv = _captured_call(lsc.run_shell_tests_wsl, _primary_checkout_root(tmp), WSL_PATH)
         inner = wsl_argv[3]
         self.assertTrue(inner.startswith(f"cd '{WSL_PATH}' && "), inner)
         wsl_suite = shlex.split(inner[len(f"cd '{WSL_PATH}' && "):])
         self.assertIn("tools/test_isolation_tripwire.py", wsl_suite)
         self.assertEqual(wsl_suite[1:], native[1:])
+
+    def test_linked_worktree_shell_leg_takes_the_copy_prelude(self):
+        # .git is a FILE here (a linked worktree), so the clone-and-copy prelude branch runs
+        # whatever the real cwd is. Every subprocess call is mocked, so this is deterministic.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").write_text("gitdir: C:/fake/.git/worktrees/x\n", encoding="utf-8")
+            with mock.patch("linux_shape_check.subprocess.run", return_value=_completed()) as run:
+                lsc.run_shell_tests_wsl(root, WSL_PATH)
+        calls = [c.args[0] for c in run.call_args_list]
+        suite = [a for a in calls if len(a) > 3 and a[0] == "wsl.exe" and "tools/test_isolation_tripwire.py" in a[3]]
+        self.assertEqual(len(suite), 1, calls)
+        inner = suite[0][3]
+        self.assertIn("mkdir -p /tmp/aesop-shell-leg-", inner)
+        self.assertIn("git clone -q --no-checkout", inner)
+        self.assertIn("set -o pipefail", inner)
+        self.assertFalse(inner.startswith(f"cd '{WSL_PATH}' && "), inner)
+        # The copy dir is removed after the suite, by its own wsl.exe call.
+        self.assertTrue(any(len(a) > 3 and a[0] == "wsl.exe" and a[3].startswith("rm -rf /tmp/aesop-shell-leg-")
+                            for a in calls), calls)
 
 
 class TestNativeLegFailsClosed(unittest.TestCase):

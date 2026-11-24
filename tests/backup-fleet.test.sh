@@ -487,6 +487,38 @@ test_item5_portable_nul_parsing() {
   rm -f "$test_data_file"
 }
 
+# ===== FETCH NEVER PROMPTS: a credential prompt must not stall the cycle =====
+# Repro (WSL Ubuntu, 2026-11-23): the fixture origin is an https URL. A plain
+# `git fetch` there asks for credentials on /dev/tty. Under a controlling tty
+# that read raises SIGTTIN, git stops, and the daemon's own `timeout` (non
+# --foreground puts its child in a background process group) can never reap it,
+# so the cycle hung until the 400s per-file cap. The outer timeout here is
+# --foreground so this test itself cannot be stalled the same way.
+test_fetch_never_blocks_on_credential_prompt() {
+  log "TEST FETCH: daemon cycle with an https origin completes without a credential prompt"
+
+  setup_fixture
+  create_mock_scanner
+  echo "modified" >> "$REPO_DIR/README.md"
+  # Name the fixture repo explicitly so the cycle reaches its `git fetch origin`.
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{"repos": [{"path": "$REPO_DIR", "name": "fixture"}]}
+EOFCONFIG
+
+  SECONDS=0
+  AESOP_ROOT="$AESOP_FIXTURE" timeout -s KILL --foreground 60 \
+    bash "$BACKUP_FLEET_SCRIPT" </dev/null >/dev/null 2>&1
+  local rc=$?
+
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ] || [ "$SECONDS" -ge 60 ]; then
+    fail "FETCH: cycle hung on a credential prompt (rc=$rc after ${SECONDS}s)"
+  elif [ ! -f "$AESOP_FIXTURE/state/.watchdog-repos.json" ]; then
+    fail "FETCH: cycle exited without writing the repos status file (rc=$rc)"
+  else
+    pass "FETCH: cycle completed in ${SECONDS}s without prompting (rc=$rc)"
+  fi
+}
+
 # ===== AUDIT FIX 1: Config repos honored =====
 
 test_audit_fix_1_config_repos_honored() {
@@ -1215,6 +1247,10 @@ echo ""
 
 log "Running full cycle integration test..."
 test_full_cycle_with_special_chars
+echo ""
+
+log "Running FETCH credential-prompt test (cycle must not stall on a tty prompt)..."
+test_fetch_never_blocks_on_credential_prompt
 echo ""
 
 log "Running AUDIT FIX 1 tests (config repos honored)..."

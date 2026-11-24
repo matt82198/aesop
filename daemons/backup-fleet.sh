@@ -41,6 +41,12 @@ export EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # Timeout bounds (fix 20261029: prevent autodiscovery hang)
 # Per-repo operations (git fetch, etc) timeout after this many seconds
 REPO_OPERATION_TIMEOUT="${REPO_OPERATION_TIMEOUT:-60}"
+# Unattended daemon: git must never prompt for credentials. On a box with a
+# controlling tty, a credential prompt reads /dev/tty, git is stopped by SIGTTIN,
+# and the `timeout` wrapper above cannot reap a stopped child, so the whole cycle
+# hangs (measured 2026-11-23 under WSL: rc=124 after the 400s cap). With the prompt
+# disabled git fails closed in ~0.3s and the cycle moves on to the next repo.
+export GIT_TERMINAL_PROMPT=0
 # Entire autodiscovery loop timeout (so cycle fits in 5-min schedule)
 AUTODISCOVERY_TIMEOUT="${AUTODISCOVERY_TIMEOUT:-240}"
 

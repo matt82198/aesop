@@ -38,6 +38,8 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 from typing import List, Tuple
 
@@ -262,24 +264,139 @@ def should_check_linux_shape(changed_files: List[str]) -> bool:
     return False
 
 
-def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> Tuple[int, str]:
-    """Run shell tests under WSL, tripwire-wrapped (same builder as the native leg)."""
-    cmd = f"cd '{wsl_path}' && " + shlex.join(tripwired_argv(shell_suite_argv(), "python"))
-    try:
-        result = subprocess.run(
-            ["wsl.exe", "bash", "-lc", cmd],
-            capture_output=True,
-            timeout=timeout,
-        )
+# 300 s, measured 2026-11-23 on the whole WSL shell leg (not one file; no single file hangs):
+#   - 174 s wall, rc=0, full leg from a linked worktree with the WSL copy prelude (local run,
+#     `python3 tools/linux_shape_check.py --range origin/main..HEAD`);
+#   - 167.9 s, the linux-shape shard in the pre-push gate on push of 584dd5b2 (rc=0).
+# The old 120 s cap was below both (the earlier lane measured 179 s; that run and the gate's
+# 302.4 s timeout are the evidence for raising it). 300 s is ~1.7x the 174 s local figure.
+# A timeout still fails closed (exit 124) and names the test that was running.
+SHELL_SUITE_WSL_TIMEOUT_S = 300
+
+
+def wsl_copy_snippet(wsl_src: str, dest: str) -> str:
+    """Bash for the tree copy, as one fail-closed group.
+
+    A bare `tar | tar` returns the status of the last tar only, so a failed read of the
+    source left rc 0 and the suite ran on a partial copy. pipefail makes either side's
+    failure the pipeline's status, and the group's handler names the copy step and exits 1.
+    """
+    return (
+        f"{{ set -o pipefail && (cd '{wsl_src}' && tar --exclude=./.git -cf - .) | (cd {dest} && tar -xf -)"
+        f" || {{ echo 'linux-shape: WSL copy step failed (tree copy {wsl_src} -> {dest})' >&2; exit 1; }}; }}"
+    )
+
+
+def wsl_worktree_prelude(repo_root: Path, wsl_path: str) -> Tuple[str, str]:
+    """Bash prelude that gives WSL git a resolvable context for a linked worktree.
+
+    A linked worktree's .git is a file holding a Windows gitdir path
+    ("gitdir: <drive>:<repo>/.git/worktrees/<name>"). WSL git reads that as a relative
+    path and every git call in the tree fails ("Not in a git repository"), so
+    test_waveguard.sh could never pass from a worktree. The worktree's own .git
+    file is never rewritten. Instead the leg clones the shared object store into
+    a mktemp dir inside WSL, copies the working tree over, and points HEAD at the
+    worktree's branch and commit. Writes land in the temp clone, not the primary.
+    A primary checkout (.git is a directory) returns "" and runs in place.
+    """
+    dotgit = repo_root / ".git"
+    if not dotgit.is_file():
+        return "", ""
+    def _git(*args: str) -> str:
+        out = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, timeout=30)
+        return out.stdout.decode("utf-8", errors="replace").strip()
+    common = _git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    sha = _git("rev-parse", "HEAD")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    wsl_common = compute_wsl_path(Path(common))
+    # No shell variables and no double quotes: `$T` expanded to empty through wsl.exe
+    # (measured: "/repo" clone target). The copy dir is a uuid chosen here and removed
+    # by a separate wsl.exe call in run_shell_tests_wsl.
+    parent = f"/tmp/aesop-shell-leg-{uuid.uuid4().hex[:12]}"
+    dest = f"{parent}/repo"
+    steps = [
+        f"mkdir -p {parent}",
+        f"git clone -q --no-checkout '{wsl_common}' {dest}",
+        wsl_copy_snippet(wsl_path, dest),
+    ]
+    if branch and branch != "HEAD":
+        steps.append(f"git -C {dest} update-ref refs/heads/{shlex.quote(branch)} {sha}")
+        steps.append(f"git -C {dest} symbolic-ref HEAD refs/heads/{shlex.quote(branch)}")
+    else:
+        steps.append(f"git -C {dest} update-ref --no-deref HEAD {sha}")
+    steps.append(f"git -C {dest} reset -q {sha}")
+    steps.append(f"cd {dest}")
+    # One line joined with &&: a failing step stops the chain, so the suite never runs on a partial copy.
+    return " && ".join(steps) + " && ", parent
+
+
+_RUNNING_MARKER = re.compile(r"^\[TEST\] Running: (\S+)", re.MULTILINE)
+# The only shape wsl_worktree_prelude creates. Cleanup refuses anything else.
+_WSL_COPY_DIR = re.compile(r"/tmp/aesop-shell-leg-[0-9a-f]{12}")
+
+
+def _hung_test_name(output: str) -> str:
+    """The test the runner announced last ("[TEST] Running: <file>"), or "" if none was seen."""
+    found = _RUNNING_MARKER.findall(output)
+    return found[-1] if found else ""
+
+
+def _cleanup_wsl_copy(parent: str) -> None:
+    """Stop anything still running in the WSL-side copy, then remove it. Best effort.
+
+    Only processes whose command line names this run's unique copy dir are matched. The
+    pattern is written "[a]esop" so the pkill shell itself does not match. The worktree is
+    never touched.
+    """
+    # Guard before any command: an empty or foreign path must never reach pkill or rm.
+    # `pkill -f ''` matches every process in the distro, so an empty parent is the worst case.
+    if not _WSL_COPY_DIR.fullmatch(parent or ""):
+        return
+    pattern = parent.replace("/tmp/aesop", "/tmp/[a]esop", 1)
+    for cmd in (f"pkill -f '{pattern}' || true", f"rm -rf {parent}"):
+        try:
+            subprocess.run(["wsl.exe", "bash", "-lc", cmd], capture_output=True, timeout=60)
+        except Exception:
+            pass
+
+
+def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = SHELL_SUITE_WSL_TIMEOUT_S) -> Tuple[int, str]:
+    """Run shell tests under WSL, tripwire-wrapped (same builder as the native leg).
+
+    stdin is closed (DEVNULL) so no test can block on the parent's pipe, and output goes to a
+    temp file rather than a pipe a stuck child could hold open. On timeout the runner's last
+    "[TEST] Running:" line names the test that hung.
+    """
+    suite = shlex.join(tripwired_argv(shell_suite_argv(), "python"))
+    with tempfile.TemporaryFile() as out:
+        timed_out = False
+        parent = ""
+        try:
+            # The prelude runs git and creates the copy, so it is inside the fail-closed path too.
+            prelude, parent = wsl_worktree_prelude(repo_root, wsl_path)
+            cmd = prelude + suite if prelude else f"cd '{wsl_path}' && " + suite
+            rc = subprocess.run(
+                ["wsl.exe", "bash", "-lc", cmd],
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            rc, timed_out = 124, True
+        except Exception as e:
+            return 2, f"Error running shell tests: {e}"
+        finally:
+            if parent:
+                _cleanup_wsl_copy(parent)
+        out.seek(0)
         # Decode output with UTF-8 (WSL bash output is UTF-8, not UTF-16LE)
-        stdout = result.stdout.decode('utf-8', errors='replace')
-        stderr = result.stderr.decode('utf-8', errors='replace')
-        output = stdout + stderr
-        return result.returncode, output
-    except subprocess.TimeoutExpired:
-        return 124, f"Shell tests timed out after {timeout}s"
-    except Exception as e:
-        return 2, f"Error running shell tests: {e}"
+        output = out.read().decode("utf-8", errors="replace")
+    if timed_out:
+        hung = _hung_test_name(output)
+        where = f"hung test: {hung}" if hung else "no test had started"
+        return 124, f"Shell tests timed out after {timeout}s ({where})\n{output}"
+    return rc, output
 
 
 def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
