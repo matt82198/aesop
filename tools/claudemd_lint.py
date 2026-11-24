@@ -455,7 +455,7 @@ def _union_via_merge_tree(repo_root: Path, base_ref: str, head_ref: str) -> Opti
     Returns {path: union_line_count} or None when this git predates --write-tree
     (so the caller can fall back to a three-way read of the blobs).
     """
-    res = _git(repo_root, ["merge-tree", "--write-tree", base_ref, head_ref])
+    res = _git(repo_root, ["merge-tree", "--write-tree", "--name-only", "-z", base_ref, head_ref])
     if res.returncode not in (0, 1):
         # rc >= 2 is a real error; an old git reports "unknown option" (rc 128/129)
         stderr = (res.stderr or "").lower()
@@ -464,7 +464,14 @@ def _union_via_merge_tree(repo_root: Path, base_ref: str, head_ref: str) -> Opti
         raise HeadroomError(
             f"merge preview {base_ref}..{head_ref} failed: {(res.stderr or res.stdout).strip()}"
         )
-    tree = res.stdout.splitlines()[0].strip() if res.stdout.strip() else ""
+    # With -z, Git separates the conflicted path list from informational messages
+    # with an empty field. A conflict elsewhere still leaves CLAUDE.md measurable.
+    tree, _, details = res.stdout.partition("\0")
+    if res.returncode == 1:
+        conflict_paths = details.partition("\0\0")[0].split("\0")
+        for path in conflict_paths:
+            if path.rsplit("/", 1)[-1] == "CLAUDE.md":
+                raise HeadroomError(f"{path}: merge conflict, cannot measure headroom")
     if not tree:
         raise HeadroomError(f"merge preview {base_ref}..{head_ref} produced no tree")
 
@@ -514,8 +521,9 @@ def _union_via_three_way(repo_root: Path, base_ref: str, head_ref: str) -> Dict[
             )
             # git merge-file exits with the conflict count (capped at 127); an
             # actual error is signalled as -1, which surfaces as 255 unsigned.
-            # Checking `< 0` alone would silently accept every failure.
-            if res.returncode > 127:
+            if 1 <= res.returncode <= 127:
+                raise HeadroomError(f"{path}: merge conflict, cannot measure headroom")
+            if res.returncode != 0:
                 raise HeadroomError(f"three-way merge of {path} failed (rc={res.returncode})")
             counts[path] = _count_lines(res.stdout, f"{path} (merge union)")
     return counts
