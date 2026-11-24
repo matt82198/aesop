@@ -30,7 +30,7 @@ import linux_shape_check as lsc
 
 def _bash_script(script: str) -> subprocess.CompletedProcess:
     """Run a bash snippet locally. Paths in the snippet are POSIX-style, so pass them as as_posix()."""
-    return subprocess.run(["bash", "-c", script], capture_output=True, timeout=60)
+    return subprocess.run(["bash", "-c", script], cwd=str(Path(__file__).parent), capture_output=True, timeout=60)
 
 
 class TestCopyStepFailsClosed(unittest.TestCase):
