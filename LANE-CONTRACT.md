@@ -351,6 +351,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 5. Push: the secret scan runs `--staged` before the commit and must print CLEAN with a count above zero; the push is its own command, never chained with `;` or `&&` after a scan or a test.
 6. Branch base: cut from origin/main unless the brief names another base; a branch cut from an open PR's head makes a stacked PR, which is not armed.
 7. Scratch: every gate's output, commit message, PR body and probe script goes to a file under the session scratchpad folder named in the brief, and is read back with the Read tool; the hand-back names each file by its complete absolute path.
+   Run standalone Python probes from that scratchpad in isolated mode, for example `python -I probe.py`. This keeps scratch files such as `enum.py` off the import path so the probe loads the standard library.
 8. Worktree npm and npx: `cd` does not persist across tool calls, so run vitest and npx as one command, `cd <wt> && npx vitest run ...`, and in a fresh worktree run `cd <wt> && npm ci --no-audit --no-fund` first. The scene-test exception in the CI contract (item 2, no `cd &&` prefix) still applies to scene runs. This shape is for npm, npx and vitest only; scene tests keep their no-`cd &&` shape, and the two rules do not conflict. *Why: 2026-10-21 two false vitest failures came from running in the wrong cwd.*
 
 ## The brief
