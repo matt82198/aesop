@@ -15,7 +15,6 @@ Test cases:
   - cleanup runs both commands for this run's own copy dir
 """
 
-import shutil
 import subprocess
 import sys
 import tempfile
