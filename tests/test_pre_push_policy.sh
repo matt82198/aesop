@@ -19,6 +19,17 @@ mkdir -p "$TEST_ROOT"
 # that need a repo create their own (see the per-test cd / make_*_clone helpers).
 cd "$TEST_ROOT" || exit 1
 
+# Hermetic gh: check_emit_receipt blocks unless `gh --version` works. Put a stub gh
+# on this harness's own PATH so the suite never depends on a real gh. The WSL
+# distro has no gh (only gh.exe via interop), so before this stub the emit-receipt
+# cases failed with "BLOCKED: gh CLI not found" (measured 2026-11-23). Cases that
+# need gh absent prepend their own stub, which still shadows this one.
+TEST_GH_STUB_DIR="$TEST_ROOT/stub-gh-default"
+mkdir -p "$TEST_GH_STUB_DIR"
+printf '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "gh version 0.0.0 (test stub)"; fi\nexit 0\n' > "$TEST_GH_STUB_DIR/gh"
+chmod +x "$TEST_GH_STUB_DIR/gh"
+export PATH="$TEST_GH_STUB_DIR:$PATH"
+
 # Import hook functions by sourcing the hook script directly.
 # The hook guards its own "main "$@"" call with a BASH_SOURCE check so
 # sourcing it here only defines functions and never executes main()

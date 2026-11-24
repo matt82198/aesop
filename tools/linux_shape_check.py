@@ -38,6 +38,7 @@ import re
 import shlex
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import List, Tuple
 
@@ -262,9 +263,60 @@ def should_check_linux_shape(changed_files: List[str]) -> bool:
     return False
 
 
-def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> Tuple[int, str]:
+# Measured 2026-11-23 under WSL Ubuntu on /mnt/c, full leg from a linked worktree
+# (WSL copy prelude included) with the backup-fleet hang fixed: 179 s wall, rc=0.
+# 300 s gives 1.7x headroom. A timeout still fails closed (exit 124), it never skips.
+SHELL_SUITE_WSL_TIMEOUT_S = 300
+
+
+def wsl_worktree_prelude(repo_root: Path, wsl_path: str) -> Tuple[str, str]:
+    """Bash prelude that gives WSL git a resolvable context for a linked worktree.
+
+    A linked worktree's .git is a file holding a Windows gitdir path
+    ("gitdir: C:/Users/.../.git/worktrees/x"). WSL git reads that as a relative
+    path and every git call in the tree fails ("Not in a git repository"), so
+    test_waveguard.sh could never pass from a worktree. The worktree's own .git
+    file is never rewritten. Instead the leg clones the shared object store into
+    a mktemp dir inside WSL, copies the working tree over, and points HEAD at the
+    worktree's branch and commit. Writes land in the temp clone, not the primary.
+    A primary checkout (.git is a directory) returns "" and runs in place.
+    """
+    dotgit = repo_root / ".git"
+    if not dotgit.is_file():
+        return "", ""
+    def _git(*args: str) -> str:
+        out = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, timeout=30)
+        return out.stdout.decode("utf-8", errors="replace").strip()
+    common = _git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    sha = _git("rev-parse", "HEAD")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    wsl_common = compute_wsl_path(Path(common))
+    # No shell variables and no double quotes: `$T` expanded to empty through wsl.exe
+    # (measured: "/repo" clone target). The copy dir is a uuid chosen here and removed
+    # by a separate wsl.exe call in run_shell_tests_wsl.
+    parent = f"/tmp/aesop-shell-leg-{uuid.uuid4().hex[:12]}"
+    dest = f"{parent}/repo"
+    steps = [
+        f"mkdir -p {parent}",
+        f"git clone -q --no-checkout '{wsl_common}' {dest}",
+        f"(cd '{wsl_path}' && tar --exclude=./.git -cf - .) | (cd {dest} && tar -xf -)",
+    ]
+    if branch and branch != "HEAD":
+        steps.append(f"git -C {dest} update-ref refs/heads/{shlex.quote(branch)} {sha}")
+        steps.append(f"git -C {dest} symbolic-ref HEAD refs/heads/{shlex.quote(branch)}")
+    else:
+        steps.append(f"git -C {dest} update-ref --no-deref HEAD {sha}")
+    steps.append(f"git -C {dest} reset -q {sha}")
+    steps.append(f"cd {dest}")
+    # One line joined with &&: a failing step stops the chain, so the suite never runs on a partial copy.
+    return " && ".join(steps) + " && ", parent
+
+
+def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = SHELL_SUITE_WSL_TIMEOUT_S) -> Tuple[int, str]:
     """Run shell tests under WSL, tripwire-wrapped (same builder as the native leg)."""
-    cmd = f"cd '{wsl_path}' && " + shlex.join(tripwired_argv(shell_suite_argv(), "python"))
+    prelude, parent = wsl_worktree_prelude(repo_root, wsl_path)
+    suite = shlex.join(tripwired_argv(shell_suite_argv(), "python"))
+    cmd = prelude + suite if prelude else f"cd '{wsl_path}' && " + suite
     try:
         result = subprocess.run(
             ["wsl.exe", "bash", "-lc", cmd],
@@ -280,6 +332,13 @@ def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> T
         return 124, f"Shell tests timed out after {timeout}s"
     except Exception as e:
         return 2, f"Error running shell tests: {e}"
+    finally:
+        if parent:
+            # Remove the WSL-side copy (never the worktree). Best effort; a leftover is in /tmp.
+            try:
+                subprocess.run(["wsl.exe", "bash", "-lc", f"rm -rf {parent}"], capture_output=True, timeout=60)
+            except Exception:
+                pass
 
 
 def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
