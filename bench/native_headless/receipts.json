@@ -1,0 +1,266 @@
+{
+  "sources": [
+    {
+      "receipt": "verified/run.json",
+      "sha256": "c31a7db95c03b40e77d7da53e68f9762cd57e13f39a3ec5eccbd282541cb5c96"
+    },
+    {
+      "receipt": "default-05/verified/run.json",
+      "sha256": "28ec6eac3d46c85d4b9bd2de82d679ac80656d3bda22e18d0516b4878d51be6b"
+    }
+  ],
+  "rows": [
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "intervals",
+      "repeat": 1,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "11ae95466c6f2e6fd199ebe64d1c8c663452180701d84b3f7e43dda937f41092"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "intervals",
+      "repeat": 2,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "125385a9fcb5d98ba1c5204742150bea2ecfa86b11cdef451fb9ed10c0cd8e92"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "intervals",
+      "repeat": 3,
+      "tests_pass": false,
+      "scoped": false,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "b28333077bb576e97085a479744c0721ef2f56afd56fbf56bfea90929c17ead0"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "unique",
+      "repeat": 1,
+      "tests_pass": false,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "0cc59c09e2e3c9b80763d36e447e8b028857730c6149d27edc0231db233a145d"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "unique",
+      "repeat": 2,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "fa3070954c098ed02464c483ad19f3a39b44f618e1349d6790ed6c123044358d"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "unique",
+      "repeat": 3,
+      "tests_pass": false,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "4a9cfc3d39f8b614b9535a9dd98ffbe67849d9d5e9cb65e1bb1168c60486edea"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "windows",
+      "repeat": 1,
+      "tests_pass": false,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "9b3e01e19d471ac5032d708c0d744211ea866f8d91a80c24e6c2b56050d86e91"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "windows",
+      "repeat": 2,
+      "tests_pass": false,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "9524009d47e3bc9db66a25e909e37e5d3f0571d2ca9b1f0b4eaf659d36c52651"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "eval-local-30b-32k:v1",
+      "provider": "local_eval",
+      "ticket": "windows",
+      "repeat": 3,
+      "tests_pass": false,
+      "scoped": true,
+      "accepted": false,
+      "receipt": "verified/run.json",
+      "trace_sha256": [
+        "6ae38383ba6ca13f66f4dc8176afdb764d9cb0768ebf4edf9903f06060692c29"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "intervals",
+      "repeat": 1,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "dfa5813b346bb6a7ae9296cf312b2ade0ac5e3c7ab0ab13b48085e0ddb840513"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "intervals",
+      "repeat": 2,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "9170719cd40bf5590d16abc9a2210a1eb704f01237065704c97d2d491c3f48f1"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "intervals",
+      "repeat": 3,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "51730e171a88a00fe5d934d88c35b6f6b38cd87cf7e20c41f256ac76fc90c4ef"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "unique",
+      "repeat": 1,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "71b19aed3edc4f6014af0507d98f1f0431d2308885cfa48f8340612a60af4449"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "unique",
+      "repeat": 2,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "cffc442f78a9eb6716329d97126b4733b37a19ed221f7b5a6aea46673f1c1ae9"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "unique",
+      "repeat": 3,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "e5b6632cb96f12350eb1905c3e36a058540d92990dfc5bd9fb8cc5aef5474075"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "windows",
+      "repeat": 1,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "68b0d97fd1a21b00c4a503c4c1a61dfcedd81100221b3bc2c82e68d23e272a1c"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "windows",
+      "repeat": 2,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "ba879f28d9897805d3234bda508ae5fa831dc16508ff74c859981f8efc910df8"
+      ]
+    },
+    {
+      "driver": "codex-exec",
+      "model": "gpt-6.2-astra",
+      "provider": "openai",
+      "ticket": "windows",
+      "repeat": 3,
+      "tests_pass": true,
+      "scoped": true,
+      "accepted": true,
+      "receipt": "default-05/verified/run.json",
+      "trace_sha256": [
+        "3daf29dd3af1eeb477b83bb8931ce585819cc32f63ad9caff912489377b64014"
+      ]
+    }
+  ]
+}
