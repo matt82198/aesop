@@ -19,6 +19,7 @@ Test cases:
 import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -42,6 +43,18 @@ def _captured_call(fn, *args):
     with mock.patch("linux_shape_check.subprocess.run", return_value=_completed()) as run:
         fn(*args)
     return run.call_args.args[0]
+
+
+def _primary_checkout_root(tmp):
+    """A repo root whose .git is a directory: the in-place WSL path, whatever the cwd is.
+
+    run_shell_tests_wsl branches on the .git type of its repo root. Path(".") is a linked
+    worktree (.git is a file) when this suite runs from a worktree, which takes the clone
+    prelude and a trailing cleanup call, so the assertion below would read the wrong command.
+    """
+    root = Path(tmp)
+    (root / ".git").mkdir()
+    return root
 
 
 class TestNativeLegUsesTripwire(unittest.TestCase):
@@ -77,7 +90,8 @@ class TestNativeAndWslShareOneCommandShape(unittest.TestCase):
 
     def test_shell_native_and_wsl_differ_only_in_host_prefix(self):
         native = _captured_call(lsc.run_shell_tests_native, Path("."))
-        wsl_argv = _captured_call(lsc.run_shell_tests_wsl, Path("."), WSL_PATH)
+        with tempfile.TemporaryDirectory() as tmp:
+            wsl_argv = _captured_call(lsc.run_shell_tests_wsl, _primary_checkout_root(tmp), WSL_PATH)
         inner = wsl_argv[3]
         self.assertTrue(inner.startswith(f"cd '{WSL_PATH}' && "), inner)
         wsl_suite = shlex.split(inner[len(f"cd '{WSL_PATH}' && "):])

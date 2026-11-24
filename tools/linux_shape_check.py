@@ -38,6 +38,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import List, Tuple
@@ -264,8 +265,10 @@ def should_check_linux_shape(changed_files: List[str]) -> bool:
 
 
 # Measured 2026-11-23 under WSL Ubuntu on /mnt/c, full leg from a linked worktree
-# (WSL copy prelude included) with the backup-fleet hang fixed: 179 s wall, rc=0.
-# 300 s gives 1.7x headroom. A timeout still fails closed (exit 124), it never skips.
+# (WSL copy prelude included): 179 s wall earlier, 174 s wall on the current tree (rc=0).
+# No single shell file hangs when run alone (each completes; test_pre_push_policy.sh is the
+# slowest at 111 s), so the cap is sized to the whole leg, not to one file. 300 s gives
+# ~1.7x headroom. A timeout still fails closed (exit 124) and names the test that was running.
 SHELL_SUITE_WSL_TIMEOUT_S = 300
 
 
@@ -273,7 +276,7 @@ def wsl_worktree_prelude(repo_root: Path, wsl_path: str) -> Tuple[str, str]:
     """Bash prelude that gives WSL git a resolvable context for a linked worktree.
 
     A linked worktree's .git is a file holding a Windows gitdir path
-    ("gitdir: C:/Users/.../.git/worktrees/x"). WSL git reads that as a relative
+    ("gitdir: <drive>:<repo>/.git/worktrees/<name>"). WSL git reads that as a relative
     path and every git call in the tree fails ("Not in a git repository"), so
     test_waveguard.sh could never pass from a worktree. The worktree's own .git
     file is never rewritten. Instead the leg clones the shared object store into
@@ -312,33 +315,65 @@ def wsl_worktree_prelude(repo_root: Path, wsl_path: str) -> Tuple[str, str]:
     return " && ".join(steps) + " && ", parent
 
 
+_RUNNING_MARKER = re.compile(r"^\[TEST\] Running: (\S+)", re.MULTILINE)
+
+
+def _hung_test_name(output: str) -> str:
+    """The test the runner announced last ("[TEST] Running: <file>"), or "" if none was seen."""
+    found = _RUNNING_MARKER.findall(output)
+    return found[-1] if found else ""
+
+
+def _cleanup_wsl_copy(parent: str) -> None:
+    """Stop anything still running in the WSL-side copy, then remove it. Best effort.
+
+    Only processes whose command line names this run's unique copy dir are matched. The
+    pattern is written "[a]esop" so the pkill shell itself does not match. The worktree is
+    never touched.
+    """
+    pattern = parent.replace("/tmp/aesop", "/tmp/[a]esop", 1)
+    for cmd in (f"pkill -f '{pattern}' || true", f"rm -rf {parent}"):
+        try:
+            subprocess.run(["wsl.exe", "bash", "-lc", cmd], capture_output=True, timeout=60)
+        except Exception:
+            pass
+
+
 def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = SHELL_SUITE_WSL_TIMEOUT_S) -> Tuple[int, str]:
-    """Run shell tests under WSL, tripwire-wrapped (same builder as the native leg)."""
+    """Run shell tests under WSL, tripwire-wrapped (same builder as the native leg).
+
+    stdin is closed (DEVNULL) so no test can block on the parent's pipe, and output goes to a
+    temp file rather than a pipe a stuck child could hold open. On timeout the runner's last
+    "[TEST] Running:" line names the test that hung.
+    """
     prelude, parent = wsl_worktree_prelude(repo_root, wsl_path)
     suite = shlex.join(tripwired_argv(shell_suite_argv(), "python"))
     cmd = prelude + suite if prelude else f"cd '{wsl_path}' && " + suite
-    try:
-        result = subprocess.run(
-            ["wsl.exe", "bash", "-lc", cmd],
-            capture_output=True,
-            timeout=timeout,
-        )
+    with tempfile.TemporaryFile() as out:
+        timed_out = False
+        try:
+            rc = subprocess.run(
+                ["wsl.exe", "bash", "-lc", cmd],
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            rc, timed_out = 124, True
+        except Exception as e:
+            return 2, f"Error running shell tests: {e}"
+        finally:
+            if parent:
+                _cleanup_wsl_copy(parent)
+        out.seek(0)
         # Decode output with UTF-8 (WSL bash output is UTF-8, not UTF-16LE)
-        stdout = result.stdout.decode('utf-8', errors='replace')
-        stderr = result.stderr.decode('utf-8', errors='replace')
-        output = stdout + stderr
-        return result.returncode, output
-    except subprocess.TimeoutExpired:
-        return 124, f"Shell tests timed out after {timeout}s"
-    except Exception as e:
-        return 2, f"Error running shell tests: {e}"
-    finally:
-        if parent:
-            # Remove the WSL-side copy (never the worktree). Best effort; a leftover is in /tmp.
-            try:
-                subprocess.run(["wsl.exe", "bash", "-lc", f"rm -rf {parent}"], capture_output=True, timeout=60)
-            except Exception:
-                pass
+        output = out.read().decode("utf-8", errors="replace")
+    if timed_out:
+        hung = _hung_test_name(output)
+        where = f"hung test: {hung}" if hung else "no test had started"
+        return 124, f"Shell tests timed out after {timeout}s ({where})\n{output}"
+    return rc, output
 
 
 def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
