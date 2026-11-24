@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
+from http.server import ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,14 @@ import subprocess
 import sys
 import tempfile
 import time
+
+# Direct script invocations (including shard subprocesses) need the repo root.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from bench.native_headless import gateway
+from bench.native_headless.grading import GRADE, LIMITS, diff_stats, digest, encode, grade, write
+from bench.native_headless.tickets import TICKETS, prompt, repository
 
 
 @dataclass(frozen=True)
@@ -60,11 +69,9 @@ def call(*args, cwd=None):
 
 
 def serve(port_file, tls, model):
-    os.environ["EVAL_MODEL"] = model  # The factory gateway reads this on import.
-    import gateway
-    gateway.UPSTREAM = "127.0.0.1"
-    digest = gateway.model_digest()
-    with gateway.ThreadingHTTPServer(("127.0.0.1", 0), gateway.Gateway) as server:
+    digest = gateway.model_digest(model)
+    with ThreadingHTTPServer(("127.0.0.1", 0), gateway.Gateway) as server:
+        server.model = model
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(tls / "server.crt", tls / "server.key")
         server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -117,8 +124,8 @@ def trial_seat(arm, folder, gateway_log):
 
 
 def dispatch(job, arm):
-    from agent_driver import WorkerRequest
-    from headless_cli_driver import HeadlessCliDriver
+    from driver.agent_driver import WorkerRequest
+    from driver.headless_cli_driver import HeadlessCliDriver
     data = json.loads(job.read_bytes())
     os.environ.update(data["env"])
     driver = HeadlessCliDriver(arm.driver, model=arm.model, provider=arm.provider,
@@ -166,8 +173,6 @@ def traces_for(seat, repo, started):
 
 
 def collect(ticket, repeat, repo, out, image, result, elapsed, paths, requested):
-    from run import LIMITS, GRADE, diff_stats, digest, grade
-    from tickets import prompt, repository
     events, hashes = read_rollouts(paths)
     actual = observed_arm(events)
     if actual != requested:
@@ -207,7 +212,6 @@ def collect(ticket, repeat, repo, out, image, result, elapsed, paths, requested)
 
 
 def trial(ticket, repeat, folder, out, prior, arm, resume):
-    from tickets import prompt, repository
     log = out / f"{ticket.key}-{repeat}.gateway"
     job, repo = folder / "job.json", folder / "repo"
     limit = prior["timeout_s"]
@@ -267,13 +271,13 @@ def main():
     if not args.model.strip() or args.model.startswith("-") or any(c in args.model for c in "|\r\n"):
         parser.error("--model requires a model id")
     arm = Arm("codex-exec", args.model, args.provider)
-    sys.path[:0] = [str(args.kernel / "driver"), str(args.factory / "evals/harness")]
     if args.dispatch:
+        if not (args.kernel / "driver/headless_cli_driver.py").is_file():
+            parser.error("--kernel must contain the native headless driver")
+        sys.path.insert(0, str(args.kernel.resolve()))
         return dispatch(args.dispatch, arm)
     if args.port_file:
         return serve(args.port_file, args.tls, arm.model)
-    from run import digest, encode, write
-    from tickets import repository, TICKETS, prompt
     prior_path = args.factory / "evals/harness/rerun-03/run.json"
     prior = json.loads(prior_path.read_bytes())
     ticket = next((t for t in TICKETS if t.key == args.ticket), None)

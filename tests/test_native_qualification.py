@@ -3,12 +3,12 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bench.native_headless import qualify
 
@@ -22,6 +22,47 @@ def trace(model, provider):
 
 
 class NativeQualificationTests(unittest.TestCase):
+    def test_package_driver_in_clean_interpreter(self):
+        root = Path(qualify.__file__).resolve().parents[2]
+        code = (
+            "import sys\nsys.path.insert(0, sys.argv[1])\n"
+            "from driver.agent_driver import AgentDriver\n"
+            "from driver.headless_cli_driver import HeadlessCliDriver\n"
+            "assert isinstance(HeadlessCliDriver('codex-exec'), AgentDriver)"
+        )
+        proc = subprocess.run([sys.executable, "-I", "-c", code, str(root)],
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_frozen_fixture_and_grader(self):
+        from bench.native_headless import grading, tickets
+        fixture = tickets.repository()
+        self.assertEqual(grading.digest(grading.encode(fixture)),
+                         "334f1e622b1319d8ab881300f4ef057a91c76571d22e6a512c0b9a7deeeef032")
+        ticket = next(t for t in tickets.TICKETS if t.key == "unique")
+        command = [sys.executable, "-I", "-B", "-c", grading.GRADE]
+        self.assertFalse(grading.grade(ticket, fixture["unique.py"], command))
+        candidate = ("def solve(items):\n    seen = {}\n    for item in items:\n"
+                     "        seen.setdefault(item.casefold(), item)\n    return list(seen.values())\n")
+        self.assertTrue(grading.grade(ticket, candidate, command))
+
+    def test_gateway_checks_selected_model_and_rejects_remote_weights(self):
+        from bench.native_headless import gateway
+        for details in ({}, {"remote_model": "remote"}):
+            with self.subTest(details=details), patch.object(gateway, "backend") as backend:
+                tags = {"models": [{"name": "other", "size": 1, "digest": "wrong"},
+                                   {"name": "chosen", "size": 1, "digest": "expected"}]}
+                response = io.BytesIO(json.dumps(details).encode())
+                response.status = 200
+                conn = Mock()
+                backend.side_effect = [(conn, io.BytesIO(json.dumps(tags).encode())), (conn, response)]
+                if details:
+                    with self.assertRaisesRegex(ValueError, "local weights"):
+                        gateway.model_digest("chosen")
+                else:
+                    self.assertEqual(gateway.model_digest("chosen"), "expected")
+                self.assertEqual(json.loads(backend.call_args.args[1]), {"model": "chosen"})
+
     def test_missing_arm_is_usage_error_before_reading_schedule(self):
         args = ["qualify.py", "--kernel", ".", "--factory", "absent", "--out", "absent",
                 "--ticket", "windows"]
@@ -61,17 +102,12 @@ class NativeQualificationTests(unittest.TestCase):
 
     def test_shard_dispatch_and_output_use_explicit_arm_despite_stale_schedule(self):
         from contextlib import ExitStack
-        ticket = SimpleNamespace(key="sample")
-        tickets = SimpleNamespace(TICKETS=[ticket], prompt=lambda _: "fix", repository=lambda: {})
-        run = SimpleNamespace(digest=lambda _: "hash", encode=lambda _: b"{}", GRADE="", LIMITS=[],
-                              diff_stats=lambda *_: ({}, ["sample.py"]), grade=lambda *_: True,
-                              write=lambda path, value: path.write_text(json.dumps(value), encoding="utf8"))
         def job(path, remaining):
             data = json.loads(path.read_bytes())
             requested = data["arm"]
             self.assertEqual(requested, {"driver": "codex-exec", "model": "chosen", "provider": "openai"})
             repo = Path(data["repo"])
-            (repo / "sample.py").write_bytes(b"pass")
+            (repo / "windows.py").write_bytes(b"pass")
             events = trace("different" if mismatch else "chosen", "openai")
             events[1]["payload"].update(approval_policy="on-request", approvals_reviewer="auto_review",
                                         sandbox_policy={"type": "workspace-write"})
@@ -85,18 +121,19 @@ class NativeQualificationTests(unittest.TestCase):
                 root = Path(temp)
                 schedule = root / "evals/harness/rerun-03/run.json"
                 schedule.parent.mkdir(parents=True)
-                slots = [dict(profile="codex-exec", repeat=i, ticket="sample", prompt_sha256="hash")
+                prompt_hash = "3ec1248b2b6e396ffc2af85aaf81ff84aed3f5ba06a8ffa727ae362f72de61f0"
+                fixture_hash = "334f1e622b1319d8ab881300f4ef057a91c76571d22e6a512c0b9a7deeeef032"
+                slots = [dict(profile="codex-exec", repeat=i, ticket="windows", prompt_sha256=prompt_hash)
                          for i in (1, 2, 3)]
-                prior = dict(model="stale", model_digest="old", planned=36, baseline_sha256="hash",
+                prior = dict(model="stale", model_digest="old", planned=36, baseline_sha256=fixture_hash,
                              timeout_s=180, image="image", cli_versions={"codex": "cli"},
                              rows=slots + [dict(profile="another")] * 33)
                 schedule.write_bytes(json.dumps(prior).encode())
                 out = root / "out"
                 argv = ["qualify.py", "--factory", temp, "--kernel", temp, "--out", str(out),
-                        "--ticket", "sample", "--model", "chosen", "--provider", "openai"]
+                        "--ticket", "windows", "--model", "chosen", "--provider", "openai"]
                 stack.enter_context(patch.object(sys, "argv", argv))
-                stack.enter_context(patch.object(sys, "path", list(sys.path)))
-                stack.enter_context(patch.dict(sys.modules, run=run, tickets=tickets))
+                stack.enter_context(patch.object(qualify, "grade", return_value=True))
                 stack.enter_context(patch.dict(os.environ, EVAL_MODEL="wrong-env"))
                 stack.enter_context(patch.object(qualify, "call", side_effect=lambda *a, **kw:
                                                  "cli" if "--version" in a else "image"))

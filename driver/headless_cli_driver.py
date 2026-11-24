@@ -36,18 +36,18 @@ import uuid
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-from agent_driver import (
-    WORKER_DONE,
-    WORKER_FAILED,
-    WORKER_UNKNOWN,
-    AgentDriver,
-    CommandResult,
-    DriverCapabilities,
-    WorkerRequest,
-    WorkerResult,
-    WorkerStatus,
-)
-from proc_util import run_shell_bounded
+if __package__:
+    from .agent_driver import (
+        WORKER_DONE, WORKER_FAILED, WORKER_UNKNOWN, AgentDriver, CommandResult,
+        DriverCapabilities, WorkerRequest, WorkerResult, WorkerStatus,
+    )
+    from .proc_util import run_shell_bounded
+else:  # Standalone callers run with the driver directory on their import path.
+    from agent_driver import (
+        WORKER_DONE, WORKER_FAILED, WORKER_UNKNOWN, AgentDriver, CommandResult,
+        DriverCapabilities, WorkerRequest, WorkerResult, WorkerStatus,
+    )
+    from proc_util import run_shell_bounded
 
 PROFILES = ("codex-exec", "agy-headless")
 OPEN_WEIGHT_PROVIDERS = ("ollama", "lmstudio")

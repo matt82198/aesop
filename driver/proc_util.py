@@ -28,7 +28,10 @@ import os
 import signal
 import subprocess
 
-from agent_driver import CommandResult
+if __package__:
+    from .agent_driver import CommandResult
+else:
+    from agent_driver import CommandResult
 
 # Post-kill drain bound. With the tree dead the pipes close and communicate()
 # returns immediately; this cap only protects against a survivor that
