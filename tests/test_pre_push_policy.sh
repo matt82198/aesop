@@ -24,9 +24,13 @@ cd "$TEST_ROOT" || exit 1
 # distro has no gh (only gh.exe via interop), so before this stub the emit-receipt
 # cases failed with "BLOCKED: gh CLI not found" (measured 2026-11-23). Cases that
 # need gh absent prepend their own stub, which still shadows this one.
+# Fail closed: any gh subcommand other than --version exits 97 with a message, so a
+# case that reaches a gh success path cannot pass silently. Verified 2026-11-24: a full
+# WSL run logged 10 gh calls from this stub, all `--version`; no case calls another
+# subcommand through it.
 TEST_GH_STUB_DIR="$TEST_ROOT/stub-gh-default"
 mkdir -p "$TEST_GH_STUB_DIR"
-printf '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "gh version 0.0.0 (test stub)"; fi\nexit 0\n' > "$TEST_GH_STUB_DIR/gh"
+printf '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "gh version 0.0.0 (test stub)"; exit 0; fi\necho "test stub gh: unexpected gh $* (no case here expects gh to succeed)" >&2\nexit 97\n' > "$TEST_GH_STUB_DIR/gh"
 chmod +x "$TEST_GH_STUB_DIR/gh"
 export PATH="$TEST_GH_STUB_DIR:$PATH"
 
