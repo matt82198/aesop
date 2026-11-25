@@ -32,7 +32,7 @@ cite them as sources or no folder page replaces them yet, so check their claims 
 | [Gates and hooks](./concepts/gates-and-hooks.md) | What the local pre-push hook and the server-side checks each enforce, and what a skipped hook cannot undo. |
 | [Claim binding](./concepts/claim-binding.md) | How a claim in a report is bound to evidence, and which part of that hook is not shipped. |
 | [Architecture](./ARCHITECTURE.md) | The wave cycle and the components around it. |
-| [Two swappable seats](./MICROKERNEL.md) | The worker seat and the orchestrator seat, and what a model swap changes. |
+| [Two swappable seats](./archive/MICROKERNEL.md) | The worker seat and the orchestrator seat, and what a model swap changes. |
 | [Durable checkpointing](./CHECKPOINTING.md) | STATE.md and BUILDLOG.md, recovery on resume, log rotation. |
 | [How the wave loop works](./HOW-THE-LOOP-WORKS.md) | One wave from ranking to close. |
 | [Cardinal rules](./CARDINAL-RULES.md) | The foundational operating principles for orchestration. |
@@ -64,7 +64,7 @@ cite them as sources or no folder page replaces them yet, so check their claims 
 | [Stage matrix](./reference/stage-matrix.md) | What each stage lane may take in, produce, run and hand back, by change category. |
 | [Stage contracts](./STAGE-CONTRACTS.md) | The older stage-by-category templates for dispatch. |
 | [CI failure catalog](./CI-CATALOG.md) | Recurring CI failures, one recipe per category. |
-| [Machinery map](./MACHINERY-MAP.md) | An evidence-bound map of gates, daemons, stores and lane contracts, with known gaps. |
+| [Machinery map](./archive/MACHINERY-MAP.md) | An evidence-bound map of gates, daemons, stores and lane contracts, with known gaps. |
 | [Configuration reference](./CONFIGURE.md) | Config fields and environment variables. |
 | [Test strategy](./TESTING.md) | How the test suites are organized. |
 

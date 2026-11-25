@@ -70,7 +70,7 @@ the validated `add` command (`tools/refuted_ledger.py:307`).
 | [docs/paper/EVIDENCE.md](../paper/EVIDENCE.md) | The evidence base compiled for the paper draft, with dates from commit objects |
 | [docs/recordings/](../recordings/) | A recorded non-Claude end-to-end run and the script that produces it |
 | [docs/templates/](../templates/) | Example fleet-ops analysis and proposal templates |
-| [docs/RECEIPTS.md](../RECEIPTS.md) | Per-wave metrics from an earlier snapshot. This is not the signed receipt format, despite the shared word |
+| [docs/archive/RECEIPTS.md](../archive/RECEIPTS.md) | Per-wave metrics from an earlier snapshot. This is not the signed receipt format, despite the shared word |
 
 Signed receipts are described and verified through `tools/verify_receipt.py` and `tools/emit_receipt.py`; see
 [Public and private](public-and-private.md) for the one receipt you can verify without any other setup.

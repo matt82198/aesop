@@ -33,11 +33,11 @@ FIXTURE_TOOL = (
 
 
 def _make_repo(tmp: Path, map_text: str) -> Path:
-    """Write tools/fixture.py and docs/MACHINERY-MAP.md under tmp; return the repo root."""
+    """Write tools/fixture.py and docs/archive/MACHINERY-MAP.md under tmp; return the repo root."""
     (tmp / "tools").mkdir()
     (tmp / "tools" / "fixture.py").write_text(FIXTURE_TOOL, encoding="utf-8", newline="\n")
-    (tmp / "docs").mkdir()
-    (tmp / "docs" / "MACHINERY-MAP.md").write_text(map_text, encoding="utf-8", newline="\n")
+    (tmp / "docs" / "archive").mkdir(parents=True)
+    (tmp / "docs" / "archive" / "MACHINERY-MAP.md").write_text(map_text, encoding="utf-8", newline="\n")
     return tmp
 
 

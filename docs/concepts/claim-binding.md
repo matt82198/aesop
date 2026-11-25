@@ -19,8 +19,8 @@ trusting the sentence.
 Only the record that it exists:
 
 - `docs/PROVENANCE.md:24` lists the hook, its commit and its date, and marks its home as a private repository.
-- `docs/MACHINERY-MAP.md:297` lists it under "Brain hooks named in this repo (live copies outside the repo)"
-  (heading at `docs/MACHINERY-MAP.md:292`).
+- `docs/archive/MACHINERY-MAP.md:297` lists it under "Brain hooks named in this repo (live copies outside the repo)"
+  (heading at `docs/archive/MACHINERY-MAP.md:292`).
 
 Nothing under `hooks/claude/` implements it. The three hooks that ship there are the model policy, the heredoc
 guard and the transcript guard (see [Gates and hooks](gates-and-hooks.md)). <!-- ls hooks/claude -> force-model-policy.mjs, no-heredoc-file-authoring.mjs, no-scrollback-as-record.mjs plus two .test.mjs files -->

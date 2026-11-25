@@ -324,14 +324,14 @@ Status: **enforced** means a code path in the tree enforces the principle. **par
 | 6 | Orchestrator isolation, bounded reads | docs/CARDINAL-RULES.md `4. Orchestrator isolation: lean context` | enforced | driver/context_pack.py `ContextPackViolation`, raised `_order_sources_by_priority` |
 | 7 | Lanes never merge | LANE-CONTRACT.md section 6 (`5. Verification`) | partial | tools/dispatch_lint.py `FORBIDDEN_PATTERNS`; out-of-repo hook (section 6) |
 | 8 | Merge verified against the platform | LANE-CONTRACT.md section 6 | enforced | tools/auto_merge.py `merge_pr` (`state != 'MERGED'`); tools/merge_queue.py `merge_and_verify` |
-| 9 | Zombie resurrection fail-closed | docs/RECEIPTS.md `Fixes Applied` | enforced | tools/tracker_guard.py `cmd_check`, `cmd_enforce`; hooks/pre-push-policy.sh `check_secret_scan` |
+| 9 | Zombie resurrection fail-closed | docs/archive/RECEIPTS.md `Fixes Applied` | enforced | tools/tracker_guard.py `cmd_check`, `cmd_enforce`; hooks/pre-push-policy.sh `check_secret_scan` |
 | 10 | Ratchet baselines, shrink-only | LANE-CONTRACT.md `2. Tests` | enforced (the `--update-baseline` ban is prose) | tools/encoding_lint.py `ascii_findings`; tools/pyflakes_gate.py `check_ratchet` |
 | 11 | Heartbeat and lease liveness | docs/GOVERNANCE.md `Heartbeat protocol` | enforced | daemons/run-watchdog.sh `acquire_lock`; state_store/lease_claims.py `claim` (`BEGIN IMMEDIATE`); state_store/instance_projection.py `detect_stale_instances` |
 | 12 | Fencing, single primary | state_store/CLAUDE.md `Multibox Increment 5 (2026-10-05) - failover: stale detectio` | partial (no production caller) | state_store/failover.py `FencingToken`, `assert_fenced`, `elect_primary` |
 | 13 | Signed receipts | docs/archive/RECEIPT-GATE.md `Trust boundary — what a valid receipt proves, and what it do` | partial (verify-receipt is not required) | tools/receipt_common.py `sign`; tools/verify_receipt.py `verify` |
 | 14 | Content-addressed tree binding | docs/archive/RECEIPT-GATE.md | enforced | tools/verify_receipt.py `effective_required` (tree hash recomputed and compared) |
 | 15 | Incident-to-trap | docs/paper/aesop-arxiv.tex | partial (fake-green only) | tests/test_traps.py `TestFakeGreenTrap`; tools/incident_report.py (ci.yml `pr-symbol-survival`) |
-| 16 | Idempotent dispatch via journal | docs/MICROKERNEL.md | enforced | driver/wave_loop.py `_write_journal_entry`; driver/wave_loop.py `_should_skip_from_journal` |
+| 16 | Idempotent dispatch via journal | docs/archive/MICROKERNEL.md | enforced | driver/wave_loop.py `_write_journal_entry`; driver/wave_loop.py `_should_skip_from_journal` |
 | 17 | Fake green and watched-to-fail | LANE-CONTRACT.md section 5 | partial (watched-to-fail is prose) | tests/test_traps.py `TestFakeGreenTrap` |
 | 18 | Never fit green | LANE-CONTRACT.md section 3 | partial (assertion relaxation not enforced) | tools/verify_test_suite_count.py (shard coverage) |
 | 19 | Pride bar, never ship known-broken | docs/CARDINAL-RULES.md `3. Reliability core: inputs always produce outputs` | prose | none |

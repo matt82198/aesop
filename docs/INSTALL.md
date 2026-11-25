@@ -360,7 +360,7 @@ If you've already scaffolded Aesop and just need to get running:
 
 By default, Aesop uses Claude Code (the orchestration harness) as its backend. You can configure it to use other models via the **AgentDriver abstraction**—enabling Ollama, OpenAI-compatible endpoints, OpenRouter, and more.
 
-For the conceptual picture (the two swappable seats, what's proven vs. bounded about swapping them, and a 60-second copy-paste quickstart), see **[MICROKERNEL.md](MICROKERNEL.md)**. The rest of this section is the config-mechanics reference.
+For the conceptual picture (the two swappable seats, what's proven vs. bounded about swapping them, and a 60-second copy-paste quickstart), see **[MICROKERNEL.md](archive/MICROKERNEL.md)**. The rest of this section is the config-mechanics reference.
 
 ### The unified two-seat config (0.4.0)
 
@@ -609,7 +609,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -D
 2. **Read [CONFIGURE.md](CONFIGURE.md)** — Customize repos, ports, and brain root
 3. **Run [FIRST-WAVE.md](FIRST-WAVE.md)** — Test a full `/power` → `/buildsystem` cycle
 4. **Understand [CONCEPTS.md](CONCEPTS.md)** — Learn the dispatch model and state model
-5. **Read [MICROKERNEL.md](MICROKERNEL.md)** — Swap the worker or orchestrator seat to a non-Claude model
+5. **Read [MICROKERNEL.md](archive/MICROKERNEL.md)** — Swap the worker or orchestrator seat to a non-Claude model
 6. **Explore the dashboard** — `python3 ui/serve.py` then open http://localhost:8770
 7. **Pick a CI mode with [CI-MODES.md](CI-MODES.md)** — hosted, self-hosted runner, or the local receipt gate; `aesop doctor` says which this machine can run
 
