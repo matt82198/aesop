@@ -1,0 +1,9 @@
+{
+  "repos": ["example/service", "example/client"],
+  "pr": { "repo": "example/service", "number": 42 },
+  "run": { "repo": "example/service", "id": 123456789 },
+  "checkout": "/path/to/local/checkout",
+  "inbox": { "path": "/path/to/inbox.md", "offset": 0 },
+  "activity": { "path": "/path/to/activity.jsonl", "offset": 0 },
+  "timeoutMs": 30000
+}
