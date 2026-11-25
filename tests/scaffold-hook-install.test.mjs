@@ -238,7 +238,7 @@ test('scaffold without git repo does not crash (no hook install)', () => {
   assert.ok(!fs.existsSync(hookPath) || true, 'Scaffold should handle missing .git gracefully');
 });
 
-test('scaffold refuses to install hook when .git/hooks is a symlink', () => {
+test('scaffold refuses to install hook when .git/hooks is a symlink', (t) => {
   const tempDir = createTestDir();
   const targetDir = path.join(tempDir, 'fleet-symlink-hooks');
 
@@ -261,8 +261,8 @@ test('scaffold refuses to install hook when .git/hooks is a symlink', () => {
   try {
     fs.symlinkSync(evilDir, gitHooksDir, isWindows() ? 'junction' : 'dir');
   } catch (e) {
-    // If symlink creation fails, skip this test (e.g., no admin on Windows without junction support)
-    console.log('Skipping symlink test (junction/symlink not available)');
+    // If symlink creation fails, mark as skipped (e.g., no admin on Windows without junction support)
+    t.skip(`symlink creation unavailable (${e.code || e.message})`);
     return;
   }
 
@@ -288,7 +288,7 @@ test('scaffold refuses to install hook when .git/hooks is a symlink', () => {
   );
 });
 
-test('scaffold refuses to install hook when hook dest file is a symlink', () => {
+test('scaffold refuses to install hook when hook dest file is a symlink', (t) => {
   const tempDir = createTestDir();
   const targetDir = path.join(tempDir, 'fleet-symlink-hook-file');
 
@@ -312,8 +312,8 @@ test('scaffold refuses to install hook when hook dest file is a symlink', () => 
   try {
     fs.symlinkSync(evilFile, hookPath);
   } catch (e) {
-    // If symlink creation fails, skip
-    console.log('Skipping hook-file symlink test');
+    // If symlink creation fails, mark as skipped rather than silently passing
+    t.skip(`hook-file symlink creation unavailable (${e.code || e.message})`);
     return;
   }
 
@@ -342,7 +342,7 @@ test('scaffold refuses to install hook when hook dest file is a symlink', () => 
   }
 });
 
-test('scaffold refuses to follow a pre-existing symlinked .git in target dir (escape guard)', () => {
+test('scaffold refuses to follow a pre-existing symlinked .git in target dir (escape guard)', (t) => {
   // Regression test for symlink-escape: PR #24 guarded .git/hooks and .git/hooks/pre-push
   // being symlinks, but not .git itself. A pre-existing target dir with a symlinked/junction
   // .git pointing outside the target must not cause any file to be written outside targetDir.
@@ -360,8 +360,8 @@ test('scaffold refuses to follow a pre-existing symlinked .git in target dir (es
   try {
     fs.symlinkSync(evilDir, gitDir, isWindows() ? 'junction' : 'dir');
   } catch (e) {
-    // If symlink/junction creation fails (no privilege), skip gracefully
-    console.log('Skipping .git symlink-escape test (junction/symlink not available)');
+    // If symlink/junction creation fails (no privilege), mark as skipped
+    t.skip(`.git symlink creation unavailable (${e.code || e.message})`);
     return;
   }
 
