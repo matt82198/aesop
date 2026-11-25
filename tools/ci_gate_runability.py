@@ -456,7 +456,7 @@ def _base_branch_name(repo_root: str) -> Optional[str]:
         return env_base
     try:
         result = subprocess.run(["git", "-C", repo_root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-                                capture_output=True, text=True, encoding="utf-8")
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
     except OSError:
         return None
     if result.returncode != 0 or not result.stdout.strip():
@@ -499,7 +499,7 @@ def _ref_commit(repo_root: str, ref: str) -> Optional[str]:
         try:
             result = subprocess.run(
                 ["git", "-C", repo_root, "rev-parse", "--verify", "-q", candidate + "^{commit}"],
-                capture_output=True, text=True, encoding="utf-8")
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
         except OSError:
             return None
         if result.returncode == 0 and result.stdout.strip():
