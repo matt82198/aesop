@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS = REPO_ROOT / "tools"
@@ -217,12 +218,137 @@ class TestReceiptFlushIntegration(unittest.TestCase):
         self.assertIn("dropped=1", out)
 
 
+def _can_symlink():
+    """True when this host lets the current user create symlinks (Windows needs developer mode or privilege)."""
+    probe = Path(tempfile.gettempdir()) / ("aesop-symlink-probe-%d" % os.getpid())
+    try:
+        os.symlink(os.devnull, str(probe))
+    except OSError:
+        return False
+    finally:
+        if os.path.islink(str(probe)):
+            os.unlink(str(probe))
+    return True
+
+
+def _write_text(path, text, age_days=0):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    if age_days:
+        old = (datetime.now(timezone.utc) - timedelta(days=age_days)).timestamp()
+        os.utime(path, (old, old))
+    return path
+
+
+class TestFlushLogPrune(unittest.TestCase):
+    """receipt_flush prunes *.flush.log files by the same --max-age-days rule as spooled receipts.
+
+    Candidates are top-level *.flush.log files in the spool directory. Symlinks are never followed
+    or removed, and a file that cannot be stat'd or removed is reported and skipped, not fatal.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.repo = _make_git_repo(self.root)
+        self.spool_dir = self.root / "receipts" / "spool"
+        self.spool_dir.mkdir(parents=True)
+
+    def test_stale_flush_log_is_pruned_and_fresh_one_kept(self):
+        stale = _write_text(self.spool_dir / ("a" * 40 + ".flush.log"), "old log\n", age_days=10)
+        fresh = _write_text(self.spool_dir / ("b" * 40 + ".flush.log"), "new log\n", age_days=1)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0)
+        self.assertFalse(stale.exists(), "a flush log older than --max-age-days must be pruned")
+        self.assertTrue(fresh.exists(), "a flush log inside --max-age-days must be kept")
+
+    def test_json_expiry_unchanged_alongside_flush_logs(self):
+        stale = _write_spool(self.spool_dir, _dummy_envelope("1" * 40), age_days=10)
+        fresh = _write_spool(self.spool_dir, _dummy_envelope("2" * 40))
+        _write_text(self.spool_dir / ("c" * 40 + ".flush.log"), "log\n", age_days=10)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0)
+        self.assertFalse(stale.exists(), "a json spool older than --max-age-days must still be dropped")
+        self.assertTrue(fresh.exists(), "a fresh json spool must still be kept")
+        self.assertIn("dropped=1", out)
+
+    def test_unstatable_flush_log_is_reported_and_skipped_not_fatal(self):
+        bad = _write_text(self.spool_dir / ("d" * 40 + ".flush.log"), "x\n", age_days=10)
+        good = _write_text(self.spool_dir / ("e" * 40 + ".flush.log"), "y\n", age_days=10)
+        real_stat = Path.stat
+
+        def flaky_stat(path, *args, **kwargs):
+            if path.name == bad.name:
+                raise PermissionError(13, "Permission denied")
+            return real_stat(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "stat", flaky_stat):
+            code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0, "an unstatable flush log must not be fatal without --strict")
+        self.assertTrue(bad.exists(), "a flush log that could not be stat'd must be skipped, not removed")
+        self.assertFalse(good.exists(), "the other stale flush log must still be pruned")
+        self.assertIn("could not stat flush log", out)
+        self.assertIn(bad.name, out)
+
+    def test_unremovable_flush_log_is_reported_and_skipped_not_fatal(self):
+        locked = _write_text(self.spool_dir / ("f" * 40 + ".flush.log"), "z\n", age_days=10)
+        good = _write_text(self.spool_dir / ("g" * 40 + ".flush.log"), "w\n", age_days=10)
+        real_unlink = Path.unlink
+
+        def flaky_unlink(path, *args, **kwargs):
+            if path.name == locked.name:
+                raise PermissionError(13, "Permission denied")
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", flaky_unlink):
+            code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0, "an unremovable flush log must not be fatal without --strict")
+        self.assertTrue(locked.exists())
+        self.assertFalse(good.exists(), "the other stale flush log must still be pruned")
+        self.assertIn("could not delete flush log", out)
+        self.assertIn(locked.name, out)
+
+    def test_pruning_is_top_level_and_exact_pattern_only(self):
+        nested = _write_text(self.spool_dir / "nested" / ("i" * 40 + ".flush.log"), "n\n", age_days=10)
+        other = _write_text(self.spool_dir / "notes.txt", "n\n", age_days=10)
+        near_miss = _write_text(self.spool_dir / ("j" * 40 + ".flush.log.bak"), "b\n", age_days=10)
+
+        code, _out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0)
+        self.assertTrue(nested.exists(), "pruning is top-level only, never recursive")
+        self.assertTrue(other.exists(), "non-matching files must never be pruned")
+        self.assertTrue(near_miss.exists(), "only exact *.flush.log names are candidates")
+
+    @unittest.skipUnless(_can_symlink(), "this host cannot create symlinks (needs privilege); runs on CI Linux")
+    def test_symlink_named_like_flush_log_is_never_followed(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        precious = _write_text(outside / "precious.txt", "keep me\n", age_days=10)
+        link = self.spool_dir / ("h" * 40 + ".flush.log")
+        os.symlink(str(precious), str(link))
+
+        code, _out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0)
+        self.assertTrue(precious.exists(), "a flush-log symlink must never cause its target outside the spool dir to be removed")
+        self.assertTrue(os.path.islink(str(link)), "a symlink named like a flush log must be left alone")
+
+
 def suite():
     """Return test suite for this module."""
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(TestPostReceiptSpoolsOn422))
     suite.addTests(loader.loadTestsFromTestCase(TestReceiptFlushIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestFlushLogPrune))
     return suite
 
 

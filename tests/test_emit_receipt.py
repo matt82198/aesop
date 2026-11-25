@@ -403,6 +403,64 @@ class TestRedGateExitCodes(unittest.TestCase):
         self.assertNotIn("pushed_red", env_json["receipt"])
 
 
+class TestUnpushedRedSpool(unittest.TestCase):
+    """A red receipt for a sha GitHub does not have yet must not be spooled when --fail-on-red blocks the push.
+
+    The only spooling path is check-run 403 then commit-comment 422 (commit not found). The push is
+    refused (exit 3), so nothing will ever publish a red spool for that sha. Green receipts and the
+    --pushed-red override (exit 4, the push goes ahead) keep spooling exactly as before.
+    """
+
+    OK = [sys.executable, "-c", "print('Ran 2 tests in 0.00s')"]
+    BAD = [sys.executable, "-c", "import sys; print('FAILED one'); sys.exit(1)"]
+
+    def _registry(self, red):
+        return {"py-shard-0": emit.PartSpec(lambda repo: self.OK),
+                "py-shard-1": emit.PartSpec(lambda repo: self.BAD if red else self.OK),
+                "browser-proofs": emit.PartSpec(None, "not runnable here: hosted browsers only")}
+
+    def _run_unpushed(self, tmp, red, extra):
+        spool = Path(tmp) / "spool"
+
+        def gh_commit_unknown(args):
+            # check-runs: 403 forces the commit-comment fallback; the comment POST 422s (sha not on GitHub).
+            if "check-runs" in args[1]:
+                return (1, "", "HTTP 403: Resource not accessible by personal access token")
+            return (1, "", "HTTP 422: No commit found for SHA")
+
+        repo = _mk_repo(tmp)
+        argv = ["--repo", str(repo), "--matrix", "py-shard-0,py-shard-1,browser-proofs", "--scheme", "hmac-sha256",
+                "--slug", "o/r", "--post"] + extra
+        environ = {"AESOP_RECEIPT_HMAC_SECRET": _hmac_secret(), rc.SPOOL_ENV: str(spool)}
+        code = emit.main(argv, registry=self._registry(red), gh_runner=gh_commit_unknown, environ=environ)
+        spooled = sorted(spool.glob("*.json")) if spool.is_dir() else []
+        return code, spooled
+
+    def test_red_blocked_by_fail_on_red_writes_no_spool_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red"])
+        self.assertEqual(code, 3)
+        self.assertEqual(spooled, [])
+
+    def test_green_unpushed_still_spools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=False, extra=["--fail-on-red"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(spooled), 1)
+
+    def test_red_with_pushed_red_override_still_spools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red", "--pushed-red"])
+        self.assertEqual(code, 4)
+        self.assertEqual(len(spooled), 1)
+
+    def test_red_without_fail_on_red_still_spools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=[])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(spooled), 1)
+
+
 class TestShardEnvScrubsTripwireArmed(unittest.TestCase):
     """The shard env emit_receipt builds must not inherit AESOP_CI_SHARD_TRIPWIRE_ARMED.
 

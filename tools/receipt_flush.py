@@ -99,6 +99,54 @@ def flush_spooled_receipt(spool_file, slug, gh_runner, strict=False):
         return False, "post failed: %s (kept)" % str(e)
 
 
+FLUSH_LOG_GLOB = "*.flush.log"
+
+
+def prune_flush_logs(spool_dirs, now, max_age_delta, dry_run=False):
+    """Prune top-level *.flush.log files older than max_age_delta. Return (pruned_count, failures).
+
+    Same age rule as spooled receipts. Only exact top-level matches are candidates (no recursion).
+    Symlinks are never followed or removed. A file that cannot be stat'd or removed is reported,
+    skipped, and returned in failures; the caller decides whether that is fatal (--strict only).
+    """
+    pruned = 0
+    failures = []
+    seen = set()
+    for spool_dir in spool_dirs:
+        if not spool_dir.is_dir():
+            continue
+        key = str(spool_dir.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        for log in sorted(spool_dir.glob(FLUSH_LOG_GLOB)):
+            try:
+                if log.is_symlink():
+                    continue
+                mtime = datetime.fromtimestamp(log.stat().st_mtime, tz=timezone.utc)
+            except OSError as e:
+                msg = "could not stat flush log %s: %s (skipped)" % (log, e)
+                print(msg)
+                failures.append(msg)
+                continue
+            age = now - mtime
+            if age <= max_age_delta:
+                continue
+            if dry_run:
+                print("would prune flush log (age %.1f days): %s" % (age.total_seconds() / 86400, log.name))
+                continue
+            try:
+                log.unlink()
+            except OSError as e:
+                msg = "could not delete flush log %s: %s (skipped)" % (log, e)
+                print(msg)
+                failures.append(msg)
+                continue
+            print("pruned flush log (age %.1f days): %s" % (age.total_seconds() / 86400, log.name))
+            pruned += 1
+    return pruned, failures
+
+
 def main(argv=None, gh_runner=None, environ=None):
     environ = os.environ if environ is None else environ
     gh_runner = _default_gh_runner if gh_runner is None else gh_runner
@@ -112,8 +160,18 @@ def main(argv=None, gh_runner=None, environ=None):
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
 
+    now = datetime.now(timezone.utc)
+    max_age_delta = timedelta(days=args.max_age_days)
+    errors = []
+
     # Collect spool files from all search paths (primary + legacy fallback)
     spool_search_paths = rc.get_spool_search_paths(repo=str(repo), environ=environ)
+
+    # Prune stale flush logs by the same age rule. Independent of slug and of json spools.
+    _pruned, log_failures = prune_flush_logs(spool_search_paths, now, max_age_delta, dry_run=args.dry_run)
+    if args.strict:
+        errors.extend(log_failures)
+
     spool_files_dict = {}  # basename -> path, to deduplicate if same file in multiple locations
     for spool_dir in spool_search_paths:
         if spool_dir.exists():
@@ -123,7 +181,7 @@ def main(argv=None, gh_runner=None, environ=None):
 
     spool_files = sorted(spool_files_dict.values())
     if not spool_files:
-        return 0
+        return 2 if (args.strict and errors) else 0
 
     slug = emit.repo_slug(repo)
     if not slug:
@@ -132,12 +190,9 @@ def main(argv=None, gh_runner=None, environ=None):
             return 2
         return 0
 
-    now = datetime.now(timezone.utc)
-    max_age_delta = timedelta(days=args.max_age_days)
     posted = 0
     dropped = 0
     kept = 0
-    errors = []
 
     for spool_file in spool_files:
         # Check age; drop if older than max_age_days

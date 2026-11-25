@@ -833,13 +833,15 @@ def _default_gh_runner(args):
     return res.returncode, res.stdout or "", res.stderr or ""
 
 
-def post_receipt(envelope, slug, gh_runner, spool_dir=None):
+def post_receipt(envelope, slug, gh_runner, spool_dir=None, spool_ok=True):
     """Publish on the head sha: check-run first, commit comment on 403.
 
     If commit-comment fails with 422 (commit not found), spool the receipt to
-    spool_dir if provided, return "spooled".
+    spool_dir if provided, return "spooled". When spool_ok is False (the caller's push is
+    refused, so nothing will ever publish a spool for this sha), write nothing and return
+    "not-spooled".
 
-    Returns the channel used: "check-run", "commit-comment", or "spooled".
+    Returns the channel used: "check-run", "commit-comment", "spooled", or "not-spooled".
     """
     receipt = envelope["receipt"]
     text = wrap_receipt_text(envelope)
@@ -873,6 +875,8 @@ def post_receipt(envelope, slug, gh_runner, spool_dir=None):
         return "commit-comment"
     # Check if this is a 422 (commit not found) - spool if possible, otherwise fail
     if "422" in str(code2) or "422" in err2 or "No commit found" in err2:
+        if not spool_ok:
+            return "not-spooled"
         if spool_dir:
             # Spool the envelope for later posting
             try:
@@ -1017,9 +1021,15 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
         elif args.post:
             # Spool directory survives worktree removal via env override or git-common-dir
             spool_dir = rc.resolve_spool_dir(repo=str(repo), environ=environ)
-            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=spool_dir)
+            # exit 3 = --fail-on-red blocks this push: a red spool for an unpushed sha would never be
+            # published by anything but a later push of that exact sha, so it is not written at all.
+            push_blocked = exit_code_for(parts, args) == 3
+            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=spool_dir,
+                                   spool_ok=not push_blocked)
             if channel == "spooled":
                 print("spooled receipt for %s (publish after push)" % receipt["head_sha"][:12])
+            elif channel == "not-spooled":
+                print("red receipt for %s not spooled: --fail-on-red blocks this push" % receipt["head_sha"][:12])
             else:
                 print("posted via %s on %s as %s" % (channel, receipt["head_sha"][:12], rc.CHECK_NAME))
         if receipt.get("pushed_red"):
