@@ -139,28 +139,88 @@ def base_ref_candidates(base_ref: str) -> List[str]:
     return list(dict.fromkeys(candidates))
 
 
-def ref_resolves(repo_root: Path, ref: str) -> bool:
-    """True if `git rev-parse --verify <ref>` succeeds in repo_root."""
+def ref_sha(repo_root: Path, ref: str) -> Optional[str]:
+    """Commit sha that `ref` resolves to in repo_root, or None if it does not resolve to a commit."""
     result = subprocess.run(
-        ["git", "rev-parse", "--verify", ref],
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
         capture_output=True,
         text=True,
         encoding='utf-8', errors='replace',
         timeout=10,
         cwd=repo_root,
     )
-    return result.returncode == 0
+    sha = result.stdout.strip()
+    return sha if result.returncode == 0 and sha else None
+
+
+def is_remote_tracking(candidate: str) -> bool:
+    """True for a remote-tracking ref (origin/<name> or refs/remotes/...), never a local branch."""
+    return candidate.startswith(("origin/", "refs/remotes/"))
+
+
+def local_branch_name(candidate: str) -> Optional[str]:
+    """Local branch name a candidate names, or None for a remote-tracking ref."""
+    if is_remote_tracking(candidate):
+        return None
+    if candidate.startswith("refs/heads/"):
+        return candidate[len("refs/heads/"):]
+    return candidate
+
+
+def checked_out_branch(repo_root: Path) -> Optional[str]:
+    """Short name of the checked-out branch, or None when HEAD is detached or unreadable."""
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        encoding='utf-8', errors='replace',
+        timeout=10,
+        cwd=repo_root,
+    )
+    name = result.stdout.strip()
+    return name if result.returncode == 0 and name else None
 
 
 def resolve_base(repo_root: Path, base_ref: str) -> Optional[str]:
-    """First candidate from base_ref_candidates() that resolves, or None.
+    """First valid base candidate from base_ref_candidates(), or None.
 
-    No HEAD~1 fallback: a None here is the caller's fail-closed or bootstrap decision.
+    A remote-tracking candidate (origin/<trunk>) that resolves is always valid, including
+    when its commit equals HEAD: equal means no changes, which is OK. A local-branch
+    candidate is valid only when it is not the checked-out branch and does not resolve to
+    HEAD: diffing a local branch against itself is an empty range that reads as OK over
+    committed drift (no-remote checkout where HEAD is main, first push of main to an empty
+    remote). No HEAD~1 fallback: a None here is the caller's fail-closed or bootstrap decision.
     """
+    head = ref_sha(repo_root, "HEAD")
+    checked_out = checked_out_branch(repo_root)
     for candidate in base_ref_candidates(base_ref):
-        if ref_resolves(repo_root, candidate):
+        sha = ref_sha(repo_root, candidate)
+        if sha is None:
+            continue
+        if is_remote_tracking(candidate):
             return candidate
+        if local_branch_name(candidate) == checked_out or sha == head:
+            continue
+        return candidate
     return None
+
+
+def candidates_at_head(repo_root: Path, base_ref: str) -> List[str]:
+    """Local-branch candidates rejected because they are the checked-out branch or resolve to HEAD."""
+    head = ref_sha(repo_root, "HEAD")
+    if head is None:
+        return []
+    checked_out = checked_out_branch(repo_root)
+    rejected = []
+    for candidate in base_ref_candidates(base_ref):
+        if is_remote_tracking(candidate):
+            continue
+        sha = ref_sha(repo_root, candidate)
+        if sha is None:
+            continue
+        if local_branch_name(candidate) == checked_out or sha == head:
+            rejected.append(candidate)
+    return rejected
 
 
 def remote_is_empty(repo_root: Path) -> bool:
@@ -335,12 +395,14 @@ def main():
     # Resolve the base: a candidate ref, else bootstrap (empty remote) or fail closed.
     base = resolve_base(repo_root, args.base_ref)
     bootstrap = base is None and remote_is_empty(repo_root)
+    at_head = candidates_at_head(repo_root, args.base_ref) if base is None else []
     if base is None and not bootstrap:
         changed_files, git_error = [], True
     else:
         if bootstrap:
             if not args.json:
-                print("[BOOTSTRAP] no base ref; checking the whole tree")
+                ignored = f" (ignored, resolves to HEAD: {', '.join(at_head)})" if at_head else ""
+                print(f"[BOOTSTRAP] no base ref other than HEAD{ignored}; checking the whole tree")
         elif not args.json:
             print(f"[BASE] {base}")
         changed_files, git_error = get_git_changed_files(
@@ -350,6 +412,10 @@ def main():
     if git_error:
         tried = ", ".join(base_ref_candidates(args.base_ref))
         message = f"could not diff against base (tried: {tried}); fail closed, no HEAD~1 fallback"
+        if base is None:
+            if at_head:
+                message += f"; these resolve to HEAD itself and are not a base: {', '.join(at_head)}"
+            message += "; recipe: fetch the remote trunk (git fetch origin <trunk>) or pass --base-ref <ref>"
         if args.json:
             output = {
                 "status": "error",
