@@ -112,7 +112,7 @@ undiscoverable and the orchestrator cannot be invoked.
 ## Worktree support (git worktree .git files)
 
 - **Worktree .git handling**: In git worktrees, `.git` is a FILE (not directory) containing `gitdir: <path>`. 
-- **Real git dir resolution**: `resolveRealGitDir()` detects worktree `.git` files and uses `git rev-parse --git-common-dir` to find the actual git directory. Fallback: parse gitdir pointer manually from `.git` file.
+- **Real git dir resolution**: `resolveRealGitDir()` returns `<targetDir>/.git` for a normal checkout; for a linked worktree (`.git` is a file) it asks `git rev-parse --git-common-dir` and throws when git cannot answer, with no guessed fallback. Hooks dir: `resolveGitHooksDir()` returns `<gitDir>/hooks` for a normal install and, for a linked worktree, the path git reports from `git rev-parse --git-path hooks` (honours core.hooksPath); if git cannot answer, the install exits non-zero and writes no hook. Success lines print only after the hook file exists at that reported path. Test: `tests/scaffold-hook-install.test.mjs`.
 - **Hook installation paths**: `installPrePushHook()` and `installPreCommitWaveguard()` use resolved git dir to install hooks in the common git directory (not worktree), preventing ENOTDIR crashes. `installPreCommitWaveguard()`'s wrapper also chains `hooks/pre-commit-dispatch-lint.sh` after the waveguard step (fail-closed dispatch gate; skipped only if the hook file is absent).
 - **Security**: symlink checks on `.git` and hooks directories preserved throughout resolution.
 
