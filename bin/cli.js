@@ -757,13 +757,12 @@ function isPlainGitDir(targetDir, gitDir) {
   return path.resolve(gitDir) === path.resolve(path.join(targetDir, '.git'));
 }
 
-// Return the hooks directory git actually reads. A normal install keeps <gitDir>/hooks unchanged.
-// A linked worktree asks git itself (`git rev-parse --git-path hooks`, which honours core.hooksPath).
-// Throws when git cannot answer; never returns a guessed directory.
+// Return the hooks directory git actually reads. Every checkout asks git itself
+// (`git rev-parse --git-path hooks`, which honours core.hooksPath), so a plain repo with
+// core.hooksPath set installs where git will run the hook. When git is silent, a plain repo
+// falls back to <gitDir>/hooks (the origin/main behaviour); a linked worktree throws, because
+// its per-worktree git dir is never guessed.
 function resolveGitHooksDir(targetDir, gitDir) {
-  if (isPlainGitDir(targetDir, gitDir)) {
-    return path.join(gitDir, 'hooks');
-  }
   let reported = '';
   try {
     reported = execSync('git rev-parse --git-path hooks', {
@@ -777,6 +776,9 @@ function resolveGitHooksDir(targetDir, gitDir) {
     reported = '';
   }
   if (!reported) {
+    if (isPlainGitDir(targetDir, gitDir)) {
+      return path.join(gitDir, 'hooks');
+    }
     throw new Error(
       `git could not report where hooks live for linked worktree "${targetDir}". ` +
       'Refusing to guess a hooks directory; fix git and re-run scaffold.'
@@ -785,9 +787,13 @@ function resolveGitHooksDir(targetDir, gitDir) {
   return path.resolve(targetDir, reported);
 }
 
-// Human-readable location of an installed hook, for success messages.
+// Human-readable location of an installed hook, for success messages. A plain repo whose hooks
+// dir is the default <gitDir>/hooks is shown as .git/hooks/<file>; any other dir (a linked
+// worktree, or a core.hooksPath override) is shown in full.
 function hookDisplayPath(targetDir, gitDir, hooksDir, hookFile) {
-  return isPlainGitDir(targetDir, gitDir)
+  const atDefaultPlainHooks = isPlainGitDir(targetDir, gitDir) &&
+    path.resolve(hooksDir) === path.resolve(gitDir, 'hooks');
+  return atDefaultPlainHooks
     ? `.git/hooks/${hookFile}`
     : path.join(hooksDir, hookFile);
 }

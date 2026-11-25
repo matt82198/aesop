@@ -471,6 +471,29 @@ test('linked worktree: honours core.hooksPath', () => {
     'Hook must be installed in the core.hooksPath directory git reads');
 });
 
+test('plain repo: honours core.hooksPath, installs there, and names that directory in the success line', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-plain-hookspath');
+  const customHooks = path.join(tempDir, 'custom-hooks');
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.mkdirSync(customHooks, { recursive: true });
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
+  gitCmd(targetDir, ['config', 'core.hooksPath', customHooks]);
+
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
+
+  const customHook = path.join(customHooks, 'pre-push');
+  assert.ok(fs.existsSync(customHook),
+    `Hook must be installed in the core.hooksPath directory git reads: ${customHook}`);
+  assert.ok(!fs.existsSync(path.join(targetDir, '.git', 'hooks', 'pre-push')),
+    'Hook must not be written to .git/hooks when core.hooksPath points elsewhere');
+  assert.ok(res.stdout.includes(customHook),
+    `Success line must name the core.hooksPath directory. stdout: ${res.stdout}`);
+});
+
 function isWindows() {
   return process.platform === 'win32';
 }
