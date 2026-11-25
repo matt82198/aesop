@@ -1,0 +1,14 @@
+{
+  "command": "python bench/measure_context_per_lane.py --session a80aed77-fcf1-46a2-9646-af3f0d436850",
+  "transcript_sha256": "7cb01be8bb0c7c9281cd302e85a98682f33d543fb7c66cbb183c352843ca95f2",
+  "token_estimate_method": "driver.turn_context.size_ollama_context: count UTF-16 code units in each compact JSON message, divide by 3.5, round up, then sum.",
+  "main_thread_messages": 622,
+  "lane_finishes": 19,
+  "paged_reports": 8,
+  "page_ins": 11,
+  "page_in_estimated_tokens": 6639,
+  "baseline_estimated_tokens": 225034,
+  "paged_estimated_tokens": 227819,
+  "baseline_estimated_tokens_per_lane_finish": 11843.894736842105,
+  "paged_estimated_tokens_per_lane_finish": 11990.473684210527
+}
