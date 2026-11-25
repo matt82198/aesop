@@ -811,7 +811,9 @@ def exit_code_for(parts, args):
     """Exit code the pre-push hook reads (docs/archive/RECEIPT-GATE.md). Red = any part exit != 0.
 
     0 = green, or red without --fail-on-red (legacy contract: the verifier judges red);
-    3 = red and --fail-on-red (the hook blocks the push; the failure receipt is already posted);
+    3 = red and --fail-on-red (the hook blocks the push; the failure receipt is posted on the head sha
+        when a channel accepts it, otherwise it is not spooled and the refusal is recorded locally in
+        REFUSED_LOG_NAME beside the spool dir);
     4 = red with --pushed-red (the emergency override was used; the receipt is stamped pushed_red).
     """
     if conclusion_for(parts) != "failure":
@@ -828,18 +830,46 @@ def wrap_receipt_text(envelope):
     return rc.COMMENT_MARKER + "\n```json\n" + json.dumps(envelope, sort_keys=True) + "\n```\n"
 
 
+REFUSED_LOG_NAME = "refused-receipts.jsonl"
+REFUSED_REASON = "push refused, not spooled"
+
+
+def refused_log_path(spool_dir):
+    """Local record of refused red receipts: a sibling of the spool dir. Never posted anywhere."""
+    return Path(spool_dir).parent / REFUSED_LOG_NAME
+
+
+def record_refused_receipt(spool_dir, head_sha, conclusion, now=None):
+    """Append one JSON line for a red receipt whose push --fail-on-red refused (exit 3, not spooled).
+
+    The line records the head sha, the conclusion, a UTC timestamp and the reason, so the refusal
+    leaves a durable local trace even though no spool file exists for it. Returns the log path.
+    Pruned by receipt_flush with the same --max-age-days rule as the spool and the flush logs.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc) if now is None else now
+    line = {"head_sha": head_sha, "conclusion": conclusion,
+            "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "reason": REFUSED_REASON}
+    path = refused_log_path(spool_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path), "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    return path
+
+
 def _default_gh_runner(args):
     res = subprocess.run(["gh"] + list(args), capture_output=True, encoding="utf-8", errors="replace", timeout=60)
     return res.returncode, res.stdout or "", res.stderr or ""
 
 
-def post_receipt(envelope, slug, gh_runner, spool_dir=None):
+def post_receipt(envelope, slug, gh_runner, spool_dir=None, spool_ok=True):
     """Publish on the head sha: check-run first, commit comment on 403.
 
     If commit-comment fails with 422 (commit not found), spool the receipt to
-    spool_dir if provided, return "spooled".
+    spool_dir if provided, return "spooled". When spool_ok is False (the caller's push is
+    refused, so nothing will ever publish a spool for this sha), write nothing and return
+    "not-spooled".
 
-    Returns the channel used: "check-run", "commit-comment", or "spooled".
+    Returns the channel used: "check-run", "commit-comment", "spooled", or "not-spooled".
     """
     receipt = envelope["receipt"]
     text = wrap_receipt_text(envelope)
@@ -873,6 +903,8 @@ def post_receipt(envelope, slug, gh_runner, spool_dir=None):
         return "commit-comment"
     # Check if this is a 422 (commit not found) - spool if possible, otherwise fail
     if "422" in str(code2) or "422" in err2 or "No commit found" in err2:
+        if not spool_ok:
+            return "not-spooled"
         if spool_dir:
             # Spool the envelope for later posting
             try:
@@ -1017,9 +1049,24 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
         elif args.post:
             # Spool directory survives worktree removal via env override or git-common-dir
             spool_dir = rc.resolve_spool_dir(repo=str(repo), environ=environ)
-            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=spool_dir)
+            # exit 3 = --fail-on-red blocks this push: a red spool for an unpushed sha would never be
+            # published by anything but a later push of that exact sha, so it is not written at all.
+            push_blocked = exit_code_for(parts, args) == 3
+            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=spool_dir,
+                                   spool_ok=not push_blocked)
             if channel == "spooled":
                 print("spooled receipt for %s (publish after push)" % receipt["head_sha"][:12])
+            elif channel == "not-spooled":
+                print("red receipt for %s not spooled: --fail-on-red blocks this push" % receipt["head_sha"][:12])
+                # Nothing is spooled for a refused push, so the refusal itself is the local trace. A failure
+                # to write it is named, and the push stays blocked (exit 3 is returned below regardless).
+                try:
+                    where = record_refused_receipt(spool_dir, receipt["head_sha"],
+                                                   conclusion_for(parts, shards_ran=_shards_ran(parts)))
+                    print("refused receipt recorded (local only, never posted): %s" % where)
+                except OSError as e:
+                    print("WARN: could not record refused receipt for %s: %s (push is still blocked)"
+                          % (receipt["head_sha"][:12], e), file=sys.stderr)
             else:
                 print("posted via %s on %s as %s" % (channel, receipt["head_sha"][:12], rc.CHECK_NAME))
         if receipt.get("pushed_red"):

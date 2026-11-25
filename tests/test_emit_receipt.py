@@ -403,6 +403,102 @@ class TestRedGateExitCodes(unittest.TestCase):
         self.assertNotIn("pushed_red", env_json["receipt"])
 
 
+class TestUnpushedRedSpool(unittest.TestCase):
+    """A red receipt for a sha GitHub does not have yet must not be spooled when --fail-on-red blocks the push.
+
+    The only spooling path is check-run 403 then commit-comment 422 (commit not found). The push is
+    refused (exit 3), so nothing will ever publish a red spool for that sha. Green receipts and the
+    --pushed-red override (exit 4, the push goes ahead) keep spooling exactly as before.
+    """
+
+    OK = [sys.executable, "-c", "print('Ran 2 tests in 0.00s')"]
+    BAD = [sys.executable, "-c", "import sys; print('FAILED one'); sys.exit(1)"]
+
+    def _registry(self, red):
+        return {"py-shard-0": emit.PartSpec(lambda repo: self.OK),
+                "py-shard-1": emit.PartSpec(lambda repo: self.BAD if red else self.OK),
+                "browser-proofs": emit.PartSpec(None, "not runnable here: hosted browsers only")}
+
+    def _run_unpushed(self, tmp, red, extra):
+        spool = Path(tmp) / "spool"
+
+        def gh_commit_unknown(args):
+            # check-runs: 403 forces the commit-comment fallback; the comment POST 422s (sha not on GitHub).
+            if "check-runs" in args[1]:
+                return (1, "", "HTTP 403: Resource not accessible by personal access token")
+            return (1, "", "HTTP 422: No commit found for SHA")
+
+        repo = _mk_repo(tmp)
+        argv = ["--repo", str(repo), "--matrix", "py-shard-0,py-shard-1,browser-proofs", "--scheme", "hmac-sha256",
+                "--slug", "o/r", "--post"] + extra
+        environ = {"AESOP_RECEIPT_HMAC_SECRET": _hmac_secret(), rc.SPOOL_ENV: str(spool)}
+        code = emit.main(argv, registry=self._registry(red), gh_runner=gh_commit_unknown, environ=environ)
+        spooled = sorted(spool.glob("*.json")) if spool.is_dir() else []
+        return code, spooled
+
+    def test_red_blocked_by_fail_on_red_writes_no_spool_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red"])
+        self.assertEqual(code, 3)
+        self.assertEqual(spooled, [])
+
+    def test_green_unpushed_still_spools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=False, extra=["--fail-on-red"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(spooled), 1)
+
+    def test_red_with_pushed_red_override_still_spools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red", "--pushed-red"])
+        self.assertEqual(code, 4)
+        self.assertEqual(len(spooled), 1)
+
+    def test_red_without_fail_on_red_still_spools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=[])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(spooled), 1)
+
+    def test_red_blocked_records_one_refused_line_beside_spool(self):
+        """The refused push leaves no spool, so the refusal itself is recorded locally: one JSON line in
+        refused-receipts.jsonl beside the spool dir (head sha, conclusion, timestamp, reason). Never posted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red"])
+            head = emit._git(Path(tmp) / "repo", "rev-parse", "HEAD")
+            refused = Path(tmp) / "refused-receipts.jsonl"
+            lines = refused.read_text(encoding="utf-8").splitlines() if refused.is_file() else []
+        self.assertEqual(code, 3)
+        self.assertEqual(spooled, [])
+        self.assertEqual(len(lines), 1, "a refused red push must leave exactly one local refused record")
+        record = json.loads(lines[0])
+        self.assertEqual(record["head_sha"], head)
+        self.assertEqual(record["conclusion"], "failure")
+        self.assertEqual(record["reason"], "push refused, not spooled")
+        self.assertRegex(record["timestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_unrecordable_refusal_still_blocks_the_push(self):
+        """If the refused record cannot be written the push is still blocked (exit 3), and the failure is named."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "refused-receipts.jsonl").mkdir()  # a directory where the log must go: the append fails
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red"])
+        self.assertEqual(code, 3)
+        self.assertEqual(spooled, [])
+
+    def test_green_and_pushed_red_write_no_refused_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            green_code, _ = self._run_unpushed(tmp, red=False, extra=["--fail-on-red"])
+            green_refused = (Path(tmp) / "refused-receipts.jsonl").exists()
+        with tempfile.TemporaryDirectory() as tmp:
+            override_code, override_spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red", "--pushed-red"])
+            override_refused = (Path(tmp) / "refused-receipts.jsonl").exists()
+        self.assertEqual(green_code, 0)
+        self.assertFalse(green_refused, "a green receipt is not a refusal")
+        self.assertEqual(override_code, 4)
+        self.assertEqual(len(override_spooled), 1)
+        self.assertFalse(override_refused, "the pushed-red override goes ahead and spools, it is not refused")
+
+
 class TestShardEnvScrubsTripwireArmed(unittest.TestCase):
     """The shard env emit_receipt builds must not inherit AESOP_CI_SHARD_TRIPWIRE_ARMED.
 

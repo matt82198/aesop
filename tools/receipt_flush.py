@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Flush spooled receipts to GitHub once their shas exist on the remote.
-INDEX: Receipt-gate spool-and-flush (increment 2) -- for each JSON envelope in the
+INDEX: Receipt-gate spool-and-flush (increment 2; prunes stale *.flush.log by --max-age-days) -- for each JSON envelope in the
 spool directory state/receipts/spool/, check if the head sha exists on GitHub
 (`gh api repos/<slug>/commits/<sha>` 200); if yes, call the same post_receipt
 function (check-run then comment fallback) to publish; on success delete the spool
-file, on failure keep it (except stale ones deleted by --max-age-days). Idempotent,
+file, on failure keep it (except stale ones deleted by --max-age-days). Stale
+*.flush.log files in the spool directory are pruned by the same --max-age-days rule
+(never following symlinks). Idempotent,
 exit 0 always unless --strict. Meant to be called (a) at the START of check_emit_receipt
 in pre-push-policy.sh (after a push, to flush any prior spool files now that shas exist),
 and (b) in tools/pr_sweep.py (session-independent actor under the watchdog). stdlib-only.
@@ -99,21 +101,173 @@ def flush_spooled_receipt(spool_file, slug, gh_runner, strict=False):
         return False, "post failed: %s (kept)" % str(e)
 
 
+FLUSH_LOG_GLOB = "*.flush.log"
+
+
+MAX_AGE_DAYS_CEILING = 3650  # 10 years; above this timedelta(days=...) overflows, so refuse at parse time.
+REFUSED_LOG_FLOOR_DAYS = 7  # the refused-receipts log is never pruned younger than this, whatever --max-age-days says.
+
+
+def _max_age_days_arg(text):
+    """argparse type for --max-age-days: a whole number of days, 0 to MAX_AGE_DAYS_CEILING.
+
+    0 expires everything older than now (json spools and flush logs alike, the same `age > window`
+    rule). Negative values would make the window point into the future and prune fresh logs; non-finite
+    or fractional values are not whole days; values above the ceiling overflow timedelta. All are refused
+    at parse time, before anything is pruned.
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number of days, got %r" % text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more, got %d" % value)
+    if value > MAX_AGE_DAYS_CEILING:
+        raise argparse.ArgumentTypeError("must be %d or less, got %d" % (MAX_AGE_DAYS_CEILING, value))
+    return value
+
+
+def _is_link_or_junction(path):
+    """True when path is a symlink, or a Windows directory junction. Never follows the path."""
+    if path.is_symlink():
+        return True
+    is_junction = getattr(os.path, "isjunction", None)  # Python 3.12+ on Windows
+    return bool(is_junction is not None and is_junction(str(path)))
+
+
+def prune_flush_logs(spool_dirs, now, max_age_delta, dry_run=False):
+    """Prune top-level *.flush.log files older than max_age_delta. Return (pruned_count, failures).
+
+    Same age rule as spooled receipts. Only exact top-level matches are candidates (no recursion).
+    Symlinks are never followed or removed. A spool dir that is itself a symlink or junction is refused
+    (reported, not followed). A file that cannot be stat'd or removed is reported,
+    skipped, and returned in failures; the caller decides whether that is fatal (--strict only).
+    """
+    pruned = 0
+    failures = []
+    seen = set()
+    for spool_dir in spool_dirs:
+        if _is_link_or_junction(spool_dir):
+            msg = "refused to prune spool directory %s: it is a symlink or junction (not followed)" % spool_dir
+            print(msg)
+            failures.append(msg)
+            continue
+        if not spool_dir.is_dir():
+            continue
+        key = str(spool_dir.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        for log in sorted(spool_dir.glob(FLUSH_LOG_GLOB)):
+            try:
+                if log.is_symlink():
+                    continue
+                mtime = datetime.fromtimestamp(log.stat().st_mtime, tz=timezone.utc)
+            except OSError as e:
+                msg = "could not stat flush log %s: %s (skipped)" % (log, e)
+                print(msg)
+                failures.append(msg)
+                continue
+            age = now - mtime
+            if age <= max_age_delta:
+                continue
+            if dry_run:
+                print("would prune flush log (age %.1f days): %s" % (age.total_seconds() / 86400, log.name))
+                continue
+            try:
+                log.unlink()
+            except OSError as e:
+                msg = "could not delete flush log %s: %s (skipped)" % (log, e)
+                print(msg)
+                failures.append(msg)
+                continue
+            print("pruned flush log (age %.1f days): %s" % (age.total_seconds() / 86400, log.name))
+            pruned += 1
+    return pruned, failures
+
+
+def prune_refused_log(spool_dirs, now, max_age_delta, dry_run=False):
+    """Prune the refused-receipts log beside each spool dir by the same age rule. Return (pruned, failures).
+
+    The log is append-only, so its mtime is the newest record's time: once that is past the window
+    every record in it is past the window too, which makes the file-level rule the same rule the
+    spooled receipts and flush logs use. The caller passes the window already floored at
+    REFUSED_LOG_FLOOR_DAYS. A symlink is never followed or removed.
+    """
+    pruned = 0
+    failures = []
+    seen = set()
+    for spool_dir in spool_dirs:
+        log = emit.refused_log_path(spool_dir)
+        key = str(log.parent.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if log.is_symlink() or not log.is_file():
+                continue
+            mtime = datetime.fromtimestamp(log.stat().st_mtime, tz=timezone.utc)
+        except OSError as e:
+            msg = "could not stat refused-receipts log %s: %s (skipped)" % (log, e)
+            print(msg)
+            failures.append(msg)
+            continue
+        age = now - mtime
+        if age <= max_age_delta:
+            continue
+        if dry_run:
+            print("would prune refused-receipts log (age %.1f days): %s" % (age.total_seconds() / 86400, log.name))
+            continue
+        try:
+            log.unlink()
+        except OSError as e:
+            msg = "could not delete refused-receipts log %s: %s (skipped)" % (log, e)
+            print(msg)
+            failures.append(msg)
+            continue
+        print("pruned refused-receipts log (age %.1f days): %s" % (age.total_seconds() / 86400, log.name))
+        pruned += 1
+    return pruned, failures
+
+
 def main(argv=None, gh_runner=None, environ=None):
     environ = os.environ if environ is None else environ
     gh_runner = _default_gh_runner if gh_runner is None else gh_runner
 
     parser = argparse.ArgumentParser(prog="receipt_flush.py", description=__doc__.split("\n")[0])
     parser.add_argument("--repo", default=".", help="repo path (default: cwd)")
-    parser.add_argument("--max-age-days", type=int, default=7, help="drop spools older than this (default: 7)")
+    parser.add_argument("--max-age-days", type=_max_age_days_arg, default=7,
+                        help="drop spools and prune logs older than this many days; a whole number, 0 to %d (default: 7); the refused-receipts log is never pruned under %d days" % (MAX_AGE_DAYS_CEILING, REFUSED_LOG_FLOOR_DAYS))
     parser.add_argument("--strict", action="store_true", help="exit 2 on any error (default: exit 0)")
     parser.add_argument("--dry-run", action="store_true", help="print plan, perform no posts or deletes")
 
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
 
+    now = datetime.now(timezone.utc)
+    max_age_delta = timedelta(days=args.max_age_days)
+    errors = []
+
     # Collect spool files from all search paths (primary + legacy fallback)
     spool_search_paths = rc.get_spool_search_paths(repo=str(repo), environ=environ)
+
+    # A spool dir that is itself a symlink or junction is refused: it is neither pruned nor read through.
+    # The run still reports it and exits 2, with or without --strict.
+    linked_dirs = [d for d in spool_search_paths if _is_link_or_junction(d)]
+    for d in linked_dirs:
+        print("refused spool directory %s: it is a symlink or junction (not followed; nothing pruned or flushed through it)" % d)
+    spool_search_paths = [d for d in spool_search_paths if d not in linked_dirs]
+    link_refused = bool(linked_dirs)
+
+    # Prune stale flush logs and refused-receipts logs by the same age rule. Independent of slug and of json spools.
+    _pruned, log_failures = prune_flush_logs(spool_search_paths, now, max_age_delta, dry_run=args.dry_run)
+    # The refused log is the only durable trace of a refused push: its window is the larger of the floor and --max-age-days.
+    refused_window = max(timedelta(days=REFUSED_LOG_FLOOR_DAYS), max_age_delta)
+    _pruned_refused, refused_failures = prune_refused_log(spool_search_paths, now, refused_window, dry_run=args.dry_run)
+    if args.strict:
+        errors.extend(log_failures)
+        errors.extend(refused_failures)
+
     spool_files_dict = {}  # basename -> path, to deduplicate if same file in multiple locations
     for spool_dir in spool_search_paths:
         if spool_dir.exists():
@@ -123,21 +277,18 @@ def main(argv=None, gh_runner=None, environ=None):
 
     spool_files = sorted(spool_files_dict.values())
     if not spool_files:
-        return 0
+        return 2 if (link_refused or (args.strict and errors)) else 0
 
     slug = emit.repo_slug(repo)
     if not slug:
         if args.strict:
             print("ERROR: could not determine repo slug from origin", file=sys.stderr)
             return 2
-        return 0
+        return 2 if link_refused else 0
 
-    now = datetime.now(timezone.utc)
-    max_age_delta = timedelta(days=args.max_age_days)
     posted = 0
     dropped = 0
     kept = 0
-    errors = []
 
     for spool_file in spool_files:
         # Check age; drop if older than max_age_days
@@ -188,12 +339,12 @@ def main(argv=None, gh_runner=None, environ=None):
                     errors.append(reason)
 
     if args.dry_run:
-        return 0
+        return 2 if link_refused else 0
 
     # Summary
     print("receipt_flush: posted=%d dropped=%d kept=%d" % (posted, dropped, kept))
 
-    if args.strict and errors:
+    if link_refused or (args.strict and errors):
         return 2
 
     return 0
