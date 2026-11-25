@@ -30,6 +30,7 @@ No RED run is missed; deduplication prevents redundant queue entries (keys on ru
 - **state_store/** — Event-sourced state layer (SQLite WAL, projections) — read state_store/CLAUDE.md
 - **bench/** — Held-out model benchmark (quality scorer) — read bench/README.md
 - **templates/** — Wave-manifest presets (saas/data/library JSON) consumed by tools/wave_templates.py — read tools/CLAUDE.md
+- **contract/** — Source step files (floor, knowledge, reasoning, judgement, review, keyrun) that tools/build_lane_contract.py concatenates into the generated LANE-CONTRACT.md — read tools/CLAUDE.md
 - **tests/** — Test suites (shell, Node, Python) and fixtures — read tests/CLAUDE.md
 - **docs/** — Architecture guides, tutorials, setup — read docs/
 - **assets/** — Logo, branding, media
