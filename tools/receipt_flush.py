@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Flush spooled receipts to GitHub once their shas exist on the remote.
-INDEX: Receipt-gate spool-and-flush (increment 2) -- for each JSON envelope in the
+INDEX: Receipt-gate spool-and-flush (increment 2; prunes stale *.flush.log by --max-age-days) -- for each JSON envelope in the
 spool directory state/receipts/spool/, check if the head sha exists on GitHub
 (`gh api repos/<slug>/commits/<sha>` 200); if yes, call the same post_receipt
 function (check-run then comment fallback) to publish; on success delete the spool
-file, on failure keep it (except stale ones deleted by --max-age-days). Idempotent,
+file, on failure keep it (except stale ones deleted by --max-age-days). Stale
+*.flush.log files in the spool directory are pruned by the same --max-age-days rule
+(never following symlinks). Idempotent,
 exit 0 always unless --strict. Meant to be called (a) at the START of check_emit_receipt
 in pre-push-policy.sh (after a push, to flush any prior spool files now that shas exist),
 and (b) in tools/pr_sweep.py (session-independent actor under the watchdog). stdlib-only.
