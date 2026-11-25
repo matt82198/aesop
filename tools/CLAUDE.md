@@ -70,6 +70,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Ship
 ## Gates & tests
 - `bench_api_runner.py` live-spend guard: `AESOP_BENCH_OFFLINE=1` is checked before any Anthropic client is constructed in `make_api_runner`, even with `--confirm-spend`; `main()` requires `--confirm-spend` (exit 2 without it). Guard tests: `tests/test_bench_api_runner_guard.py`.
 - `bench_runner.py` offline guard: `AESOP_BENCH_OFFLINE=1` makes the claude-CLI runners (`--runner haiku|sonnet|opus`, which shell `claude -p`) refuse before any `shutil.which` or `subprocess.run` spawn; `main()` exits 2 with one stderr line before any task runs. Guard tests: `tests/test_bench_runner_offline.py`.
+- `ci_gate_runability.py` base-checkout refs: a file under a checkout pinned to a ref (`path: base` + `ref:`) is checked with `git cat-file -e <commit>:<path>` against that ref, never the PR HEAD disk. The ref comes from `github.event.pull_request.base.sha` (GITHUB_EVENT_PATH) or `github.base_ref` (GITHUB_BASE_REF, else origin's default branch). An unresolvable ref or expression is a finding naming it (fail closed). Tests: `TestBaseCheckoutRefResolution` in `tests/test_ci_gate_runability.py`.
 
 - `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
