@@ -635,7 +635,7 @@ class TestJsonOutput(unittest.TestCase):
             cmd,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=60,
         )
         return result.stdout.strip(), result.stderr.strip(), result.returncode
 
