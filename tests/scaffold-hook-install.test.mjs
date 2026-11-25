@@ -27,7 +27,7 @@ const HOOK_SOURCE = path.join(
   '..', 'hooks', 'pre-push-policy.sh'
 );
 
-function runCli(targetDir, args = []) {
+function runCli(targetDir, args = [], extraEnv = {}) {
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   // --no-skills: this file doesn't test skill installation; without it every
   // scaffold call would write into the real ~/.claude/skills/ (isolation contract
@@ -38,7 +38,7 @@ function runCli(targetDir, args = []) {
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
-    env: { ...process.env, AESOP_SKIP_PUSH_GATE_ARTIFACTS: '1' },
+    env: { ...process.env, AESOP_SKIP_PUSH_GATE_ARTIFACTS: '1', ...extraEnv },
     timeout,
     killSignal: 'SIGKILL'
   });
@@ -399,6 +399,76 @@ test('scaffold into a clean pre-existing target dir still works (happy path pres
 
   const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
   assert.ok(fs.existsSync(hookPath), 'Hook should still be installed for a real .git dir');
+});
+
+/**
+ * Build a main repo with one commit and a linked worktree of it.
+ * In a linked worktree `.git` is a FILE and the per-worktree git dir lives
+ * under `<main>/.git/worktrees/<name>`, which git never reads for hooks.
+ * @returns {{mainDir: string, wtDir: string, tempDir: string}}
+ */
+function createLinkedWorktree() {
+  const tempDir = createTestDir();
+  const mainDir = path.join(tempDir, 'main');
+  const wtDir = path.join(tempDir, 'wt');
+  fs.mkdirSync(mainDir, { recursive: true });
+  gitCmd(mainDir, ['init']);
+  gitCmd(mainDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(mainDir, ['config', 'user.name', 'Test User']);
+  fs.writeFileSync(path.join(mainDir, 'README.md'), 'fixture\n');
+  gitCmd(mainDir, ['add', 'README.md']);
+  gitCmd(mainDir, ['commit', '-m', 'init']);
+  gitCmd(mainDir, ['worktree', 'add', '--no-track', '-b', 'wt-branch', wtDir, 'HEAD']);
+  return { mainDir, wtDir, tempDir };
+}
+
+// Force `git rev-parse --git-common-dir` (and every other git call) to fail, the
+// way the reproduction did: a GIT_DIR that does not exist makes git refuse to run.
+function gitBrokenEnv(tempDir) {
+  return { GIT_DIR: path.join(tempDir, 'no-such-git-dir') };
+}
+
+test('linked worktree: when git cannot answer, install fails loudly and writes no hook under .git/worktrees', () => {
+  const { mainDir, wtDir, tempDir } = createLinkedWorktree();
+
+  const res = runCli(wtDir, [], gitBrokenEnv(tempDir));
+
+  assert.notEqual(res.status, 0,
+    `Installer must exit non-zero when git cannot report its hooks dir. stdout: ${res.stdout} stderr: ${res.stderr}`);
+  assert.ok(!/Copied pre-push policy hook/.test(res.stdout),
+    `Installer must not print pre-push success. stdout: ${res.stdout}`);
+  assert.ok(!/Installed pre-commit waveguard hook/.test(res.stdout),
+    `Installer must not print waveguard success. stdout: ${res.stdout}`);
+  const guessedHook = path.join(mainDir, '.git', 'worktrees', 'wt', 'hooks', 'pre-push');
+  assert.ok(!fs.existsSync(guessedHook),
+    `No hook may be written to a directory git never reads: ${guessedHook}`);
+});
+
+test('linked worktree: hook lands where git reports hooks live, and success is printed only then', () => {
+  const { mainDir, wtDir } = createLinkedWorktree();
+
+  const res = runCli(wtDir);
+  assert.equal(res.status, 0, `Scaffold should succeed in a linked worktree. stderr: ${res.stderr}`);
+
+  const reported = gitCmd(wtDir, ['rev-parse', '--git-path', 'hooks']).stdout.trim();
+  const hookPath = path.join(path.resolve(wtDir, reported), 'pre-push');
+  assert.ok(fs.existsSync(hookPath), `Hook should exist at git-reported path ${hookPath}`);
+  assert.equal(fs.readFileSync(hookPath, 'utf8'), fs.readFileSync(HOOK_SOURCE, 'utf8'));
+  assert.ok(!fs.existsSync(path.join(mainDir, '.git', 'worktrees', 'wt', 'hooks', 'pre-push')),
+    'Hook must not be written to the per-worktree git dir');
+  assert.ok(/Copied pre-push policy hook/.test(res.stdout), 'Success should be printed after verification');
+});
+
+test('linked worktree: honours core.hooksPath', () => {
+  const { mainDir, wtDir, tempDir } = createLinkedWorktree();
+  const customHooks = path.join(tempDir, 'custom-hooks');
+  fs.mkdirSync(customHooks, { recursive: true });
+  gitCmd(mainDir, ['config', 'core.hooksPath', customHooks]);
+
+  const res = runCli(wtDir);
+  assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
+  assert.ok(fs.existsSync(path.join(customHooks, 'pre-push')),
+    'Hook must be installed in the core.hooksPath directory git reads');
 });
 
 function isWindows() {

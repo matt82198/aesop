@@ -698,6 +698,9 @@ function getFlag(flagName) {
 // Resolve real git directory, handling worktree case
 // In a worktree, .git is a FILE containing 'gitdir: <path>'; return the common git dir.
 // Returns the actual git directory path, or null if resolution fails.
+// For a linked worktree this returns the COMMON git dir (used for the symlink guard only);
+// hook locations come from resolveGitHooksDir. Throws if git cannot answer for a linked worktree:
+// the per-worktree git dir (.git/worktrees/<name>) is never guessed, because git never reads hooks there.
 function resolveRealGitDir(targetDir) {
   const gitDirPath = path.join(targetDir, '.git');
 
@@ -706,54 +709,87 @@ function resolveRealGitDir(targetDir) {
     return null;
   }
 
-  // Check if .git is a file (worktree case)
+  let stat;
   try {
-    const stat = fs.statSync(gitDirPath);
-    if (stat.isFile()) {
-      // Worktree case: .git is a file pointing to the real git dir
-      // Use git rev-parse --git-common-dir to get the actual hooks directory
-      try {
-        const commonDir = execSync('git rev-parse --git-common-dir', {
-          cwd: targetDir,
-          stdio: 'pipe',
-          timeout: 5000,
-          encoding: 'utf8',
-          windowsHide: true
-        }).trim();
-
-        if (commonDir) {
-          // Resolve relative paths (git may return .git or relative paths)
-          return path.resolve(targetDir, commonDir);
-        }
-      } catch (e) {
-        // git command failed; fall back to parsing the gitdir pointer manually
-        try {
-          const content = fs.readFileSync(gitDirPath, 'utf8');
-          const match = content.match(/^gitdir:\s*(.+)$/m);
-          if (match && match[1]) {
-            let gitdirPath = match[1].trim();
-            // If gitdir is relative, resolve it relative to targetDir
-            if (!path.isAbsolute(gitdirPath)) {
-              gitdirPath = path.join(targetDir, gitdirPath);
-            }
-            return gitdirPath;
-          }
-        } catch (e2) {
-          // Failed to read/parse .git file
-        }
-      }
-      return null;
-    } else if (stat.isDirectory()) {
-      // Regular git directory case
-      return gitDirPath;
-    } else {
-      // .git exists but is neither a file nor a directory (symlink/other)
-      return null;
-    }
+    stat = fs.statSync(gitDirPath);
   } catch (e) {
-    // stat failed
     return null;
   }
+
+  if (stat.isDirectory()) {
+    // Regular git directory case
+    return gitDirPath;
+  }
+  if (!stat.isFile()) {
+    // .git exists but is neither a file nor a directory (symlink/other)
+    return null;
+  }
+
+  // Worktree case: .git is a file pointing to the per-worktree git dir
+  return resolveLinkedWorktreeCommonDir(targetDir);
+}
+
+// Ask git for the common git dir of a linked worktree. Throws a clear error when git cannot answer.
+function resolveLinkedWorktreeCommonDir(targetDir) {
+  let commonDir = '';
+  try {
+    commonDir = execSync('git rev-parse --git-common-dir', {
+      cwd: targetDir,
+      stdio: 'pipe',
+      timeout: 5000,
+      encoding: 'utf8',
+      windowsHide: true
+    }).trim();
+  } catch (e) {
+    commonDir = '';
+  }
+  if (!commonDir) {
+    throw new Error(
+      `git could not resolve the git directory for linked worktree "${targetDir}". ` +
+      'Refusing to guess a hooks directory; fix git and re-run scaffold.'
+    );
+  }
+  return path.resolve(targetDir, commonDir);
+}
+
+// True when gitDir is the plain <targetDir>/.git directory (a normal, non-worktree install).
+function isPlainGitDir(targetDir, gitDir) {
+  return path.resolve(gitDir) === path.resolve(path.join(targetDir, '.git'));
+}
+
+// Return the hooks directory git actually reads. A normal install keeps <gitDir>/hooks unchanged.
+// A linked worktree asks git itself (`git rev-parse --git-path hooks`, which honours core.hooksPath).
+// Throws when git cannot answer; never returns a guessed directory.
+function resolveGitHooksDir(targetDir, gitDir) {
+  if (isPlainGitDir(targetDir, gitDir)) {
+    return path.join(gitDir, 'hooks');
+  }
+  let reported = '';
+  try {
+    reported = execSync('git rev-parse --git-path hooks', {
+      cwd: targetDir,
+      stdio: 'pipe',
+      timeout: 5000,
+      encoding: 'utf8',
+      windowsHide: true
+    }).trim();
+  } catch (e) {
+    reported = '';
+  }
+  if (!reported) {
+    throw new Error(
+      `git could not report where hooks live for linked worktree "${targetDir}". ` +
+      'Refusing to guess a hooks directory; fix git and re-run scaffold.'
+    );
+  }
+  return path.resolve(targetDir, reported);
+}
+
+// Human-readable location of an installed hook, for success messages.
+function hookDisplayPath(targetDir, gitDir, hooksDir, hookFile) {
+  return isPlainGitDir(targetDir, gitDir)
+    ? `.git/hooks/${hookFile}`
+    : path.join(hooksDir, hookFile);
 }
 
 // Help text. Takes a writer so the unknown-option path can send it to stderr.
@@ -1614,7 +1650,7 @@ function installPreCommitWaveguard(targetDir, templateRoot) {
   }
 
   // Ensure hooks directory exists
-  const gitHooksDir = path.join(gitDir, 'hooks');
+  const gitHooksDir = resolveGitHooksDir(targetDir, gitDir);
   if (!fs.existsSync(gitHooksDir)) {
     try {
       fs.mkdirSync(gitHooksDir, { recursive: true });
@@ -1720,7 +1756,6 @@ exit 0
     fs.unlinkSync(preCommitDest);
   }
   fs.writeFileSync(preCommitDest, wrapperScript);
-  console.log('✓ Installed pre-commit waveguard hook to .git/hooks/pre-commit');
 
   // Ensure hook is executable
   try {
@@ -1732,6 +1767,12 @@ exit 0
       console.warn(`  chmod +x "${preCommitDest}"`);
     }
   }
+
+  // Verify the hook exists where git reads it before claiming success
+  if (!fs.existsSync(preCommitDest)) {
+    throw new Error(`pre-commit waveguard hook is not at ${preCommitDest} after writing; refusing to report success.`);
+  }
+  console.log(`✓ Installed pre-commit waveguard hook to ${hookDisplayPath(targetDir, gitDir, gitHooksDir, 'pre-commit')}`);
 }
 
 function installPrePushHook(targetDir, templateRoot) {
@@ -1757,7 +1798,7 @@ function installPrePushHook(targetDir, templateRoot) {
   }
 
   // Ensure hooks directory exists
-  const gitHooksDir = path.join(gitDir, 'hooks');
+  const gitHooksDir = resolveGitHooksDir(targetDir, gitDir);
   if (!fs.existsSync(gitHooksDir)) {
     try {
       fs.mkdirSync(gitHooksDir, { recursive: true });
@@ -1830,7 +1871,6 @@ function installPrePushHook(targetDir, templateRoot) {
     fs.unlinkSync(hookDest);
   }
   fs.copyFileSync(hookSource, hookDest);
-  console.log('✓ Copied pre-push policy hook to .git/hooks/pre-push');
 
   // Ensure hook is executable
   try {
@@ -1842,6 +1882,12 @@ function installPrePushHook(targetDir, templateRoot) {
       console.warn(`  chmod +x "${hookDest}"`);
     }
   }
+
+  // Verify the hook exists where git reads it before claiming success
+  if (!fs.existsSync(hookDest)) {
+    throw new Error(`pre-push hook is not at ${hookDest} after writing; refusing to report success.`);
+  }
+  console.log(`✓ Copied pre-push policy hook to ${hookDisplayPath(targetDir, gitDir, gitHooksDir, 'pre-push')}`);
 }
 
 // Main execution function (skip if runtime command detected)
