@@ -113,7 +113,7 @@ Four rules:
 - **Lanes cannot force-push (hook-blocked).** Recover a dirty PR with `git merge origin/HEAD` (the default branch, see section 4) into
   your branch, keeping BOTH intents (never `checkout --ours/--theirs` on code or docs), regenerate
   registered generated artifacts (`python tools/gen_tool_index.py --regenerate`), run `python
-  tools/pr_symbol_survival_check.py --base origin/HEAD --head HEAD` (0 MISSING), then a plain push.
+  tools/pr_symbol_survival_check.py --base origin/HEAD --head HEAD` (0 MISSING), then push with `git push -u origin <branch>:<branch>`.
 
 - **A scalar's COUNTING RULE is part of the scalar.** Re-measuring is not enough if you assume what
   is being counted. A gate counting "Python test files executed" has a rule; a leg adding a `.mjs`
@@ -134,7 +134,7 @@ Four rules:
 
 ## 4. This repo's environment (do not re-derive, do not conclude "missing")
 - **Worktrees: sibling only, never the primary tree.** Always create a worktree before writing code:
-  `git -C $AESOP_ROOT fetch -q origin && git -C $AESOP_ROOT worktree add $AESOP_ROOT-wt-<name> -b <branch> origin/HEAD`.
+  `git -C $AESOP_ROOT fetch -q origin && git -C $AESOP_ROOT worktree add --no-track $AESOP_ROOT-wt-<name> -b <branch> origin/HEAD`.
   "origin/HEAD" here means the repo's default branch (origin/HEAD; main for aesop/keyrun/psinasty, master for the brain repos). Resolve it with `git symbolic-ref refs/remotes/origin/HEAD`; never hard-code the branch name.
   Exit the primary tree unchanged. Check `git branch --show-current` immediately after creating the
   worktree; if empty (detached HEAD), create a branch first.
