@@ -104,12 +104,17 @@ def flush_spooled_receipt(spool_file, slug, gh_runner, strict=False):
 FLUSH_LOG_GLOB = "*.flush.log"
 
 
+MAX_AGE_DAYS_CEILING = 3650  # 10 years; above this timedelta(days=...) overflows, so refuse at parse time.
+REFUSED_LOG_FLOOR_DAYS = 7  # the refused-receipts log is never pruned younger than this, whatever --max-age-days says.
+
+
 def _max_age_days_arg(text):
-    """argparse type for --max-age-days: a whole number of days, 0 or more.
+    """argparse type for --max-age-days: a whole number of days, 0 to MAX_AGE_DAYS_CEILING.
 
     0 expires everything older than now (json spools and flush logs alike, the same `age > window`
     rule). Negative values would make the window point into the future and prune fresh logs; non-finite
-    or fractional values are not whole days. All are refused at parse time, before anything is pruned.
+    or fractional values are not whole days; values above the ceiling overflow timedelta. All are refused
+    at parse time, before anything is pruned.
     """
     try:
         value = int(text)
@@ -117,6 +122,8 @@ def _max_age_days_arg(text):
         raise argparse.ArgumentTypeError("must be a whole number of days, got %r" % text)
     if value < 0:
         raise argparse.ArgumentTypeError("must be 0 or more, got %d" % value)
+    if value > MAX_AGE_DAYS_CEILING:
+        raise argparse.ArgumentTypeError("must be %d or less, got %d" % (MAX_AGE_DAYS_CEILING, value))
     return value
 
 
@@ -184,7 +191,8 @@ def prune_refused_log(spool_dirs, now, max_age_delta, dry_run=False):
 
     The log is append-only, so its mtime is the newest record's time: once that is past the window
     every record in it is past the window too, which makes the file-level rule the same rule the
-    spooled receipts and flush logs use. A symlink is never followed or removed.
+    spooled receipts and flush logs use. The caller passes the window already floored at
+    REFUSED_LOG_FLOOR_DAYS. A symlink is never followed or removed.
     """
     pruned = 0
     failures = []
@@ -229,7 +237,7 @@ def main(argv=None, gh_runner=None, environ=None):
     parser = argparse.ArgumentParser(prog="receipt_flush.py", description=__doc__.split("\n")[0])
     parser.add_argument("--repo", default=".", help="repo path (default: cwd)")
     parser.add_argument("--max-age-days", type=_max_age_days_arg, default=7,
-                        help="drop spools and prune logs older than this many days; a whole number, 0 or more (default: 7)")
+                        help="drop spools and prune logs older than this many days; a whole number, 0 to %d (default: 7); the refused-receipts log is never pruned under %d days" % (MAX_AGE_DAYS_CEILING, REFUSED_LOG_FLOOR_DAYS))
     parser.add_argument("--strict", action="store_true", help="exit 2 on any error (default: exit 0)")
     parser.add_argument("--dry-run", action="store_true", help="print plan, perform no posts or deletes")
 
@@ -253,7 +261,9 @@ def main(argv=None, gh_runner=None, environ=None):
 
     # Prune stale flush logs and refused-receipts logs by the same age rule. Independent of slug and of json spools.
     _pruned, log_failures = prune_flush_logs(spool_search_paths, now, max_age_delta, dry_run=args.dry_run)
-    _pruned_refused, refused_failures = prune_refused_log(spool_search_paths, now, max_age_delta, dry_run=args.dry_run)
+    # The refused log is the only durable trace of a refused push: its window is the larger of the floor and --max-age-days.
+    refused_window = max(timedelta(days=REFUSED_LOG_FLOOR_DAYS), max_age_delta)
+    _pruned_refused, refused_failures = prune_refused_log(spool_search_paths, now, refused_window, dry_run=args.dry_run)
     if args.strict:
         errors.extend(log_failures)
         errors.extend(refused_failures)

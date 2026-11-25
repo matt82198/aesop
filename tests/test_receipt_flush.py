@@ -99,13 +99,17 @@ class TestPostReceiptSpoolsOn422(unittest.TestCase):
             self.assertEqual(spooled_envelope["sig"]["scheme"], envelope["sig"]["scheme"])
 
 
+# Every subprocess a test starts on Windows must not open a console window.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _make_git_repo(root):
     """Local temp git repo with an origin remote (repo_slug reads it). Never the live repo."""
     repo = Path(root) / "repo"
     repo.mkdir()
     for args in (["init", "-q"], ["remote", "add", "origin", "https://github.com/owner/repo.git"]):
         res = subprocess.run(["git", "-C", str(repo)] + args, capture_output=True,
-                             encoding="utf-8", errors="replace", timeout=60)
+                             encoding="utf-8", errors="replace", timeout=60, creationflags=_NO_WINDOW)
         if res.returncode != 0:
             raise RuntimeError("git %s failed: %s" % (args[0], res.stderr))
     return repo
@@ -390,6 +394,24 @@ class TestMaxAgeDaysArgument(unittest.TestCase):
         self.assertFalse(stale_json.exists(), "with 0, a json spool older than now is dropped")
         self.assertFalse(stale_log.exists(), "with 0, a flush log older than now is pruned by the same rule")
 
+    def test_huge_max_age_is_refused_at_parse_time_not_an_overflow_traceback(self):
+        fresh = _write_text(self.spool_dir / ("a" * 40 + ".flush.log"), "fresh\n", age_days=0)
+
+        for bad in ("1000000000", "99999999999999999999", "3651"):
+            with self.subTest(value=bad):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as cm:
+                        _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", bad])
+                self.assertEqual(cm.exception.code, 2, "a window above 3650 days must exit 2, not overflow")
+                self.assertIn("--max-age-days", err.getvalue())
+        self.assertTrue(fresh.exists(), "a refused window must prune nothing")
+
+    def test_ceiling_of_3650_days_is_accepted(self):
+        code, _out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "3650"])
+
+        self.assertEqual(code, 0, "3650 days is the inclusive upper bound")
+
 
 class TestRefusedLogPrune(unittest.TestCase):
     """The refused-receipts log beside the spool directory is pruned by the same --max-age-days rule
@@ -421,12 +443,46 @@ class TestRefusedLogPrune(unittest.TestCase):
         self.assertTrue(self.refused.exists(), "a refused-receipts log inside --max-age-days must be kept")
 
     def test_zero_window_prunes_refused_log_like_flush_logs(self):
-        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("7" * 40), age_days=1)
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("7" * 40), age_days=10)
 
         code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "0"])
 
         self.assertEqual(code, 0)
         self.assertFalse(self.refused.exists(), "with 0, the refused log is expired exactly as a flush log is")
+
+    def test_refused_log_under_seven_days_survives_a_zero_window(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("8" * 40), age_days=3)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "0"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(self.refused.exists(),
+                        "the refused log is the only durable trace of a refused push: never pruned younger than 7 days")
+        self.assertNotIn("pruned refused-receipts log", out)
+
+    def test_refused_log_under_seven_days_survives_a_thirty_day_window(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("9" * 40), age_days=3)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "30"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(self.refused.exists(), "a 30-day window keeps a 3-day-old refused log, as before")
+
+    def test_refused_log_past_seven_days_is_pruned_at_zero_window_floor_only(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("e" * 40), age_days=10)
+
+        code, _out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "0"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(self.refused.exists(), "the floor is 7 days, not infinity: 10 days old is pruned at 0")
+
+    def test_refused_log_older_than_thirty_days_is_pruned_at_thirty_window(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("f" * 40), age_days=40)
+
+        code, _out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "30"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(self.refused.exists(), "a 40-day-old refused log is pruned once the 30-day window is larger than 7")
 
     @unittest.skipUnless(_can_symlink(), "this host cannot create symlinks (needs privilege); runs on CI Linux")
     def test_symlinked_refused_log_is_never_followed(self):
@@ -448,8 +504,20 @@ def _try_junction(link, target):
     if os.name != "nt":
         return False
     res = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                         capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+                         capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+                         creationflags=_NO_WINDOW)
     return res.returncode == 0 and os.path.isdir(str(link))
+
+
+def _make_dir_link(link, target):
+    """A directory link at link pointing at target: a junction on Windows, a symlink elsewhere. True when made."""
+    if os.name == "nt":
+        return _try_junction(link, target)
+    try:
+        os.symlink(str(target), str(link), target_is_directory=True)
+    except OSError:
+        return False
+    return True
 
 
 class TestSpoolDirLinkRefusal(unittest.TestCase):
@@ -494,6 +562,24 @@ class TestSpoolDirLinkRefusal(unittest.TestCase):
         code, out = _run_flush(self.repo, self.link, gh)
 
         self._assert_refused(code, out, gh)
+
+    def test_linked_spool_dir_beside_a_posted_spool_exits_nonzero(self):
+        """The final return (not the early returns) must carry the refusal: the linked primary dir is
+        refused, the legacy repo/state/receipts/spool still posts one receipt, and the run must exit 2."""
+        if not _make_dir_link(self.link, self.outside):
+            self.skipTest("this host cannot create a directory link (symlink needs privilege; junction refused)")
+        legacy = self.repo / "state" / "receipts" / "spool"
+        posted_file = _write_spool(legacy, _dummy_envelope("5" * 40))
+        gh = _FakeGh(commit_code=0, check_run_code=0)
+
+        code, out = _run_flush(self.repo, self.link, gh)
+
+        self.assertEqual(code, 2, "a refused linked spool dir must make the run exit non-zero even when a spool posts")
+        self.assertIn("posted=1", out, "the legacy spool must still have been posted")
+        self.assertFalse(posted_file.exists(), "the posted legacy spool is deleted, as on any successful post")
+        self.assertTrue(self.stale_log.exists(), "the linked dir's flush log must not be pruned")
+        self.assertTrue(self.stale_json.exists(), "the linked dir's spool must not be dropped")
+        self.assertIn("symlink or junction", out)
 
 
 def suite():
