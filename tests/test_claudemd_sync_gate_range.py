@@ -246,8 +246,51 @@ def _no_remote_repo(tmp, branch="main"):
     return root
 
 
-class TestBaseIsNeverHead(unittest.TestCase):
-    """A base candidate that resolves to HEAD's own commit is not a base (no self-diff OK)."""
+class TestBaseResolutionAgainstHead(unittest.TestCase):
+    """Remote-tracking bases may equal HEAD (zero commits ahead = OK); local branches may not.
+
+    A remote-tracking candidate (origin/<trunk>) that resolves is always a valid base, even at
+    HEAD: equal means no changes. A local-branch candidate is valid only when it is not the
+    checked-out branch and does not resolve to HEAD (no-remote self-diff would read OK over drift).
+    """
+
+    def test_head_equal_to_origin_main_is_ok(self):
+        """RED on 2b197ac0: HEAD == origin/main (CI on main after a merge, zero commits ahead).
+
+        origin/main resolves and equals HEAD. It is a valid remote-tracking base, so the diff is
+        empty and the gate prints OK exit 0. The pre-change gate skipped it and exited 2.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "main", push=True)
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 0, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[OK]", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_detached_head_at_origin_main_is_ok(self):
+        """Detached HEAD at origin/main: origin/main is the base and equals HEAD, so OK exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "main", push=True)
+            _git(root, "checkout", "-q", "--detach", "origin/main")
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 0, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[OK]", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_feature_branch_drift_against_origin_main_is_drift(self):
+        """Feature branch with a tools/ change committed ahead of origin/main must be DRIFT exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "main", push=True)
+            _git(root, "checkout", "-q", "-b", "feature/x")
+            _commit(root, "change x", {"tools/x.py": "print('b')\n"})
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 1, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[DRIFT]", out, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("origin/main", out, f"stdout: {out}\nstderr: {err}")
 
     def test_no_remote_head_on_main_code_drift_is_not_ok(self):
         """RED on the pre-fix gate: no remote, HEAD on main, code committed with no CLAUDE.md.
