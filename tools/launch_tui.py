@@ -110,35 +110,123 @@ def find_terminal():
     )
 
 
-def find_bash_process_by_script(script_path):
-    r"""
-    Find bash.exe process running the given script using PowerShell.
-    Searches for the script path in the bash process CommandLine.
+def _resolve_bash_cli():
+    """Locate a non-GUI bash binary for process inspection."""
+    which_bash = shutil.which("bash")
+    if which_bash and os.path.exists(which_bash):
+        return which_bash
+    win_git_bash = r"C:\Program Files\Git\bin\bash.exe"
+    if os.path.exists(win_git_bash):
+        return win_git_bash
+    which_git = shutil.which("git")
+    if which_git:
+        candidate = Path(which_git).parent.parent / "bin" / "bash.exe"
+        if candidate.exists():
+            return str(candidate)
+    return "bash"
+
+
+def _script_match_patterns(script_path):
+    """Return candidate command-line substrings (native, forward-slash, MSYS POSIX)."""
+    # Bash processes may show the path in either Windows or POSIX format:
+    # Try both: C:\Users\... and /c/Users/...
+    script_abs = os.path.abspath(script_path)
+    patterns = [script_abs]
+    slash_form = script_abs.replace("\\", "/")
+    if slash_form not in patterns:
+        patterns.append(slash_form)
+    if len(script_abs) >= 3 and script_abs[1] == ":":
+        posix_form = "/" + script_abs[0].lower() + script_abs[2:].replace("\\", "/")
+        if posix_form not in patterns:
+            patterns.append(posix_form)
+    return patterns
+
+
+def find_bash_process_by_script(script_path, proc_root="/proc"):
+    """
+    Find bash process running the given script via /proc, bash, or ps.
+    Searches for the script path in the bash process command line.
     Returns PID if found, None otherwise.
     """
     try:
-        script_abs = os.path.abspath(script_path)
-        # Bash processes may show the path in either Windows or POSIX format
-        # Try both: C:\Users\... and /c/Users/...
+        patterns = _script_match_patterns(script_path)
 
-        # Use PowerShell to find bash process matching either path format
-        ps_cmd = (
-            f"$patterns = @('{script_abs}', '/{script_abs[0].lower()}{script_abs[2:].replace(chr(92), '/')}'); "
-            f"Get-CimInstance Win32_Process -Filter \"name='bash.exe'\" | "
-            f"Where-Object {{ $cmd = $_.CommandLine; $patterns | Where-Object {{ $cmd -like \"*$_*\" }} }} | "
-            f"Select-Object -First 1 -ExpandProperty ProcessId"
-        )
+        # 1. Direct /proc scan (Linux, WSL, Cygwin/MSYS Python)
+        if proc_root and os.path.isdir(proc_root):
+            for entry in os.listdir(proc_root):
+                if not entry.isdigit():
+                    continue
+                cmdline_file = os.path.join(proc_root, entry, "cmdline")
+                try:
+                    with open(cmdline_file, "rb") as fh:
+                        raw = fh.read()
+                except OSError:
+                    continue
+                if not raw:
+                    continue
+                cmd_text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+                if "bash" not in cmd_text.lower():
+                    continue
+                if any(pat in cmd_text for pat in patterns):
+                    winpid_file = os.path.join(proc_root, entry, "winpid")
+                    if os.path.isfile(winpid_file):
+                        try:
+                            with open(winpid_file, "r", encoding="utf-8") as wf:
+                                wp = wf.read().strip()
+                            if wp.isdigit():
+                                return int(wp)
+                        except OSError:
+                            pass
+                    return int(entry)
+
+        # 2. Windows: inspect Git Bash /proc via bash -c (positional args, no shell interpolation)
+        if os.name == "nt":
+            bash_bin = _resolve_bash_cli()
+            sh_probe = (
+                'for d in /proc/[0-9]*; do '
+                '[ -r "$d/cmdline" ] || continue; '
+                'cmd=$(tr "\\0" " " < "$d/cmdline" 2>/dev/null); '
+                'case "$cmd" in *bash*|*BASH*) ;; *) continue ;; esac; '
+                'for pat in "$@"; do '
+                'case "$cmd" in *"$pat"*) '
+                'if [ -r "$d/winpid" ]; then cat "$d/winpid"; else basename "$d"; fi; '
+                'exit 0 ;; esac; '
+                'done; '
+                'done'
+            )
+            result = subprocess.run(
+                [bash_bin, "-c", sh_probe, "find_bash", *patterns],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pid_str = result.stdout.strip().splitlines()[0].strip()
+                if pid_str.isdigit():
+                    return int(pid_str)
+            return None
+
+        # 3. POSIX fallback (macOS / BSD without /proc): ps
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            ["ps", "-eo", "pid=,args="],
             capture_output=True,
             text=True,
-            encoding='utf-8', errors='replace',
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            pid_str = result.stdout.strip()
-            if pid_str.isdigit():
-                return int(pid_str)
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split(None, 1)
+                if len(parts) < 2 or not parts[0].isdigit():
+                    continue
+                if "bash" in parts[1].lower() and any(pat in parts[1] for pat in patterns):
+                    return int(parts[0])
         return None
     except Exception:
         return None
@@ -150,15 +238,27 @@ def check_bash_running(script_path):
     Returns True if any bash/git-bash process is active.
     """
     try:
+        if find_bash_process_by_script(script_path) is not None:
+            return True
+        if os.name == "nt":
+            result = subprocess.run(
+                ["tasklist"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+            )
+            return "bash.exe" in result.stdout or "git-bash.exe" in result.stdout
         result = subprocess.run(
-            ["tasklist"],
+            ["ps", "-eo", "comm="],
             capture_output=True,
             text=True,
-            encoding='utf-8', errors='replace',
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
-        # If bash or git-bash is running, assume script might be active
-        return "bash.exe" in result.stdout or "git-bash.exe" in result.stdout
+        return any("bash" in ln.lower() for ln in result.stdout.splitlines())
     except Exception:
         return False
 

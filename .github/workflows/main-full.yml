@@ -72,18 +72,15 @@ jobs:
         # omitting it here turned shard 3 red on run 38818655874 (4 failures).
         run: pip install -r requirements-ci.txt
 
-      - name: Set shard-specific temporary directory (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
+      - name: Set shard-specific temporary directory
+        shell: bash
         run: |
-          if (!(Test-Path "$env:TEMP\shard-${{ matrix.python-shard }}" -PathType Container)) { New-Item -ItemType Directory -Path "$env:TEMP\shard-${{ matrix.python-shard }}" }
-          echo "TMPDIR=$env:TEMP\shard-${{ matrix.python-shard }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Set shard-specific temporary directory (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p /tmp/shard-${{ matrix.python-shard }}
-          echo "TMPDIR=/tmp/shard-${{ matrix.python-shard }}" >> $GITHUB_ENV
+          SHARD_TMP="${RUNNER_TEMP:-/tmp}/shard-${{ matrix.python-shard }}"
+          mkdir -p "$SHARD_TMP"
+          if command -v cygpath >/dev/null 2>&1; then
+            SHARD_TMP="$(cygpath -w "$SHARD_TMP")"
+          fi
+          echo "TMPDIR=$SHARD_TMP" >> "$GITHUB_ENV"
 
       - name: Run Node.js tests (shard 0 only, both platforms)
         if: matrix.python-shard == 0

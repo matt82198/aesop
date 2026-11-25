@@ -493,37 +493,24 @@ class TestEodSweep(unittest.TestCase):
         # Make repo dirty
         (test_repo / "README.md").write_text("# Modified\n")
 
-        # Get 8.3 short path
+        # Get 8.3 short path via Win32 kernel32 API (stdlib ctypes)
         try:
-            fso = __import__('win32com.client', fromlist=['Dispatch']).GetObject(
-                "winmgmts:").ExecQuery(
-                f"Select AltName from CIM_LogicalFile where Name='{test_repo.as_posix()}'")
-            if fso:
-                short_name = next(iter(fso)).AltName
-                short_path = test_repo.parent / short_name
-            else:
-                # Fallback: use Win32 API via ctypes
-                import ctypes
-                fso = ctypes.windll.shell32.GetShortPathNameW(str(test_repo), None, 0)
-                short_path_str = ctypes.create_unicode_buffer(fso)
-                ctypes.windll.shell32.GetShortPathNameW(str(test_repo), short_path_str, fso)
-                short_path = Path(short_path_str.value)
-        except:
-            # Alternative simpler approach using subprocess
-            try:
-                result = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command",
-                     f"(New-Object -ComObject Scripting.FileSystemObject).GetFolder('{test_repo}').ShortPath"],
-                    capture_output=True, text=True, timeout=5
-                )
-                if result.returncode == 0:
-                    short_path = Path(result.stdout.strip())
-                else:
-                    self.skipTest("Could not determine 8.3 short path for this test")
-                    return
-            except:
+            import ctypes
+
+            buf_len = ctypes.windll.kernel32.GetShortPathNameW(str(test_repo), None, 0)
+            if not buf_len:
                 self.skipTest("Could not determine 8.3 short path for this test")
                 return
+            short_path_buf = ctypes.create_unicode_buffer(buf_len)
+            if not ctypes.windll.kernel32.GetShortPathNameW(
+                str(test_repo), short_path_buf, buf_len
+            ):
+                self.skipTest("Could not determine 8.3 short path for this test")
+                return
+            short_path = Path(short_path_buf.value)
+        except Exception:
+            self.skipTest("Could not determine 8.3 short path for this test")
+            return
 
         # Verify short path is actually different (8.3 form)
         if str(short_path) == str(test_repo):

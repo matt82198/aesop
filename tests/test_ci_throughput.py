@@ -409,6 +409,24 @@ class CIThroughputTests(unittest.TestCase):
                 "exclude entry %r drops coverage from the integration gate" % (entry,)
             )
 
+    def test_shard_tempdir_steps_use_bash_not_powershell(self):
+        """Shard TMPDIR setup in ci.yml and main-full.yml must use bash on all platforms."""
+        for wf_name, wf_doc, job_name in (
+            ("ci.yml", self.ci_workflow, "windows-shard"),
+            ("main-full.yml", self.main_full_workflow, "main-full-verify"),
+        ):
+            steps = wf_doc.get("jobs", {}).get(job_name, {}).get("steps", [])
+            tmp_steps = [
+                s for s in steps if "temporary directory" in (s.get("name") or "").lower()
+            ]
+            self.assertEqual(
+                len(tmp_steps),
+                1,
+                f"{wf_name} > {job_name} should have a single unified bash TMPDIR step",
+            )
+            self.assertEqual(tmp_steps[0].get("shell"), "bash")
+            self.assertNotIn("Out-File", tmp_steps[0].get("run", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
