@@ -23,6 +23,7 @@ cite them as sources or no folder page replaces them yet, so check their claims 
 
 | Page | What it explains |
 |---|---|
+| [Deterministic harness](./DETERMINISTIC-HARNESS.md) | The three-layer architecture, what runs as deterministic state machines versus model cognition, and the gate, hand-back, and retry interfaces. |
 | [The receipts loop](./concepts/receipts-loop.md) | Why a lane counts only when it leaves a receipt a gate can check. |
 | [Signed receipts](./concepts/signed-receipts.md) | The receipt envelope, the signature schemes and the tree binding. |
 | [Event store](./concepts/event-store.md) | The append-only log where each line records the hash of the previous line. |
