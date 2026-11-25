@@ -139,28 +139,43 @@ def base_ref_candidates(base_ref: str) -> List[str]:
     return list(dict.fromkeys(candidates))
 
 
-def ref_resolves(repo_root: Path, ref: str) -> bool:
-    """True if `git rev-parse --verify <ref>` succeeds in repo_root."""
+def ref_sha(repo_root: Path, ref: str) -> Optional[str]:
+    """Commit sha that `ref` resolves to in repo_root, or None if it does not resolve to a commit."""
     result = subprocess.run(
-        ["git", "rev-parse", "--verify", ref],
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
         capture_output=True,
         text=True,
         encoding='utf-8', errors='replace',
         timeout=10,
         cwd=repo_root,
     )
-    return result.returncode == 0
+    sha = result.stdout.strip()
+    return sha if result.returncode == 0 and sha else None
 
 
 def resolve_base(repo_root: Path, base_ref: str) -> Optional[str]:
-    """First candidate from base_ref_candidates() that resolves, or None.
+    """First candidate from base_ref_candidates() that resolves to a commit other than HEAD, or None.
 
-    No HEAD~1 fallback: a None here is the caller's fail-closed or bootstrap decision.
+    A candidate whose commit IS HEAD's commit is not a base: diffing HEAD against itself is
+    an empty range that reads as OK over committed drift (no-remote checkout where HEAD is
+    main, first push of main to an empty remote). No HEAD~1 fallback: a None here is the
+    caller's fail-closed or bootstrap decision.
     """
+    head = ref_sha(repo_root, "HEAD")
     for candidate in base_ref_candidates(base_ref):
-        if ref_resolves(repo_root, candidate):
-            return candidate
+        sha = ref_sha(repo_root, candidate)
+        if sha is None or sha == head:
+            continue
+        return candidate
     return None
+
+
+def candidates_at_head(repo_root: Path, base_ref: str) -> List[str]:
+    """Candidates that resolve to HEAD's own commit and were therefore rejected as a base."""
+    head = ref_sha(repo_root, "HEAD")
+    if head is None:
+        return []
+    return [c for c in base_ref_candidates(base_ref) if ref_sha(repo_root, c) == head]
 
 
 def remote_is_empty(repo_root: Path) -> bool:
@@ -335,12 +350,14 @@ def main():
     # Resolve the base: a candidate ref, else bootstrap (empty remote) or fail closed.
     base = resolve_base(repo_root, args.base_ref)
     bootstrap = base is None and remote_is_empty(repo_root)
+    at_head = candidates_at_head(repo_root, args.base_ref) if base is None else []
     if base is None and not bootstrap:
         changed_files, git_error = [], True
     else:
         if bootstrap:
             if not args.json:
-                print("[BOOTSTRAP] no base ref; checking the whole tree")
+                ignored = f" (ignored, resolves to HEAD: {', '.join(at_head)})" if at_head else ""
+                print(f"[BOOTSTRAP] no base ref other than HEAD{ignored}; checking the whole tree")
         elif not args.json:
             print(f"[BASE] {base}")
         changed_files, git_error = get_git_changed_files(
@@ -350,6 +367,10 @@ def main():
     if git_error:
         tried = ", ".join(base_ref_candidates(args.base_ref))
         message = f"could not diff against base (tried: {tried}); fail closed, no HEAD~1 fallback"
+        if base is None:
+            if at_head:
+                message += f"; these resolve to HEAD itself and are not a base: {', '.join(at_head)}"
+            message += "; recipe: fetch the remote trunk (git fetch origin <trunk>) or pass --base-ref <ref>"
         if args.json:
             output = {
                 "status": "error",

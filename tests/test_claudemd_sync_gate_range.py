@@ -237,5 +237,84 @@ class TestTrunkAndBootstrapBaseResolution(unittest.TestCase):
             self.assertIn("could not diff against base", err + out, f"stdout: {out}\nstderr: {err}")
 
 
+def _no_remote_repo(tmp, branch="main"):
+    """Work repo on `branch` with NO remote and no origin/* refs. Base commit on `branch`."""
+    root = Path(tmp)
+    _init_repo(root)
+    _set_head(root, branch)
+    _commit(root, "base", dict(_DEFAULT_BASE_FILES))
+    return root
+
+
+class TestBaseIsNeverHead(unittest.TestCase):
+    """A base candidate that resolves to HEAD's own commit is not a base (no self-diff OK)."""
+
+    def test_no_remote_head_on_main_code_drift_is_not_ok(self):
+        """RED on the pre-fix gate: no remote, HEAD on main, code committed with no CLAUDE.md.
+
+        origin/main is absent, so the bare name `main` resolves to HEAD itself. The gate
+        diffed main...HEAD (empty) and printed [OK] exit 0 over committed drift. The fixed
+        gate must fail closed (exit 2) and name the recipe; a HEAD~1 fallback would
+        instead print DRIFT exit 1 and is excluded by this exit-code assertion.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _no_remote_repo(tmp)
+            _commit(root, "change x", {"tools/x.py": "print('b')\n"})
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertNotIn("[OK]", out, f"stdout: {out}\nstderr: {err}")
+            self.assertEqual(code, 2, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("--base-ref", err + out, f"stdout: {out}\nstderr: {err}")
+
+    def test_first_push_of_main_to_empty_remote_is_whole_tree_bootstrap(self):
+        """RED on the pre-fix gate: empty origin, HEAD on main, whole-tree bootstrap must bite.
+
+        This is the reachable case (pre-push of a first main push). `main` resolved to
+        HEAD, so the gate diffed nothing and printed [OK] exit 0. With HEAD excluded the
+        bootstrap whole-tree path applies: tools/x.py has no CLAUDE.md anywhere in
+        history, so it must be DRIFT, exit 1, and the output must say [BOOTSTRAP].
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "main", push=False, base_files={
+                "tools/x.py": "print('a')\n",
+                "README.md": "readme\n",
+            })
+            _commit(root, "fresh scaffold without clause", {"tools/x.py": "print('b')\n"})
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 1, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[BOOTSTRAP]", out, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[DRIFT]", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_origin_main_still_wins_when_local_main_is_head(self):
+        """GREEN pin: origin/main exists and differs; local main == HEAD must not displace it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _set_head(root, "main")
+            _commit(root, "base", dict(_DEFAULT_BASE_FILES))
+            _git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+            _commit(root, "change x", {"tools/x.py": "print('b')\n"})
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 1, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[BASE] origin/main", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_feature_branch_uses_local_main_when_no_remote(self):
+        """GREEN pin: no remote, feature branch ahead of a real local main; main stays the base."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _no_remote_repo(tmp)
+            _git(root, "checkout", "-q", "-b", "feature/x")
+            _commit(root, "change x", {"tools/x.py": "print('b')\n"})
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 1, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[BASE] main", out, f"stdout: {out}\nstderr: {err}")
+
+
 if __name__ == "__main__":
     unittest.main()
