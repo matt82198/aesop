@@ -104,7 +104,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `latency_report.py` -- Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 - `launch_tui.py` -- Spawn bash TUI script in detached terminal
 - `lint_core.py` -- Shared linting core (file discovery, AST cache, ratchet baseline, exit-code contract, finding schema); used by 6+ gate scripts; provides Finding class, discover_files(), ASTCache, RatchetBaseline, format_findings_text/json(), exit_code() helpers; all stdlib-only; exit 0=clean/1=findings/2=could-not-evaluate
-- `linux_shape_check.py` -- Linux shape check (cross-platform test runner, detects Windows-only red CI via WSL)
+- `linux_shape_check.py` -- Linux shape check (cross-platform test runner via WSL; ignores non-userland docker-desktop WSL utility VMs when probing distros)
 - `list_test_suites.py` -- Generate live test suite inventory: scans filesystem for test files (tests/*.test.mjs, tests/test_*.py, tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test) and outputs grouped listing with first-line doc summaries; ASCII-safe, deterministic; CLI: `list_test_suites.py [--repo ROOT]`; used in tests/CLAUDE.md docs and CI coverage gates; replaces hand-maintained suite listings (kills conflict magnet in merge conflicts)
 - `lock.mjs` -- Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `loop_proof_check.py` -- Refuses a git range that changes a LOOP-MANIFEST.json loop file without a Loop-Proof trailer naming a declared test (fail-closed, PR-only CI).

@@ -207,6 +207,27 @@ class TestWslStatus(unittest.TestCase):
         ]
         self.assertEqual(lsc.wsl_status(), "ok")
 
+    @mock.patch("subprocess.run")
+    def test_no_distro_when_only_docker_desktop_vms_listed(self, mock_run):
+        """Docker Desktop utility VMs lack bash/python/node and must report no-distro."""
+        out = "docker-desktop\r\ndocker-desktop-data\r\n".encode("utf-16-le")
+        mock_run.return_value = mock.Mock(returncode=0, stdout=out, stderr=b"")
+        self.assertEqual(lsc.wsl_status(), "no-distro")
+        self.assertEqual(mock_run.call_count, 1)
+
+    @mock.patch("subprocess.run")
+    def test_ok_when_userland_distro_listed_after_docker_desktop(self, mock_run):
+        """When docker-desktop precedes Ubuntu, Ubuntu is still detected as ok."""
+        mock_run.side_effect = [
+            mock.Mock(
+                returncode=0,
+                stdout="docker-desktop\r\nUbuntu\r\n".encode("utf-16-le"),
+                stderr=b"",
+            ),
+            mock.Mock(returncode=0, stdout=b"", stderr=b""),
+        ]
+        self.assertEqual(lsc.wsl_status(), "ok")
+
 
 class TestLinuxShapeCheckIntegration(unittest.TestCase):
     """Integration tests with mocked WSL calls."""
