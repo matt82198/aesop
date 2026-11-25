@@ -12,7 +12,7 @@
 
 import { INPUT_PREFIX } from './render.mjs';
 
-export const SLASH_COMMANDS = ['help', 'model', 'models', 'auth', 'detect', 'clear', 'exit', 'quit', 'codex', 'codex-app', 'agy', 'peers'];
+export const SLASH_COMMANDS = ['help', 'model', 'models', 'auth', 'detect', 'clear', 'exit', 'quit', 'codex', 'codex-app', 'agy', 'peers', 'use'];
 
 const HISTORY_LIMIT = 500;
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });

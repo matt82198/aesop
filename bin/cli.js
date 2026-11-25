@@ -152,9 +152,10 @@ const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !interactiveSe
 const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
 // One-shot offload to a local model: `aesop ask` (chat/ask.mjs). Its flags pass through untouched.
 const isAskDispatch = args[0] === 'ask';
-// Peer-bus post: `aesop post --from <name> "<text>"` (chat/peer_bus.mjs) writes one peer event to the feed.
+// Peer-bus post (`aesop post`) and roster/routing CLI (`aesop peers`) live in chat/peer_bus.mjs.
 const isPostDispatch = args[0] === 'post';
-const isNamespaceDispatch = isPipeDispatch || isChatDispatch || isAuthDispatch || isAskDispatch || isPostDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+const isPeersDispatch = args[0] === 'peers';
+const isNamespaceDispatch = isPipeDispatch || isChatDispatch || isAuthDispatch || isAskDispatch || isPostDispatch || isPeersDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 // Auth/model verbs: AUTH_CLI answers `auth ...` and `model ...` with the inherited stdio.
 const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
 /**
@@ -257,12 +258,12 @@ if (isAskDispatch) {
   return;
 }
 
-// Peer post: `aesop post --from <name> "<text>"` writes one peer event to the activity feed (chat/peer_bus.mjs).
-// Exit 0 posted, 1 feed not writable, 2 usage.
-if (isPostDispatch) {
+// Peer post (`aesop post`) and peer roster/routing (`aesop peers`) live in chat/peer_bus.mjs.
+if (isPostDispatch || isPeersDispatch) {
   const peerBus = path.join(__dirname, '..', 'chat', 'peer_bus.mjs');
+  const entry = isPeersDispatch ? 'peersCli' : 'postCli';
   import(require('url').pathToFileURL(peerBus).href)
-    .then((mod) => mod.postCli({
+    .then((mod) => mod[entry]({
       argv: args.slice(1),
       env: process.env,
       stdout: process.stdout,
@@ -272,7 +273,7 @@ if (isPostDispatch) {
       process.exitCode = code;
     })
     .catch((err) => {
-      console.error(`Error: post failed: ${err && err.message ? err.message : err}`);
+      console.error(`Error: ${args[0]} failed: ${err && err.message ? err.message : err}`);
       process.exitCode = 2;
     });
   return;
@@ -796,7 +797,8 @@ Commands (Node.js):
   pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format.
                           Bare aesop without a TTY on stdin/stdout is this filter; with a TTY, bare aesop scaffolds
                           (or opens chat with --chat-default or AESOP_DEFAULT=chat).
-  post                    Peer-bus message into the chat feed: aesop post --from <name> "<text>" (chat/CLAUDE.md)
+  peers                   Worker roster and peer-bus routing: aesop peers [--json] | aesop peers use <kind> "<task>"
+  post                    Peer-bus message: aesop post --from <name> "<text>" | aesop post --to orchestrator "<text>" (chat/CLAUDE.md)
   ask                     One-shot prompt to a local open-weight model, no TTY needed (chat/CLAUDE.md):
                           aesop ask [--model p/m] [--system t] [--json] [--timeout s] "<prompt>"; piped stdin is appended
   chat                    Interactive chat TUI on a terminal (chat/CLAUDE.md); --chat-default or AESOP_DEFAULT=chat makes bare aesop open it
