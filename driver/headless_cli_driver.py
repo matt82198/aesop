@@ -5,7 +5,7 @@ Each dispatch_worker() call runs ONE isolated headless CLI process in the
 request's workdir and returns its outcome. Profiles:
 
   * "codex-exec"   -- ``codex exec``. The prompt is written to stdin (``-``),
-    ``--cd <workdir>`` and ``--sandbox workspace-write`` bound the worker, and
+    ``--approve-for-me`` selects automatic review with workspace-write in ``--cd <workdir>``, and
     ``--output-last-message <tmpfile>`` is the text channel. Open-weight:
     ``--oss --local-provider {ollama,lmstudio}`` plus ``-m <model>``.
   * "agy-headless" -- ``agy -p <prompt> --output-format json --print-timeout 0
@@ -36,21 +36,22 @@ import uuid
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-from agent_driver import (
-    WORKER_DONE,
-    WORKER_FAILED,
-    WORKER_UNKNOWN,
-    AgentDriver,
-    CommandResult,
-    DriverCapabilities,
-    WorkerRequest,
-    WorkerResult,
-    WorkerStatus,
-)
-from proc_util import run_shell_bounded
+if __package__:
+    from .agent_driver import (
+        WORKER_DONE, WORKER_FAILED, WORKER_UNKNOWN, AgentDriver, CommandResult,
+        DriverCapabilities, WorkerRequest, WorkerResult, WorkerStatus,
+    )
+    from .proc_util import run_shell_bounded
+else:  # Standalone callers run with the driver directory on their import path.
+    from agent_driver import (
+        WORKER_DONE, WORKER_FAILED, WORKER_UNKNOWN, AgentDriver, CommandResult,
+        DriverCapabilities, WorkerRequest, WorkerResult, WorkerStatus,
+    )
+    from proc_util import run_shell_bounded
 
 PROFILES = ("codex-exec", "agy-headless")
 OPEN_WEIGHT_PROVIDERS = ("ollama", "lmstudio")
+CONFIGURED_PROVIDERS = ("local_eval", "openai")
 
 DEFAULT_TIMEOUT_S = 600.0
 _COMMAND_TIMEOUT_S = 600.0
@@ -121,10 +122,10 @@ def validate_headless_options(
                 "agy-headless has no provider flag; remove 'provider' "
                 "(open-weight routing is codex-exec only)"
             )
-        if provider not in OPEN_WEIGHT_PROVIDERS:
+        if provider not in (*OPEN_WEIGHT_PROVIDERS, *CONFIGURED_PROVIDERS):
             raise ValueError(
                 f"provider {provider!r} not supported for codex-exec; "
-                f"valid: {', '.join(OPEN_WEIGHT_PROVIDERS)}"
+                f"valid: {', '.join((*OPEN_WEIGHT_PROVIDERS, *CONFIGURED_PROVIDERS))}"
             )
     if model is not None:
         if not isinstance(model, str) or not model.strip() or model.startswith("-"):
@@ -364,12 +365,13 @@ class HeadlessCliDriver(AgentDriver):
             "exec",
             "--cd",
             workdir,
-            "--sandbox",
-            "workspace-write",
+            "--approve-for-me",
             "--output-last-message",
             last_message,
         ]
-        if self._provider is not None:
+        if self._provider in CONFIGURED_PROVIDERS:
+            argv += ["-c", f'model_provider="{self._provider}"']
+        elif self._provider is not None:
             argv += ["--oss", "--local-provider", self._provider]
         if model is not None:
             argv += ["-m", model]

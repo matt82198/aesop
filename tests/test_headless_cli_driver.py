@@ -151,13 +151,14 @@ class TestCodexExecArgv(_RepoCase):
         self.dispatch("codex-exec", fake)
         self.assertEqual(calls[0][1]["cwd"], str(self.workdir))
 
-    def test_cd_and_sandbox_flags(self):
-        # codex exec --help: -C/--cd <DIR>; -s/--sandbox {read-only,workspace-write,danger-full-access}
+    def test_cd_and_automatic_review_flags(self):
         fake, calls = _make_fake_run(last_message="ok")
         self.dispatch("codex-exec", fake)
         argv = calls[0][0]
         self.assertEqual(argv[argv.index("--cd") + 1], str(self.workdir))
-        self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace-write")
+        self.assertIn("--approve-for-me", argv)
+        # The CLI rejects an explicit sandbox alongside its workspace-write preset.
+        self.assertNotIn("--sandbox", argv)
 
     def test_prompt_is_stdin_not_argv(self):
         # codex exec --help: PROMPT omitted or "-" reads instructions from stdin.
@@ -247,6 +248,16 @@ class TestEnvAllowList(_RepoCase):
 
 
 class TestOpenWeightCodex(_RepoCase):
+    def test_configured_provider_and_model_are_pinned_for_native_evaluation(self):
+        for provider in ("local_eval", "openai"):
+            with self.subTest(provider=provider):
+                fake, calls = _make_fake_run(last_message="ok")
+                self.dispatch("codex-exec", fake, provider=provider, model="chosen")
+                argv = calls[0][0]
+                self.assertEqual(argv[argv.index("-c") + 1], f'model_provider="{provider}"')
+                self.assertEqual(argv[argv.index("-m") + 1], "chosen")
+                self.assertNotIn("--oss", argv)
+
     def test_ollama_profile_puts_oss_provider_and_model_in_argv(self):
         fake, calls = _make_fake_run(last_message="ok")
         self.dispatch("codex-exec", fake, provider="ollama", model="qwen2.5-coder:32b")
