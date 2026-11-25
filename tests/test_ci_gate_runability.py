@@ -14,6 +14,7 @@ import unittest
 import tempfile
 import subprocess
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -882,6 +883,133 @@ class TestRequiredContextRendering(unittest.TestCase):
         """Control: the real shape (no override, full matrix) is clean."""
         code, out = self._run(_render_yaml())
         self.assertEqual(code, 0, out)
+
+
+_BASE_GATE = Path(__file__).parent.parent / 'tools' / 'ci_gate_runability.py'
+_VERIFIER = 'tools/verify_receipt.py'
+
+# Mirrors .github/workflows/verify-receipt.yml: the PR HEAD is checked out at the root and the
+# trusted base is checked out into `base/` at the base ref; the step runs base/tools/verify_receipt.py.
+_BASE_CHECKOUT_WORKFLOW = """name: Verify receipt
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Checkout the BASE tree (verifier source of trust)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || 'main' }}
+          path: base
+          fetch-depth: 1
+
+      - name: Verify receipt
+        run: python base/tools/verify_receipt.py --help
+"""
+
+
+def _head_files() -> dict:
+    """The PR HEAD tree's workflow and manifest (no verifier: the head lacks tools/verify_receipt.py)."""
+    return {
+        '.github/workflows/verify-receipt.yml': _BASE_CHECKOUT_WORKFLOW,
+        'tools/required-checks.json': json.dumps({'required_contexts': ['verify']}),
+    }
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """Run git with a local-only identity (never global config); return stripped stdout."""
+    result = subprocess.run(
+        ['git', '-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid',
+         '-c', 'commit.gpgsign=false', *args],
+        cwd=str(cwd), capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def _write_tree(root: Path, files: dict) -> None:
+    for rel, text in files.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding='utf-8')
+
+
+def _build_pr_repo(tmp: Path, base_files: dict, head_files: dict, base_branch: str = 'main') -> Path:
+    """Commit base_files on base_branch, then branch `pr` whose tree is exactly head_files."""
+    root = tmp / 'repo'
+    root.mkdir()
+    _git(root, 'init', '-q')
+    _git(root, 'symbolic-ref', 'HEAD', 'refs/heads/' + base_branch)
+    _write_tree(root, base_files)
+    _git(root, 'add', '-A')
+    _git(root, 'commit', '-q', '--allow-empty', '-m', 'base')
+    _git(root, 'checkout', '-q', '-b', 'pr')
+    for rel in base_files:
+        if rel not in head_files:
+            (root / rel).unlink()
+    _write_tree(root, head_files)
+    _git(root, 'add', '-A')
+    _git(root, 'commit', '-q', '--allow-empty', '-m', 'head')
+    return root
+
+
+def _run_gate(root: Path, event_path: Path = None) -> tuple:
+    """Run the gate against root with GITHUB_EVENT_PATH cleared unless given (hermetic under Actions)."""
+    env = {k: v for k, v in os.environ.items() if k != 'GITHUB_EVENT_PATH'}
+    if event_path is not None:
+        env['GITHUB_EVENT_PATH'] = str(event_path)
+    result = subprocess.run([sys.executable, str(_BASE_GATE), '--root', str(root)],
+                            capture_output=True, text=True, encoding='utf-8', env=env)
+    return result.returncode, result.stdout + result.stderr
+
+
+class TestBaseCheckoutRefResolution(unittest.TestCase):
+    """A file under a ref-pinned checkout (`path: base`, `ref: ...`) is checked in that ref's tree."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_file_in_base_ref_but_absent_from_head_passes(self):
+        """The defect: the base ref has tools/verify_receipt.py, the PR head does not; must not false-fail."""
+        root = _build_pr_repo(self.tmp, {_VERIFIER: '# verifier\n'}, _head_files())
+        code, out = _run_gate(root)
+        self.assertEqual(code, 0, out)
+
+    def test_file_absent_from_base_ref_still_fails_and_is_named(self):
+        """Control: the base ref lacks the file, so the reference is a real finding and names it."""
+        root = _build_pr_repo(self.tmp, {}, _head_files())
+        code, out = _run_gate(root)
+        self.assertEqual(code, 1, out)
+        self.assertIn('base/tools/verify_receipt.py', out)
+
+    def test_base_ref_from_event_payload_is_the_checked_tree(self):
+        """The `base.sha` of the PR event resolves the checkout; 'main' is absent here, so only the sha can pass."""
+        root = _build_pr_repo(self.tmp, {_VERIFIER: '# verifier\n'}, _head_files(), base_branch='trunk')
+        base_sha = _git(root, 'rev-parse', 'trunk')
+        event = self.tmp / 'event.json'
+        event.write_text(json.dumps({'pull_request': {'base': {'sha': base_sha}}}), encoding='utf-8')
+        code, out = _run_gate(root, event)
+        self.assertEqual(code, 0, out)
+
+    def test_unresolvable_base_ref_fails_closed_naming_the_ref(self):
+        """No local ref for the checkout's fallback 'main': a finding that names the ref, never a silent pass."""
+        root = _build_pr_repo(self.tmp, {_VERIFIER: '# verifier\n'}, _head_files(), base_branch='trunk')
+        code, out = _run_gate(root)
+        self.assertEqual(code, 1, out)
+        self.assertIn("ref 'main'", out)
+        self.assertIn('cannot be resolved locally', out)
 
 
 if __name__ == '__main__':

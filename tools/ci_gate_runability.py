@@ -32,6 +32,8 @@ Exit codes:
 """
 
 import json
+import os
+import subprocess
 import sys
 import re
 from pathlib import Path
@@ -50,6 +52,11 @@ _PATH_TOKEN_RE = re.compile(
 # A bare script name invoked directly by an interpreter (python x.py, bash x.sh).
 _BARE_INTERP_RE = re.compile(
     r"(?<![\w$./{-])(?:python3?|bash|sh|node)\s+(?:-\S+\s+)*([\w.\-]+\.(?:py|sh|mjs))(?![\w./-])")
+# A checkout `ref:` that is one context, optionally `|| '<fallback>'`: the trusted-base forms
+# `${{ github.event.pull_request.base.sha || 'main' }}` and `${{ github.base_ref }}`.
+_CONTEXT_EXPR_RE = re.compile(r"^\$\{\{\s*([\w.]+)\s*(?:\|\|\s*'([^']+)'\s*)?\}\}$")
+_PR_BASE_SHA_CONTEXT = "github.event.pull_request.base.sha"
+_BASE_REF_CONTEXT = "github.base_ref"
 
 
 class ManifestError(Exception):
@@ -275,6 +282,10 @@ def parse_yaml_line_by_line(content: str) -> Dict:
                 and stripped.startswith("path:"):
             step["checkout_path"] = stripped.partition(":")[2].strip() or None
             continue
+        if in_steps and step is not None and marker_indent is not None and indent == marker_indent + 4 \
+                and stripped.startswith("ref:"):
+            step["checkout_ref"] = stripped.partition(":")[2].strip() or None
+            continue
 
         # Step properties sit exactly two columns inside the marker.
         if in_steps and step is not None and marker_indent is not None and indent == marker_indent + 2:
@@ -425,6 +436,90 @@ def _strip_checkout_root(file_path: str, checkout_roots) -> str:
     return file_path
 
 
+def _ref_checkout_for(file_path: str, steps: List[Dict]) -> Optional[Tuple[str, str]]:
+    """(path inside the checkout, ref expression) when a ref-pinned checkout of this job holds file_path."""
+    for step in steps:
+        dest = step.get("checkout_path")
+        ref_expr = step.get("checkout_ref")
+        if not dest or not ref_expr:
+            continue
+        prefix = dest.strip("/") + "/"
+        if prefix != "/" and file_path.startswith(prefix):
+            return file_path[len(prefix):], ref_expr
+    return None
+
+
+def _base_branch_name(repo_root: str) -> Optional[str]:
+    """The PR base branch: GITHUB_BASE_REF on a pull_request run, else origin's default branch."""
+    env_base = os.environ.get("GITHUB_BASE_REF")
+    if env_base:
+        return env_base
+    try:
+        result = subprocess.run(["git", "-C", repo_root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return result.stdout.strip().removeprefix("refs/remotes/origin/") or None
+
+
+def resolve_checkout_ref(ref_expr: str, repo_root: str) -> Optional[str]:
+    """The ref a checkout's `ref:` names, as this process can know it; None when it cannot be known.
+
+    The PR base sha comes from the event payload (GITHUB_EVENT_PATH) when there is one; the PR base
+    branch from GITHUB_BASE_REF, else origin's default branch. A `|| 'literal'` fallback applies when
+    the context is absent (what GitHub evaluates for a non-PR event). Any other expression, or an
+    unreadable payload, is unknowable: the caller fails closed.
+    """
+    expr = ref_expr.strip()
+    match = _CONTEXT_EXPR_RE.match(expr)
+    if match is None:
+        return None if expr.startswith("${{") else expr
+    context, fallback = match.groups()
+    if context == _PR_BASE_SHA_CONTEXT:
+        event_path = os.environ.get("GITHUB_EVENT_PATH")
+        if not event_path:
+            return fallback
+        try:
+            event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        base = event.get("pull_request", {}).get("base", {}) if isinstance(event, dict) else {}
+        sha = base.get("sha") if isinstance(base, dict) else None
+        return sha or fallback
+    if context == _BASE_REF_CONTEXT:
+        return _base_branch_name(repo_root) or fallback
+    return None
+
+
+def _ref_commit(repo_root: str, ref: str) -> Optional[str]:
+    """The commit `ref` names in the repo at repo_root, or None when it is not present locally."""
+    for candidate in (ref, "refs/remotes/origin/" + ref):
+        try:
+            result = subprocess.run(
+                ["git", "-C", repo_root, "rev-parse", "--verify", "-q", candidate + "^{commit}"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return None
+
+
+def _exists_in_ref(repo_root: str, ref: str, rel_path: str) -> str:
+    """Check rel_path in the tree of ref (not on disk): 'present', 'absent', or 'unresolved' (fail closed)."""
+    commit = _ref_commit(repo_root, ref)
+    if commit is None:
+        return "unresolved"
+    try:
+        result = subprocess.run(["git", "-C", repo_root, "cat-file", "-e", f"{commit}:{rel_path}"],
+                                capture_output=True)
+    except OSError:
+        return "unresolved"
+    return "present" if result.returncode == 0 else "absent"
+
+
 def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
     """Checks (a), (b) and (c) over one parsed workflow."""
     findings = []
@@ -449,6 +544,26 @@ def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
             # Check (c): every script the step invokes exists. Runs for every step,
             # over the whole run text, so a multi-file step cannot hide a missing file.
             for file_path in extract_script_paths(strip_shell_comments(run_text)):
+                # A file under a checkout pinned to a ref is checked in that ref's tree, never on
+                # the PR HEAD disk: the head legitimately may lack a file the base tree has.
+                ref_checkout = _ref_checkout_for(file_path, job_info['steps'])
+                if ref_checkout is not None:
+                    rel_path, ref_expr = ref_checkout
+                    ref = resolve_checkout_ref(ref_expr, repo_root)
+                    status = _exists_in_ref(repo_root, ref, rel_path) if ref else "unresolved"
+                    if status == "absent":
+                        findings.append(
+                            f"{workflow_path}:{step['line']}: "
+                            f"Step '{step_name}' references missing file: {file_path} (absent from ref '{ref}')"
+                        )
+                    elif status == "unresolved":
+                        findings.append(
+                            f"{workflow_path}:{step['line']}: "
+                            f"Step '{step_name}' references {file_path}, which must be checked in ref "
+                            f"'{ref or ref_expr}', but that ref cannot be resolved locally "
+                            f"(fetch it, e.g. git fetch origin {ref or ref_expr}); failing closed"
+                        )
+                    continue
                 if not find_file_on_disk(repo_root, _strip_checkout_root(file_path, checkout_roots)):
                     findings.append(
                         f"{workflow_path}:{step['line']}: "

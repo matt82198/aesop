@@ -297,28 +297,61 @@ jobs:
 """
 
 
-class TestGateResolvesBaseCheckout(unittest.TestCase):
-    """ci_gate_runability: a file under a checkout step's path: resolves like any other file."""
+def _commit_base(root, with_file, branch="main"):
+    """Make `root` a real git repository whose `branch` commit is the base tree.
 
-    def _findings(self, with_file):
-        tmp = tempfile.TemporaryDirectory()
+    The base tree holds tools/thing.py only when with_file. The caller decides what is on the
+    head disk; a ref-pinned checkout is judged by the base commit, never by the disk.
+    """
+    def git(*args):
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=fixture", "-c", "user.email=fixture@invalid",
+             "-c", "commit.gpgsign=false", *args],
+            check=True, capture_output=True, encoding="utf-8", errors="replace")
+
+    git("init", "-q")
+    git("symbolic-ref", "HEAD", "refs/heads/" + branch)
+    (root / "README.md").write_text("base\n", encoding="utf-8")
+    git("add", "README.md")
+    if with_file:
+        git("add", "tools/thing.py")
+    git("commit", "-q", "-m", "base")
+
+
+class TestGateResolvesBaseCheckout(unittest.TestCase):
+    """ci_gate_runability: a file under a ref-pinned checkout is judged by that ref's tree."""
+
+    def _findings(self, with_file, branch="main"):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / ".github" / "workflows" / "fixture.yml").write_text(GATE_WORKFLOW, encoding="utf-8")
-        if with_file:
-            (root / "tools").mkdir()
-            (root / "tools" / "thing.py").write_text("print('ok')\n", encoding="utf-8")
+        # The head disk always has the file: only the base commit decides the finding.
+        (root / "tools").mkdir()
+        (root / "tools" / "thing.py").write_text("print('ok')\n", encoding="utf-8")
+        _commit_base(root, with_file, branch)
+        # The fixture's ref is the PR base sha (or 'main' fallback). A real CI event payload must
+        # not leak into this in-process run.
+        for key in ("GITHUB_EVENT_PATH", "GITHUB_BASE_REF"):
+            saved = os.environ.pop(key, None)
+            if saved is not None:
+                self.addCleanup(os.environ.__setitem__, key, saved)
         gate = _load("ci_gate_runability")
         jobs = gate.parse_yaml_line_by_line(GATE_WORKFLOW)
         return gate.check_jobs(str(root), ".github/workflows/fixture.yml", jobs)
 
     def test_base_checkout_file_present_is_not_flagged(self):
-        self.assertEqual([f for f in self._findings(True) if "missing file" in f], [])
+        self.assertEqual(self._findings(True), [])
 
     def test_base_checkout_file_absent_is_still_flagged(self):
         flagged = [f for f in self._findings(False) if "missing file: base/tools/thing.py" in f]
         self.assertEqual(len(flagged), 1, flagged)
+
+    def test_unresolvable_base_ref_in_git_repo_fails_closed(self):
+        findings = self._findings(True, branch="trunk")
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("cannot be resolved locally", findings[0])
 
     def test_checkout_path_is_parsed_onto_the_step(self):
         gate = _load("ci_gate_runability")
