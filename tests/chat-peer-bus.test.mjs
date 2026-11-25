@@ -283,11 +283,171 @@ test('/peers reports the config and the last status per peer', async () => {
   assert.match(text, /agy: no jobs recorded/);
 });
 
-test('the four peer slash commands parse through parseSlash', async () => {
-  const { parseSlash, SLASH_COMMANDS } = await load('chat/input.mjs');
+test('the peer slash commands parse through parseSlash and tab-complete /use', async () => {
+  const { applyKey, createInputState, parseSlash, SLASH_COMMANDS } = await load('chat/input.mjs');
   assert.deepEqual(parseSlash('/codex fix the bug'), { command: 'codex', arg: 'fix the bug' });
   assert.deepEqual(parseSlash('/codex-app ship it'), { command: 'codex-app', arg: 'ship it' });
   assert.deepEqual(parseSlash('/agy hi'), { command: 'agy', arg: 'hi' });
   assert.deepEqual(parseSlash('/peers'), { command: 'peers' });
-  for (const c of ['codex', 'codex-app', 'agy', 'peers']) assert.ok(SLASH_COMMANDS.includes(c), c);
+  assert.deepEqual(parseSlash('/use agy-headless fix flake'), { command: 'use', arg: 'agy-headless fix flake' });
+  for (const c of ['codex', 'codex-app', 'agy', 'peers', 'use']) assert.ok(SLASH_COMMANDS.includes(c), c);
+  const completed = applyKey({ ...createInputState(), inputBuffer: '/us', cursor: 3 }, { name: 'tab', ctrl: false, meta: false, sequence: '\t' });
+  assert.equal(completed.state.inputBuffer, '/use');
+});
+
+function writeRoster(dir, extraRows = []) {
+  const file = join(dir, 'worker-roster.md');
+  writeFileSync(file, [
+    '# Worker roster',
+    'direction: Dispatch build lanes to agy headless; codex app runs evals.',
+    '| kind | invoke | when |', '|---|---|---|',
+    '| codex app headless | `codex app-server --listen stdio://` | ABs, sims, evals. |',
+    '| agy headless | `agy -p "<prompt>" --output-format json` | Dispatch work and run tests. |',
+    '| agy | `agy -i "<prompt>" --model gemini-4-carbon-high` | Interactive ACR work. |',
+    '| codex | `codex --yolo "<prompt>"` | Human-seated design or review. |',
+    '| codex cli | `codex exec -s workspace-write -C <wt> "<prompt>"` | Simple tasks. |',
+    '| haiku | Agent call with model `haiku`. | Failed work that needs Claude. |',
+    ...extraRows,
+  ].join('\n') + '\n', 'utf8');
+  return file;
+}
+
+test('/peers reads worker-roster.md live as the single source of truth and shows peer-bus usage', async () => {
+  const { runPeerCommand } = await load('chat/peer_bus.mjs');
+  const d = tmp();
+  const env = peerEnv({ WORKER_ROSTER_FILE: writeRoster(d, ['| custom probe | `probe --go` | Dynamic custom row. |']) });
+  handoffCfg(env);
+  const lines = [];
+  await runPeerCommand({ command: 'peers', env, notify: (t) => lines.push(t) });
+  const text = lines.join('\n');
+  for (const needle of ['Dispatch build lanes to agy headless', 'codex-app-headless', 'agy-headless', 'codex-cli', 'haiku', 'custom-probe', 'Dynamic custom row.', 'probe --go', '/use custom-probe <task>', '/codex-app', '/agy', '/codex']) {
+    assert.ok(text.includes(needle), `expected /peers output to include ${JSON.stringify(needle)}:\n${text}`);
+  }
+  writeRoster(d, ['| live reload worker | `reload --now` | Added after start. |']);
+  const updated = [];
+  await runPeerCommand({ command: 'peers', env, notify: (t) => updated.push(t) });
+  assert.ok(updated.join('\n').includes('live-reload-worker') && !updated.join('\n').includes('custom-probe'));
+});
+
+test('/use routes a named roster peer task to the orchestrator over the feed and ui-inbox', async () => {
+  const { runPeerCommand } = await load('chat/peer_bus.mjs');
+  const d = tmp();
+  const inboxFile = join(d, 'ui-inbox.md');
+  writeFileSync(inboxFile, '# UI Inbox\n', 'utf8');
+  const env = peerEnv({ WORKER_ROSTER_FILE: writeRoster(d), AESOP_ORCHESTRATOR_INBOX: inboxFile });
+  handoffCfg(env);
+  const r1 = await runPeerCommand({ command: 'use', arg: 'agy-headless reproduce line 1\nand line 2', env, notify: () => {} });
+  const r2 = await runPeerCommand({ command: 'use', arg: '"codex cli" fix single file', env, notify: () => {} });
+  const r3 = await runPeerCommand({ command: 'use', arg: 'codex-app run the A/B sim', env, notify: () => {} });
+  assert.equal(r1.status, 'ok');
+  assert.equal(r1.peer, 'orchestrator');
+  assert.equal(r2.status, 'ok');
+  assert.equal(r3.status, 'ok');
+  const ev = feedEvents(env);
+  assert.equal(ev.length, 6);
+  assert.equal(ev[0].to, 'orchestrator');
+  assert.match(ev[0].prompt, /use agy headless \(agy-headless\): reproduce line 1/);
+  assert.match(ev[2].prompt, /use codex cli \(codex-cli\): fix single file/);
+  assert.match(ev[4].prompt, /use codex app headless \(codex-app-headless\): run the A\/B sim/);
+  const frame = await frameFor(ev.slice(0, 2));
+  assert.ok(frame.includes('-> orchestrator') && frame.includes('<- orchestrator') && frame.includes('use agy headless (agy-headless)'), frame);
+  const inboxLines = readFileSync(inboxFile, 'utf8').trim().split('\n').filter((l) => l.startsWith('- ['));
+  assert.equal(inboxLines.length, 3);
+  assert.match(inboxLines[0], /^- \[\d{4}-\d{2}-\d{2}T[^\]]+\] matt: use agy headless \(agy-headless\): reproduce line 1 \/ and line 2$/);
+  assert.match(inboxLines[1], /matt: use codex cli \(codex-cli\): fix single file$/);
+  assert.match(inboxLines[2], /matt: use codex app headless \(codex-app-headless\): run the A\/B sim$/);
+});
+
+test('/use refuses unknown worker kinds, missing tasks, and missing roster without writing anything', async () => {
+  const { runPeerCommand } = await load('chat/peer_bus.mjs');
+  const d = tmp();
+  const inboxFile = join(d, 'ui-inbox.md');
+  writeFileSync(inboxFile, '', 'utf8');
+  const env = peerEnv({ WORKER_ROSTER_FILE: writeRoster(d), AESOP_ORCHESTRATOR_INBOX: inboxFile });
+  const badKindNotes = [];
+  const noTaskNotes = [];
+  const noRosterNotes = [];
+  assert.equal(await runPeerCommand({ command: 'use', arg: 'nonexistent-peer do work', env, notify: (t) => badKindNotes.push(t) }), null);
+  assert.ok(badKindNotes.some((t) => t.startsWith('refused:') && t.includes('agy-headless')));
+  assert.equal(await runPeerCommand({ command: 'use', arg: 'agy', env, notify: (t) => noTaskNotes.push(t) }), null);
+  assert.ok(noTaskNotes.some((t) => t.includes('usage: /use')));
+  assert.equal(await runPeerCommand({ command: 'use', arg: 'agy do work', env: { ...env, WORKER_ROSTER_FILE: join(d, 'missing.md') }, notify: (t) => noRosterNotes.push(t) }), null);
+  assert.ok(noRosterNotes.some((t) => t.includes('ROSTER-MISSING')));
+  assert.equal(feedEvents(env).length, 0);
+  assert.equal(readFileSync(inboxFile, 'utf8'), '');
+});
+
+test('aesop peers and aesop post --to orchestrator work from bin/cli.js without polluting cwd or HOME', () => {
+  const d = tmp();
+  const cwd = join(d, 'empty-cwd');
+  const home = join(d, 'isolated-home');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  const inboxFile = join(d, 'ui-inbox.md');
+  writeFileSync(inboxFile, '', 'utf8');
+  const baseEnv = { ...peerEnv(), HOME: home, USERPROFILE: home, WORKER_ROSTER_FILE: writeRoster(d), AESOP_ORCHESTRATOR_INBOX: inboxFile };
+  const run = (args, extra = {}) => spawnSync(process.execPath, [cliPath, ...args], { cwd, env: { ...baseEnv, ...extra }, encoding: 'utf8' });
+
+  const help = run(['peers', '--help']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /aesop peers/);
+  const list = run(['peers']);
+  assert.equal(list.status, 0, list.stderr);
+  assert.ok(list.stdout.includes('agy-headless') && list.stdout.includes('/use agy-headless <task>'), list.stdout);
+  assert.deepEqual(readdirSync(cwd), []);
+  assert.deepEqual(readdirSync(home), []);
+
+  const asJson = run(['peers', '--json']);
+  assert.equal(asJson.status, 0, asJson.stderr);
+  const parsed = JSON.parse(asJson.stdout);
+  assert.equal(parsed.kinds.length, 6);
+  assert.equal(parsed.kinds[1].id, 'agy-headless');
+
+  const missing = run(['peers'], { WORKER_ROSTER_FILE: join(d, 'absent.md') });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /ROSTER-MISSING/);
+
+  const routed = run(['peers', 'use', 'haiku', 'retry failed lane']);
+  assert.equal(routed.status, 0, routed.stderr);
+  assert.match(routed.stdout, /^posted orchestrator-/);
+  const directTo = run(['post', '--to', 'orchestrator', 'check PR #1494']);
+  assert.equal(directTo.status, 0, directTo.stderr);
+  assert.match(directTo.stdout, /^posted orchestrator-/);
+  assert.equal(run(['post', '--to', 'nobody', 'hi']).status, 2);
+
+  const inbox = readFileSync(inboxFile, 'utf8').trim().split('\n');
+  assert.equal(inbox.length, 2);
+  assert.match(inbox[0], /matt: use haiku \(haiku\): retry failed lane$/);
+  assert.match(inbox[1], /matt: check PR #1494$/);
+  assert.equal(feedEvents(baseEnv).filter((e) => e.to === 'orchestrator').length, 4);
+  assert.deepEqual(readdirSync(cwd), []);
+});
+
+test('interactive runChat session renders /peers and /use without invoking the model source', async () => {
+  const { PassThrough, Writable } = await import('node:stream');
+  const { runChat } = await load('chat/cli.mjs');
+  const d = tmp();
+  const inboxFile = join(d, 'ui-inbox.md');
+  writeFileSync(inboxFile, '', 'utf8');
+  const env = peerEnv({ WORKER_ROSTER_FILE: writeRoster(d), AESOP_ORCHESTRATOR_INBOX: inboxFile, AESOP_CHAT_HISTORY: join(d, 'history.json'), NO_COLOR: '1' });
+  handoffCfg(env);
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  stdin.setRawMode = () => {};
+  let rawOut = '';
+  const stdout = new Writable({ write(chunk, _enc, cb) { rawOut += Buffer.from(chunk).toString('utf8'); cb(); } });
+  stdout.isTTY = true;
+  stdout.columns = 110;
+  stdout.rows = 45;
+  const stderr = new Writable({ write(_c, _e, cb) { cb(); } });
+  const backendCalls = [];
+  const done = runChat({ stdin, stdout, stderr, env, source: async function* (l) { backendCalls.push(l); yield 'x'; } });
+  stdin.write('/peers\r/use agy-headless reproduce pre-push rc=1\r');
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && !rawOut.includes('<- orchestrator')) await new Promise((r) => setTimeout(r, 20));
+  stdin.write('\x03\x03');
+  assert.equal(await done, 0);
+  assert.deepEqual(backendCalls, []);
+  assert.ok(stripAnsi(rawOut).includes('[agy-headless] agy headless') && stripAnsi(rawOut).includes('<- orchestrator'));
+  assert.match(readFileSync(inboxFile, 'utf8'), /matt: use agy headless \(agy-headless\): reproduce pre-push rc=1/);
 });
