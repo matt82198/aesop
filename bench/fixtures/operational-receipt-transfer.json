@@ -1,0 +1,87 @@
+{
+  "model": "qwen3-coder:30b",
+  "criterion": "At least one newly correct case and no losses versus evidence alone. A tie rejects promotion. One stateless call per arm; no retries. Four distinct infrastructure checks, two snapshots each. Author-curated and paraphrased from merged PR receipts, including one recorded mutant. Exclude both command-dispatch checks and all terminal cases from these results.",
+  "rule_ref": "72817cf0:bench/fixtures/operational-refutation.md",
+  "cases": [
+    {
+      "id": "receipt-01",
+      "finding_text": "The audit writer makes a second wait attempt with sleeps when it immediately tries to log again after timing out on the same busy lock.",
+      "evidence": [
+        "The first acquisition exhausted its deadline. The second acquisition kept waiting and the test's sleep counter increased by two."
+      ],
+      "expected": "real_defect",
+      "reference": "https://github.com/matt82198/aesop/pull/1406",
+      "version": "preceding"
+    },
+    {
+      "id": "receipt-02",
+      "finding_text": "The context builder includes unrelated tasks' facts even when the caller requests a single task.",
+      "evidence": [
+        "The fixture has events from two different tasks. The context returned to a caller requesting just one task contained the requested task's facts exclusively."
+      ],
+      "expected": "false_positive",
+      "reference": "https://github.com/matt82198/aesop/pull/1412",
+      "version": "corrected"
+    },
+    {
+      "id": "receipt-03",
+      "finding_text": "The duration assertion for the collector's junk walk measures process startup and Git calls as part of the walk.",
+      "evidence": [
+        "The time used for the assertion came from the interval around the directory walk inside the collector. Injecting a 10.5 s delay inside the walk produced measured durations of 10500.9951 ms and 10500.9353 ms in the two checks."
+      ],
+      "expected": "false_positive",
+      "reference": "https://github.com/matt82198/aesop/pull/1420",
+      "version": "corrected"
+    },
+    {
+      "id": "receipt-04",
+      "finding_text": "Committing a freshly initialized store after its first append puts the live append-lock sidecar in version control.",
+      "evidence": [
+        "The root held the append lock while the writer was operating. After the commit the tracked paths included .append.lock, store.json and the daily event file."
+      ],
+      "expected": "real_defect",
+      "reference": "https://github.com/matt82198/aesop/pull/1409",
+      "version": "preceding"
+    },
+    {
+      "id": "receipt-05",
+      "finding_text": "The context builder includes unrelated tasks' facts even when the caller requests a single task.",
+      "evidence": [
+        "The fixture has events from two different tasks. With the task filter disabled in this build, a request for just one task returned facts from both."
+      ],
+      "expected": "real_defect",
+      "reference": "https://github.com/matt82198/aesop/pull/1412",
+      "version": "recorded mutant"
+    },
+    {
+      "id": "receipt-06",
+      "finding_text": "The audit writer makes a second wait attempt with sleeps when it immediately tries to log again after timing out on the same busy lock.",
+      "evidence": [
+        "The first acquisition exhausted its deadline. The retry made one acquisition attempt, promptly returned, and added no sleep calls."
+      ],
+      "expected": "false_positive",
+      "reference": "https://github.com/matt82198/aesop/pull/1406",
+      "version": "corrected"
+    },
+    {
+      "id": "receipt-07",
+      "finding_text": "Committing a freshly initialized store after its first append puts the live append-lock sidecar in version control.",
+      "evidence": [
+        "The root held the append lock while the writer was operating. After the commit the tracked paths included store.json and the daily event file. Looking up .append.lock in the tracked paths yielded no entry."
+      ],
+      "expected": "false_positive",
+      "reference": "https://github.com/matt82198/aesop/pull/1409",
+      "version": "corrected"
+    },
+    {
+      "id": "receipt-08",
+      "finding_text": "The duration assertion for the collector's junk walk measures process startup and Git calls as part of the walk.",
+      "evidence": [
+        "The time used for the assertion came from elapsed wall time surrounding the full collector subprocess. On a loaded Windows runner the empty-root invocation measured 10735 ms against a 10000 ms bound."
+      ],
+      "expected": "real_defect",
+      "reference": "https://github.com/matt82198/aesop/pull/1420",
+      "version": "preceding"
+    }
+  ]
+}

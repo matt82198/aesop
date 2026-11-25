@@ -1,0 +1,44 @@
+[
+  {
+    "id": "backup-cycle",
+    "finding_text": "A backup cycle wrote its heartbeat only when it finished. Repository discovery blocked for 22 minutes. Throughout that window the monitor saw an old heartbeat, and the five-minute scheduler could not start another instance.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "7ea42f0e"
+  },
+  {
+    "id": "status-heartbeat",
+    "finding_text": "With no environment override, the status command reads the repository-local state directory. It reports both heartbeats missing while the shared conductor state contains a recent watchdog heartbeat and healthcheck reads it.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "122f807e"
+  },
+  {
+    "id": "dashboard-root",
+    "finding_text": "With the conductor root unset, the watchdog dashboard selects a sibling directory containing a sweep log. It displays STALE while the daemon continues updating its heartbeat under the user's conductor directory.",
+    "source_lens": "infrastructure_review",
+    "expected": "real_defect",
+    "source": "28aca2f4"
+  },
+  {
+    "id": "merge-contention",
+    "finding_text": "To compare merge routes, an operator must retrieve PR histories and reconstruct CI attempts, fix rounds and contended files. The merge tools do not provide a per-PR contention report for that analysis.",
+    "source_lens": "infrastructure_review",
+    "expected": "enhancement_opportunity",
+    "source": "bc351f0c"
+  },
+  {
+    "id": "journal-latency",
+    "finding_text": "Wave journals contain item timing records. Operators comparing wave latency have to calculate the p50 and p95 and estimate orchestration overhead themselves. There is no consolidated breakdown.",
+    "source_lens": "infrastructure_review",
+    "expected": "enhancement_opportunity",
+    "source": "1cd9f9f9"
+  },
+  {
+    "id": "burn-projection",
+    "finding_text": "An operator can inspect token spending against a wave ceiling, but cannot obtain an end-of-wave spending forecast or an early threshold alert from those measurements.",
+    "source_lens": "infrastructure_review",
+    "expected": "enhancement_opportunity",
+    "source": "e01c3075"
+  }
+]
