@@ -460,6 +460,44 @@ class TestUnpushedRedSpool(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(spooled), 1)
 
+    def test_red_blocked_records_one_refused_line_beside_spool(self):
+        """The refused push leaves no spool, so the refusal itself is recorded locally: one JSON line in
+        refused-receipts.jsonl beside the spool dir (head sha, conclusion, timestamp, reason). Never posted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red"])
+            head = emit._git(Path(tmp) / "repo", "rev-parse", "HEAD")
+            refused = Path(tmp) / "refused-receipts.jsonl"
+            lines = refused.read_text(encoding="utf-8").splitlines() if refused.is_file() else []
+        self.assertEqual(code, 3)
+        self.assertEqual(spooled, [])
+        self.assertEqual(len(lines), 1, "a refused red push must leave exactly one local refused record")
+        record = json.loads(lines[0])
+        self.assertEqual(record["head_sha"], head)
+        self.assertEqual(record["conclusion"], "failure")
+        self.assertEqual(record["reason"], "push refused, not spooled")
+        self.assertRegex(record["timestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_unrecordable_refusal_still_blocks_the_push(self):
+        """If the refused record cannot be written the push is still blocked (exit 3), and the failure is named."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "refused-receipts.jsonl").mkdir()  # a directory where the log must go: the append fails
+            code, spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red"])
+        self.assertEqual(code, 3)
+        self.assertEqual(spooled, [])
+
+    def test_green_and_pushed_red_write_no_refused_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            green_code, _ = self._run_unpushed(tmp, red=False, extra=["--fail-on-red"])
+            green_refused = (Path(tmp) / "refused-receipts.jsonl").exists()
+        with tempfile.TemporaryDirectory() as tmp:
+            override_code, override_spooled = self._run_unpushed(tmp, red=True, extra=["--fail-on-red", "--pushed-red"])
+            override_refused = (Path(tmp) / "refused-receipts.jsonl").exists()
+        self.assertEqual(green_code, 0)
+        self.assertFalse(green_refused, "a green receipt is not a refusal")
+        self.assertEqual(override_code, 4)
+        self.assertEqual(len(override_spooled), 1)
+        self.assertFalse(override_refused, "the pushed-red override goes ahead and spools, it is not refused")
+
 
 class TestShardEnvScrubsTripwireArmed(unittest.TestCase):
     """The shard env emit_receipt builds must not inherit AESOP_CI_SHARD_TRIPWIRE_ARMED.

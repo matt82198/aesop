@@ -342,6 +342,160 @@ class TestFlushLogPrune(unittest.TestCase):
         self.assertTrue(os.path.islink(str(link)), "a symlink named like a flush log must be left alone")
 
 
+class TestMaxAgeDaysArgument(unittest.TestCase):
+    """--max-age-days is a whole number of days, 0 or more. Negative or non-finite values are refused at
+    argument parsing (exit 2) before anything is pruned. 0 expires everything older than now, for json
+    spools and flush logs alike."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.repo = _make_git_repo(self.root)
+        self.spool_dir = self.root / "receipts" / "spool"
+        self.spool_dir.mkdir(parents=True)
+
+    def test_negative_max_age_is_rejected_at_parse_time_and_prunes_nothing(self):
+        fresh = _write_text(self.spool_dir / ("a" * 40 + ".flush.log"), "fresh\n", age_days=0)
+        stale = _write_text(self.spool_dir / ("b" * 40 + ".flush.log"), "stale\n", age_days=10)
+        err = io.StringIO()
+
+        with contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days=-1"])
+
+        self.assertEqual(cm.exception.code, 2, "a negative --max-age-days must exit 2")
+        self.assertIn("--max-age-days", err.getvalue(), "the refusal must name the offending option")
+        self.assertTrue(fresh.exists(), "a negative window must never prune a fresh flush log")
+        self.assertTrue(stale.exists(), "a refused run must prune nothing at all")
+
+    def test_non_finite_or_fractional_max_age_is_rejected(self):
+        for bad in ("nan", "inf", "-inf", "1.5"):
+            with self.subTest(value=bad):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as cm:
+                        _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404),
+                                   ["--max-age-days=%s" % bad])
+                self.assertEqual(cm.exception.code, 2)
+                self.assertIn("--max-age-days", err.getvalue())
+
+    def test_zero_max_age_is_accepted_and_expires_json_and_flush_logs_alike(self):
+        stale_json = _write_spool(self.spool_dir, _dummy_envelope("4" * 40), age_days=1)
+        stale_log = _write_text(self.spool_dir / ("c" * 40 + ".flush.log"), "x\n", age_days=1)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "0"])
+
+        self.assertEqual(code, 0, "0 is a valid window")
+        self.assertFalse(stale_json.exists(), "with 0, a json spool older than now is dropped")
+        self.assertFalse(stale_log.exists(), "with 0, a flush log older than now is pruned by the same rule")
+
+
+class TestRefusedLogPrune(unittest.TestCase):
+    """The refused-receipts log beside the spool directory is pruned by the same --max-age-days rule
+    as the flush logs (file mtime, which for an append-only log is the newest record's time). Never followed."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.repo = _make_git_repo(self.root)
+        self.spool_dir = self.root / "receipts" / "spool"
+        self.spool_dir.mkdir(parents=True)
+        self.refused = self.root / "receipts" / "refused-receipts.jsonl"
+
+    def test_stale_refused_log_is_pruned(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("5" * 40), age_days=10)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0)
+        self.assertFalse(self.refused.exists(), "a refused-receipts log older than --max-age-days must be pruned")
+
+    def test_fresh_refused_log_is_kept(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("6" * 40), age_days=1)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "7"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(self.refused.exists(), "a refused-receipts log inside --max-age-days must be kept")
+
+    def test_zero_window_prunes_refused_log_like_flush_logs(self):
+        _write_text(self.refused, '{"head_sha": "%s"}\n' % ("7" * 40), age_days=1)
+
+        code, out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404), ["--max-age-days", "0"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(self.refused.exists(), "with 0, the refused log is expired exactly as a flush log is")
+
+    @unittest.skipUnless(_can_symlink(), "this host cannot create symlinks (needs privilege); runs on CI Linux")
+    def test_symlinked_refused_log_is_never_followed(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        precious = _write_text(outside / "precious.txt", "keep me\n", age_days=10)
+        self.refused.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(precious), str(self.refused))
+
+        code, _out = _run_flush(self.repo, self.spool_dir, _FakeGh(commit_code=404))
+
+        self.assertEqual(code, 0)
+        self.assertTrue(precious.exists(), "a symlinked refused log must never cause its target to be removed")
+        self.assertTrue(os.path.islink(str(self.refused)), "a symlinked refused log must be left alone")
+
+
+def _try_junction(link, target):
+    """Create a Windows directory junction with mklink /J (no privilege needed). True when it exists afterwards."""
+    if os.name != "nt":
+        return False
+    res = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                         capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+    return res.returncode == 0 and os.path.isdir(str(link))
+
+
+class TestSpoolDirLinkRefusal(unittest.TestCase):
+    """A spool directory that is itself a symlink or a junction is never pruned or flushed through.
+    The run reports it, touches nothing reached through it, and exits 2 (non-zero, with or without --strict)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.repo = _make_git_repo(self.root)
+        self.outside = self.root / "outside"
+        self.outside.mkdir()
+        self.stale_log = _write_text(self.outside / ("k" * 40 + ".flush.log"), "old\n", age_days=10)
+        self.stale_json = _write_spool(self.outside, _dummy_envelope("3" * 40), age_days=10)
+        self.link = self.root / "receipts" / "spool"
+        self.link.parent.mkdir(parents=True)
+
+    def _assert_refused(self, code, out, gh):
+        self.assertEqual(code, 2, "a linked spool directory must make the run exit non-zero")
+        self.assertTrue(self.stale_log.exists(), "a flush log reached through a linked spool dir must not be pruned")
+        self.assertTrue(self.stale_json.exists(), "a spool reached through a linked spool dir must not be dropped")
+        self.assertEqual(gh.posted_payloads, [], "nothing may be posted from a linked spool dir")
+        self.assertIn("symlink or junction", out)
+
+    @unittest.skipUnless(_can_symlink(), "this host cannot create symlinks (needs privilege); runs on CI Linux")
+    def test_symlinked_spool_dir_is_refused_not_followed(self):
+        os.symlink(str(self.outside), str(self.link), target_is_directory=True)
+        gh = _FakeGh(commit_code=0)
+
+        code, out = _run_flush(self.repo, self.link, gh)
+
+        self._assert_refused(code, out, gh)
+
+    def test_junctioned_spool_dir_is_refused_not_followed(self):
+        if os.name != "nt":
+            self.skipTest("directory junctions exist only on Windows; the symlink case covers POSIX hosts")
+        if not _try_junction(self.link, self.outside):
+            self.skipTest("this host could not create a directory junction (mklink /J refused)")
+        gh = _FakeGh(commit_code=0)
+
+        code, out = _run_flush(self.repo, self.link, gh)
+
+        self._assert_refused(code, out, gh)
+
+
 def suite():
     """Return test suite for this module."""
     loader = unittest.TestLoader()
@@ -349,6 +503,9 @@ def suite():
     suite.addTests(loader.loadTestsFromTestCase(TestPostReceiptSpoolsOn422))
     suite.addTests(loader.loadTestsFromTestCase(TestReceiptFlushIntegration))
     suite.addTests(loader.loadTestsFromTestCase(TestFlushLogPrune))
+    suite.addTests(loader.loadTestsFromTestCase(TestMaxAgeDaysArgument))
+    suite.addTests(loader.loadTestsFromTestCase(TestRefusedLogPrune))
+    suite.addTests(loader.loadTestsFromTestCase(TestSpoolDirLinkRefusal))
     return suite
 
 
