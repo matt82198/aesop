@@ -243,12 +243,6 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_test_coverage.py --check
 
-      - name: Run Node.js tests
-        run: npm run test:node
-
-      - name: Run shell test suites
-        run: npm run test:sh
-
       - name: Tool import/compile/UTF-8 smoke gate
         run: |
           python -m compileall -q tools/
@@ -386,6 +380,12 @@ jobs:
       - name: Port-task fidelity gate
         if: matrix.python-shard == 0
         run: python tools/port_fidelity_check.py --check --root .
+
+      - name: Run Node.js tests
+        run: npm run test:node
+
+      - name: Run shell test suites
+        run: npm run test:sh
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: python tools/remote_refs_tripwire.py --attributed -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
