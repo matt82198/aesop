@@ -167,6 +167,7 @@ class OpenAICompatibleDriver(CodexDriver):
         max_owned_bytes: int = 200_000,
         max_retries: int = 2,
         timeout_s: float = 120.0,
+        allow_unverified_models: bool = False,
     ):
         """Initialize the OpenAI-compatible driver.
 
@@ -215,15 +216,30 @@ class OpenAICompatibleDriver(CodexDriver):
         if model_map is None:
             model_map = {}
 
+        # json_schema guard (CodexDriver init-time check) must see the
+        # CONFIGURED model, not the role-default map this driver never uses.
+        # Hosted: every role maps to the configured model so the guard checks it.
+        # Local (is_local): status quo -- the guard is not applied to the
+        # configured model (contract for local back ends is unresolved; see
+        # lane report), so the local path is waived via allow_unverified_models.
+        if is_local:
+            guard_map = model_map
+            guard_allow = True
+        else:
+            guard_map = {role: model for role in ("worker", "setup", "verify")}
+            guard_map.update(model_map)
+            guard_allow = allow_unverified_models
+
         # Initialize CodexDriver with the transport.
         # CodexDriver's __init__ will merge model_map with defaults.
         super().__init__(
-            model_map=model_map,
+            model_map=guard_map,
             transport=transport,
             now=now,
             max_owned_bytes=max_owned_bytes,
             max_retries=max_retries,
             timeout_s=timeout_s,
+            allow_unverified_models=guard_allow,
         )
         # Mirror every model call to the shared activity feed (driver/activity_feed.py).
         # Wrapping the transport keeps the reply and any raised exception unchanged.

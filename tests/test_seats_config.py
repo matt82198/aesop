@@ -238,7 +238,13 @@ class TestBuildDriverFromSeats(unittest.TestCase):
             self.assertIsInstance(driver, OpenAICompatibleDriver)
 
     def test_build_driver_accepts_raw_seats_dict(self):
-        """A hand-built {'seats': {'worker': ...}} dict works without the loader."""
+        """A hand-built {'seats': {'worker': ...}} dict works without the loader.
+
+        Hosted (non-local) openai-compatible seats are json_schema-guarded at
+        init; 'mistral' is not a known-capable model, so the seat must opt in
+        with allow_unverified_models=True. Without the opt-in build_driver
+        refuses (see test_build_driver_raw_seats_unverified_hosted_refused).
+        """
         from openai_compatible_driver import OpenAICompatibleDriver
         driver = build_driver({
             "seats": {
@@ -246,10 +252,25 @@ class TestBuildDriverFromSeats(unittest.TestCase):
                     "backend": "openai-compatible",
                     "base_url": "http://localhost:11434/v1",
                     "model": "mistral",
+                    "allow_unverified_models": True,
                 },
             },
         })
         self.assertIsInstance(driver, OpenAICompatibleDriver)
+
+    def test_build_driver_raw_seats_unverified_hosted_refused(self):
+        """Hosted seat with a non-json_schema model and no opt-in is refused."""
+        with self.assertRaises(ValueError) as ctx:
+            build_driver({
+                "seats": {
+                    "worker": {
+                        "backend": "openai-compatible",
+                        "base_url": "https://api.example.com/v1",
+                        "model": "mistral",
+                    },
+                },
+            })
+        self.assertIn("json_schema", str(ctx.exception))
 
     def test_build_driver_seats_without_worker_falls_back(self):
         """seats with no worker seat -> legacy/default (Claude) worker."""

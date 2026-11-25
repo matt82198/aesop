@@ -25,6 +25,7 @@ import tempfile
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent
@@ -104,6 +105,7 @@ class TestOpenAICompatibleDriverConstruction(unittest.TestCase):
         driver = OpenAICompatibleDriver(
             base_url="https://openrouter.ai/api/v1",
             model="openrouter/auto",
+            allow_unverified_models=True,
             transport=FakeTransport(),
         )
         self.assertEqual(driver._base_url, "https://openrouter.ai/api/v1")
@@ -143,6 +145,7 @@ class TestProbeCapabilities(unittest.TestCase):
             base_url="https://openrouter.ai/api/v1",
             model="openrouter/auto",
             is_local=False,
+            allow_unverified_models=True,
             transport=FakeTransport(),
         )
         caps = driver.probe_capabilities()
@@ -174,6 +177,7 @@ class TestProbeCapabilities(unittest.TestCase):
         driver = OpenAICompatibleDriver(
             base_url="https://openrouter.ai/api/v1",
             model="my-model",
+            allow_unverified_models=True,
             transport=FakeTransport(),
         )
         caps = driver.probe_capabilities()
@@ -204,6 +208,7 @@ class TestDispatchWorker(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 transport=FakeTransport(response=make_response(patch_dict)),
             )
 
@@ -239,6 +244,7 @@ class TestDispatchWorker(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 transport=FakeTransport(
                     responses=[
                         {
@@ -286,6 +292,7 @@ class TestDispatchWorker(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 transport=FakeTransport(response=make_response(patch_dict)),
             )
 
@@ -474,6 +481,7 @@ class TestInheritedBehaviors(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 transport=FakeTransport(
                     responses=[
                         {
@@ -512,6 +520,7 @@ class TestInheritedBehaviors(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 max_owned_bytes=100_000,  # Less than file size.
                 transport=FakeTransport(),
             )
@@ -540,6 +549,7 @@ class TestAbsolutePathRejection(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 transport=FakeTransport(),
             )
 
@@ -567,6 +577,7 @@ class TestAbsolutePathRejection(unittest.TestCase):
             driver = OpenAICompatibleDriver(
                 base_url="https://openrouter.ai/api/v1",
                 model="auto",
+                allow_unverified_models=True,
                 transport=FakeTransport(),
             )
 
@@ -845,9 +856,97 @@ class TestConstructTimeBaseUrlValidation(unittest.TestCase):
         driver = OpenAICompatibleDriver(
             base_url="http://127.0.0.1:11434/v1",
             model="m",
+            allow_unverified_models=True,
             transport=FakeTransport(),
         )
         self.assertEqual(driver._base_url, "http://127.0.0.1:11434/v1")
+
+
+class TestJsonSchemaModelGuard(unittest.TestCase):
+    """The configured model (not the role-default map) must support json_schema.
+
+    Contract (driver/CLAUDE.md, P1 gate): init-time guard rejects models lacking
+    json_schema support unless allow_unverified_models=True. Offline only: the
+    FakeTransport means no network call is ever made.
+    """
+
+    def test_unverified_configured_model_refused_at_construction(self):
+        """A hosted model not on the verified list is refused at init."""
+        with self.assertRaises(ValueError) as ctx:
+            OpenAICompatibleDriver(
+                base_url="https://openrouter.ai/api/v1",
+                model="gpt-3.5-turbo",
+                transport=FakeTransport(),
+            )
+        self.assertIn("gpt-3.5-turbo", str(ctx.exception))
+        self.assertIn("json_schema", str(ctx.exception))
+
+    def test_allow_unverified_models_permits_configured_model(self):
+        """allow_unverified_models=True is forwarded and lets the model construct."""
+        driver = OpenAICompatibleDriver(
+            base_url="https://openrouter.ai/api/v1",
+            model="gpt-3.5-turbo",
+            allow_unverified_models=True,
+            transport=FakeTransport(),
+        )
+        self.assertEqual(driver.resolve_model(ROLE_WORKER), "gpt-3.5-turbo")
+
+    def test_verified_configured_model_still_constructs(self):
+        """A model on the verified json_schema list constructs with no flag."""
+        driver = OpenAICompatibleDriver(
+            base_url="https://openrouter.ai/api/v1",
+            model="gpt-4o-mini",
+            transport=FakeTransport(),
+        )
+        self.assertEqual(driver.resolve_model(ROLE_WORKER), "gpt-4o-mini")
+
+    def test_is_local_unverified_model_still_constructs(self):
+        """Waiver: a loopback is_local driver is not subject to the hosted guard."""
+        driver = OpenAICompatibleDriver(
+            base_url="http://localhost:11434/v1",
+            model="neural-chat",
+            is_local=True,
+            transport=FakeTransport(),
+        )
+        self.assertEqual(driver.resolve_model(ROLE_WORKER), "neural-chat")
+
+
+class TestConfigAllowUnverifiedModels(unittest.TestCase):
+    """allow_unverified_models is forwarded from the seat config (default False)."""
+
+    _CONFIG = {
+        "backend": "openai-compatible",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "openrouter/auto",
+        "api_key_env": "ALLOW_UNVERIFIED_TEST_KEY",
+    }
+
+    def setUp(self):
+        patcher = mock.patch.dict(
+            os.environ, {"ALLOW_UNVERIFIED_TEST_KEY": "test-key"}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_config_flag_true_builds_hosted_unverified_driver(self):
+        from backend_config import build_driver
+
+        config = dict(self._CONFIG, allow_unverified_models=True)
+        driver = build_driver(config)
+        self.assertEqual(driver.resolve_model(ROLE_WORKER), "openrouter/auto")
+
+    def test_config_flag_absent_refused_with_guard_error(self):
+        from backend_config import build_driver
+
+        with self.assertRaises(ValueError) as ctx:
+            build_driver(dict(self._CONFIG))
+        self.assertIn("json_schema", str(ctx.exception))
+
+    def test_describe_backend_flag_absent_reports_invalid_model_config(self):
+        from backend_config import describe_backend
+
+        desc = describe_backend(dict(self._CONFIG))
+        self.assertIn("invalid model config", desc)
 
 
 class TestLiveEndToEnd(unittest.TestCase):
